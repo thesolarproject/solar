@@ -5,12 +5,23 @@
 <img width="480" height="360" alt="Screenshot_20260615_172109" src="https://github.com/user-attachments/assets/39b8fa44-c7a0-4c40-8a37-36e087874099" />
 
 
+
+
 # JJ Launcher (MO-ON Launcher)
 for innioasis y1
 <p align="center">
   <img src="https://img.shields.io/badge/Platform-Android-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Platform">
   <img src="https://img.shields.io/badge/Status-Beta-Orange?style=flat-square" alt="Status">
 </p>
+
+---
+
+## 🛠️ Note for Users / Bug Reports
+
+> ⚠️ **Important Notice**
+> Please note that this launcher is currently in its **Alpha stage**, and you may encounter unexpected bugs or stability issues. 
+
+If you find any bugs or have suggestions, please **open an Issue** in this repository. I will do my best to address them and release updates whenever my schedule allows. Thank you for your patience and support! 🙏
 
 ## 🌟 v0.5 update (2026/06/15)
 1. Added color themes
