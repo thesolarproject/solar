@@ -12,6 +12,14 @@
   <img src="https://img.shields.io/badge/Status-Beta-Orange?style=flat-square" alt="Status">
 </p>
 
+## 🌟 v0.5 update (2026/06/15)
+1. Added color themes
+2. Added widget support
+3. Fixed visual rendering issues in File Explorer (Resolved slowdowns when loading a large number of songs)
+4. Removed radio buttons
+5. Replaced battery indicator with an icon
+6. Optimized performance and fixed bugs
+
 ---
 
 ## 🌟 Key Features
@@ -47,7 +55,8 @@
 3. Connect the device to your PC and install the new launcher using the **ADB Tool**:
    ```bash
    adb install app-release.apk
-4. adb shell pm disable com.innioasis.y1
+4. ```bash
+   adb shell pm disable com.innioasis.y1
 5. Reboot the device to complete the setup.
 
 ---
