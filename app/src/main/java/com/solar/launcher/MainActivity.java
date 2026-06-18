@@ -503,10 +503,6 @@ public class MainActivity extends Activity {
     private long keyboardMediaSkipDownAt = 0;
     private long keyboardPpDownAt = 0;
     private boolean keyboardPpLongHandled = false;
-    private static final int KB_LOWER = 0;
-    private static final int KB_UPPER = 26;
-    private static final int KB_DIGIT = 52;
-    private static final int KB_SYMBOL = 62;
     private String targetWifiSsid = "";
     private String typedPassword = "";
     private String keyboardPrefill = null;
@@ -1925,32 +1921,43 @@ public class MainActivity extends Activity {
         if (!moreMenu && moreRow != null) containerSettingsItems.addView(moreRow);
     }
 
+    private int keyboardRowKind() {
+        if (keyboardPurpose == KEYBOARD_WIFI || keyboardReturnState == STATE_SETTINGS) {
+            return Y1_ROW_MENU;
+        }
+        return Y1_ROW_ITEM;
+    }
+
     private void applyKeyboardTheme() {
         if (tvKeyboardSsid == null || tvKeyboardInput == null || tvKeyCurrent == null) return;
         ThemeManager.applyThemedTextStyle(tvKeyboardSsid, ThemeManager.getSectionHeaderTextColor());
         float menuTextPx = getResources().getDimension(R.dimen.y1_menu_text_size);
         int keyPad = (int) (6 * getResources().getDisplayMetrics().density);
         int layoutPad = (int) (15 * getResources().getDisplayMetrics().density);
-        int inputRowW = screenWidthPx > 0 ? screenWidthPx - layoutPad * 2 : listRowWidthPx;
-        tvKeyboardInput.setBackground(getY1RowBackground(true, inputRowW, Y1_ROW_MENU));
+        int inputRowW = listRowWidthPx > 0 ? listRowWidthPx : y1ActiveRowWidthPx();
+        if (isFullWidthMenus && screenWidthPx > layoutPad * 2) {
+            inputRowW = screenWidthPx - layoutPad * 2;
+        }
         tvKeyboardInput.setMinHeight(y1RowHeightPx);
         tvKeyboardInput.setPadding(keyPad, 0, keyPad, 0);
         tvKeyboardInput.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, menuTextPx);
         tvKeyboardInput.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
-        tvKeyboardInput.setSelected(true);
+        tvKeyboardInput.setGravity(android.view.Gravity.CENTER_VERTICAL | android.view.Gravity.CENTER_HORIZONTAL);
         enableMarquee(tvKeyboardInput);
-        android.graphics.drawable.Drawable keySelBg = getY1RowBackground(true,
-                (int) (52 * getResources().getDisplayMetrics().density), Y1_ROW_MENU);
-        tvKeyCurrent.setBackground(keySelBg);
+        int keyW = (int) (52 * getResources().getDisplayMetrics().density);
         tvKeyCurrent.setPadding(keyPad, keyPad / 2, keyPad, keyPad / 2);
         tvKeyCurrent.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, menuTextPx);
-        ThemeManager.applyThemedTextStyle(tvKeyCurrent, ThemeManager.getSettingMenuTextColorSelected());
+        tvKeyCurrent.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
         tvKeyPrev.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, menuTextPx);
         tvKeyNext.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, menuTextPx);
         tvKeyPprev.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, menuTextPx);
         tvKeyNnext.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, menuTextPx);
-        ThemeManager.applyThemedTextStyle(tvKeyPrev, ThemeManager.getSettingMenuTextColorNormal());
-        ThemeManager.applyThemedTextStyle(tvKeyNext, ThemeManager.getSettingMenuTextColorNormal());
+        tvKeyPrev.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
+        tvKeyNext.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
+        tvKeyPprev.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
+        tvKeyNnext.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
+        ThemeManager.applyThemedTextStyle(tvKeyPrev, y1RowTextColorNormal(keyboardRowKind()));
+        ThemeManager.applyThemedTextStyle(tvKeyNext, y1RowTextColorNormal(keyboardRowKind()));
         ThemeManager.applyThemedTextStyle(tvKeyPprev, ThemeManager.getDimmedTextColor(0x55));
         ThemeManager.applyThemedTextStyle(tvKeyNnext, ThemeManager.getDimmedTextColor(0x55));
         tvKeyPrev.setBackgroundColor(0x00000000);
@@ -1962,7 +1969,37 @@ public class MainActivity extends Activity {
             tvKeyboardHint.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.NORMAL);
             ThemeManager.applyThemedTextStyle(tvKeyboardHint, ThemeManager.getHintTextColor());
         }
+        styleKeyboardInputField(typedPassword.length() == 0 && !isKeyboardInputPlaceholderForced());
+        styleKeyboardCurrentKey();
         if (currentScreenState == STATE_WIFI_KEYBOARD) updateKeyboardUI();
+    }
+
+    private boolean isKeyboardInputPlaceholderForced() {
+        return keyboardPurpose == KEYBOARD_WIFI && isTargetWifiOpen;
+    }
+
+    private void styleKeyboardInputField(boolean placeholder) {
+        if (tvKeyboardInput == null) return;
+        int rowKind = keyboardRowKind();
+        int layoutPad = (int) (15 * getResources().getDisplayMetrics().density);
+        int inputRowW = listRowWidthPx > 0 ? listRowWidthPx : y1ActiveRowWidthPx();
+        if (isFullWidthMenus && screenWidthPx > layoutPad * 2) {
+            inputRowW = screenWidthPx - layoutPad * 2;
+        }
+        tvKeyboardInput.setBackground(getY1RowBackground(true, inputRowW, rowKind));
+        tvKeyboardInput.setSelected(true);
+        ThemeManager.applyThemedTextStyle(tvKeyboardInput, placeholder
+                ? ThemeManager.getHintTextColor()
+                : y1RowTextColorSelected(rowKind));
+    }
+
+    private void styleKeyboardCurrentKey() {
+        if (tvKeyCurrent == null) return;
+        int rowKind = keyboardRowKind();
+        int keyW = (int) (52 * getResources().getDisplayMetrics().density);
+        tvKeyCurrent.setBackground(getY1RowBackground(true, keyW, rowKind));
+        tvKeyCurrent.setSelected(true);
+        ThemeManager.applyThemedTextStyle(tvKeyCurrent, y1RowTextColorSelected(rowKind));
     }
 
     private void applyOverlayScreenTextThemes() {
@@ -4761,9 +4798,8 @@ public class MainActivity extends Activity {
         } else if (keyboardPurpose == KEYBOARD_WIFI) {
             inputPlaceholder = typedPassword.length() == 0;
         }
-        ThemeManager.applyThemedTextStyle(tvKeyboardInput, inputPlaceholder
-                ? ThemeManager.getHintTextColor()
-                : ThemeManager.getSettingMenuTextColorSelected());
+        styleKeyboardInputField(inputPlaceholder);
+        styleKeyboardCurrentKey();
     }
 
     private void handleKeyboardInput() {
@@ -4778,6 +4814,13 @@ public class MainActivity extends Activity {
             typedPassword += " ";
         } else {
             typedPassword += selectedChar;
+            if (selectedChar.length() == 1) {
+                char ch = selectedChar.charAt(0);
+                if (ch >= 'A' && ch <= 'Z') {
+                    keyboardIndex = KeyboardCharset.lowercaseIndexForChar(ch);
+                    keyboardPpLongDoCase = true;
+                }
+            }
         }
         updateKeyboardUI();
     }
@@ -4805,24 +4848,20 @@ public class MainActivity extends Activity {
     }
 
     private int keyboardFlipCaseIndex(int index) {
-        if (index >= KB_LOWER && index < KB_UPPER) return index + KB_UPPER;
-        if (index >= KB_UPPER && index < KB_DIGIT) return index - KB_UPPER;
-        return index;
+        return KeyboardCharset.flipCaseIndex(index);
     }
 
-    private int keyboardNextCharsetStart(int index) {
-        if (index < KB_DIGIT) return KB_DIGIT;
-        if (index < KB_SYMBOL) return KB_SYMBOL;
-        return KB_LOWER;
+    private int keyboardMapToNextCharset(int index) {
+        return KeyboardCharset.mapToNextCharset(index);
     }
 
     private void handleKeyboardPlayPauseLongPress() {
         clickFeedback();
         if (keyboardPpLongDoCase) {
             int flipped = keyboardFlipCaseIndex(keyboardIndex);
-            keyboardIndex = flipped != keyboardIndex ? flipped : keyboardNextCharsetStart(keyboardIndex);
+            keyboardIndex = flipped != keyboardIndex ? flipped : keyboardMapToNextCharset(keyboardIndex);
         } else {
-            keyboardIndex = keyboardNextCharsetStart(keyboardIndex);
+            keyboardIndex = keyboardMapToNextCharset(keyboardIndex);
         }
         keyboardPpLongDoCase = !keyboardPpLongDoCase;
         updateKeyboardUI();
