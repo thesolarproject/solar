@@ -13,3 +13,19 @@
 .externalNativeBuild
 .cxx
 local.properties
+/reference/
+/.cursor
+/scripts/test_soulseek_device.sh
+
+# Stray docs / screenshots at repo root
+/docs/
+/*.md
+!solar-rom/README.md
+*.logcat
+Screenshot_*.png
+/ci-keys/
+
+# ROM build outputs (local)
+/rom.zip
+/rom_type_b.zip
+/dist/

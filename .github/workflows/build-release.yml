@@ -1,0 +1,94 @@
+name: Build Solar APK and ROMs
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: solar-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare release metadata
+        id: meta
+        run: ./solar-rom/scripts/prepare-release.sh
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK packages
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Install ROM build dependencies
+        run: sudo apt-get update && sudo apt-get install -y unzip zip e2fsprogs curl
+
+      - name: Decode platform signing keys
+        env:
+          KEY_PK8_B64: ${{ secrets.SOLAR_PLATFORM_KEY_PK8_B64 }}
+          KEY_PEM_B64: ${{ secrets.SOLAR_PLATFORM_KEY_PEM_B64 }}
+        run: |
+          if [ -z "$KEY_PK8_B64" ] || [ -z "$KEY_PEM_B64" ]; then
+            echo "::error::Set SOLAR_PLATFORM_KEY_PK8_B64 and SOLAR_PLATFORM_KEY_PEM_B64 repo secrets"
+            exit 1
+          fi
+          mkdir -p .ci-keys
+          printf '%s' "$KEY_PK8_B64" | base64 -d > .ci-keys/platform.pk8
+          printf '%s' "$KEY_PEM_B64" | base64 -d > .ci-keys/platform.x509.pem
+          echo "SOLAR_PLATFORM_KEY_PK8=$GITHUB_WORKSPACE/.ci-keys/platform.pk8" >> "$GITHUB_ENV"
+          echo "SOLAR_PLATFORM_KEY_PEM=$GITHUB_WORKSPACE/.ci-keys/platform.x509.pem" >> "$GITHUB_ENV"
+
+      - name: Build signed release APK
+        env:
+          JAVA_HOME: ${{ env.JAVA_HOME }}
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
+        run: |
+          chmod +x gradlew scripts/build.sh
+          ./scripts/build.sh
+
+      - name: Build ROM images
+        run: |
+          APK="$GITHUB_WORKSPACE/app/build/outputs/apk/release/app-release.apk"
+          test -f "$APK"
+          mkdir -p dist
+          ./solar-rom/scripts/build-rom.sh a --apk "$APK" "$GITHUB_WORKSPACE/dist/rom.zip"
+          ./solar-rom/scripts/build-rom.sh b --apk "$APK" "$GITHUB_WORKSPACE/dist/rom_type_b.zip"
+
+      - name: Prepare release notes
+        run: ./solar-rom/scripts/format-release-notes.sh release.json > RELEASE_NOTES.md
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: Solar ${{ steps.meta.outputs.version_name }} (${{ steps.meta.outputs.short_sha }})
+          body_path: RELEASE_NOTES.md
+          files: |
+            app/build/outputs/apk/release/app-release.apk
+            dist/rom.zip
+            dist/rom_type_b.zip
+          fail_on_unmatched_files: true
+          make_latest: true
+
+      - name: Remove signing keys
+        if: always()
+        run: rm -rf .ci-keys

@@ -1,0 +1,81 @@
+package com.solar.launcher.podcast;
+
+import org.junit.Test;
+
+import java.util.List;
+
+public class OpenRssClientTest {
+    @Test
+    public void parseEpisodes_readsAudioItems() throws Exception {
+        String xml = "<?xml version=\"1.0\"?><rss><channel>"
+                + "<item><title>Ep1</title><enclosure url=\"https://x/1.mp3\" type=\"audio/mpeg\"/></item>"
+                + "<item><title>Ep2</title><enclosure url=\"https://x/2.m4a\" type=\"audio/mp4\"/></item>"
+                + "</channel></rss>";
+        List<OpenRssClient.Episode> out = OpenRssClient.parseEpisodes(xml.getBytes("UTF-8"), 10);
+        if (out.size() != 2) throw new AssertionError("episode count");
+        if (!"Ep1".equals(out.get(0).title)) throw new AssertionError("episode title");
+        if (!out.get(1).audioUrl.contains("2.m4a")) throw new AssertionError("episode url");
+    }
+
+    @Test
+    public void earlyPlayBytesIsAboutSixtySecondsAt128k() {
+        if (OpenRssClient.PODCAST_EARLY_PLAY_BYTES != OpenRssClient.bytesForSeconds(60, 128)) {
+            throw new AssertionError("early play bytes");
+        }
+        if (OpenRssClient.msFromBytes(OpenRssClient.PODCAST_EARLY_PLAY_BYTES) < 59000) {
+            throw new AssertionError("ms from early bytes");
+        }
+    }
+
+    @Test
+    public void filterPlayableEpisodes_keepsLocalFiles() {
+        List<OpenRssClient.Episode> in = new java.util.ArrayList<OpenRssClient.Episode>();
+        in.add(new OpenRssClient.Episode("local", "file:///storage/sdcard0/Podcasts/x.mp3", ""));
+        List<OpenRssClient.Episode> out = OpenRssClient.filterPlayableEpisodes(in, "Show");
+        if (out.size() != 1) throw new AssertionError("local file kept");
+    }
+
+    @Test
+    public void parseEpisodes_readsItunesDuration() throws Exception {
+        String xml = "<?xml version=\"1.0\"?><rss><channel>"
+                + "<item><title>Sec</title><itunes:duration>183</itunes:duration>"
+                + "<enclosure url=\"https://x/a.mp3\" type=\"audio/mpeg\"/></item>"
+                + "<item><title>Hms</title><itunes:duration>01:02:03</itunes:duration>"
+                + "<enclosure url=\"https://x/b.mp3\" type=\"audio/mpeg\"/></item>"
+                + "</channel></rss>";
+        List<OpenRssClient.Episode> out = OpenRssClient.parseEpisodes(xml.getBytes("UTF-8"), 10);
+        if (out.size() != 2) throw new AssertionError("count");
+        if (out.get(0).durationSec != 183) throw new AssertionError("seconds");
+        if (out.get(1).durationSec != 3723) throw new AssertionError("hms");
+    }
+
+    @Test
+    public void parseDurationSeconds_variants() {
+        if (OpenRssClient.parseDurationSeconds("45") != 45) throw new AssertionError("int");
+        if (OpenRssClient.parseDurationSeconds("3:05") != 185) throw new AssertionError("ms");
+        if (OpenRssClient.parseDurationSeconds("1:02:03") != 3723) throw new AssertionError("hms");
+    }
+
+    @Test
+    public void formatPodcastDate_andDuration() {
+        String d = OpenRssClient.formatPodcastDate("Wed, 12 Jun 2024 08:00:00 GMT");
+        if (d == null || d.isEmpty()) throw new AssertionError("date");
+        if (!OpenRssClient.formatDuration(125).endsWith("05")) throw new AssertionError("duration");
+        if (!OpenRssClient.formatDuration(3661).startsWith("1:")) throw new AssertionError("hour");
+    }
+
+    @Test
+    public void buildSearchUrl_includesCountryAndGenre() throws Exception {
+        String url = OpenRssClient.buildSearchUrl("news", "KR", 1312, 20);
+        if (!url.contains("country=KR")) throw new AssertionError("country param");
+        if (!url.contains("genreId=1312")) throw new AssertionError("genreId param");
+        if (!url.contains("term=news")) throw new AssertionError("term param");
+    }
+
+    @Test
+    public void buildSearchUrl_defaultsEmptyTermToPodcast() throws Exception {
+        String url = OpenRssClient.buildSearchUrl("", "US", null, 10);
+        if (!url.contains("term=podcast")) throw new AssertionError("default term");
+        if (!url.contains("country=US")) throw new AssertionError("country");
+    }
+}

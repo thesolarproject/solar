@@ -11,168 +11,359 @@
         android:scaleType="centerCrop"
         android:src="#000000" />
 
-    <LinearLayout
+    <ImageView
+        android:id="@+id/iv_screen_mask"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="centerCrop"
+        android:visibility="gone" />
+
+    <FrameLayout
         android:id="@+id/layout_main_menu"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:orientation="horizontal"
-        android:paddingTop="36dp"
-        android:visibility="visible"
-        android:background="#00000000">
+        android:background="#00000000"
+        android:visibility="visible">
 
-        <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:background="#55000000"
-            android:gravity="top"
-            android:orientation="vertical"
-            android:paddingTop="20dp"
-            android:paddingLeft="8dp"
-            android:paddingRight="8dp"
-            android:paddingBottom="8dp">
+        <FrameLayout
+            android:id="@+id/menu_list_host"
+            android:layout_width="@dimen/y1_menu_width"
+            android:layout_height="@dimen/y1_menu_height"
+            android:layout_marginLeft="@dimen/y1_menu_left"
+            android:layout_marginTop="@dimen/y1_status_bar_height"
+            android:clipChildren="true">
 
-<!--            <TextView android:id="@+id/tv_status" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Y1 MUSIC SYSTEM" android:textColor="#888888" android:textSize="14sp" android:layout_marginBottom="4dp" android:paddingLeft="5dp"/>-->
+            <ScrollView
+                android:id="@+id/menu_scroll"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:fillViewport="true"
+                android:scrollbars="none">
 
-            <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content">
-                <Button android:id="@+id/btn_now_playing" android:layout_width="match_parent" android:layout_height="48dp" android:text="Now Playing" android:textColor="#FFFFFF" android:background="#00000000" android:gravity="left|center_vertical" android:paddingLeft="15dp" android:textSize="18sp" android:focusable="true"/>
-                <TextView android:layout_width="wrap_content" android:layout_height="48dp" android:text="〉" android:textColor="#888888" android:gravity="center_vertical" android:layout_gravity="right" android:paddingRight="15dp" android:textSize="16sp" android:focusable="false" android:clickable="false"/>
-            </FrameLayout>
+                <LinearLayout
+                    android:id="@+id/container_home_menu_items"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
+            </ScrollView>
+        </FrameLayout>
 
-            <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content">
-                <Button android:id="@+id/btn_play" android:layout_width="match_parent" android:layout_height="48dp" android:text="Music" android:textColor="#FFFFFF" android:background="#00000000" android:gravity="left|center_vertical" android:paddingLeft="15dp" android:textSize="18sp" android:focusable="true"/>
-                <TextView android:layout_width="wrap_content" android:layout_height="48dp" android:text="〉" android:textColor="#888888" android:gravity="center_vertical" android:layout_gravity="right" android:paddingRight="15dp" android:textSize="16sp" android:focusable="false" android:clickable="false"/>
-            </FrameLayout>
+        <ImageView
+            android:id="@+id/iv_menu_preview"
+            android:layout_width="@dimen/y1_preview_width"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|end"
+            android:layout_marginTop="@dimen/y1_preview_margin_top"
+            android:layout_marginRight="@dimen/y1_preview_margin_right"
+            android:adjustViewBounds="true"
+            android:scaleType="fitCenter"
+            android:src="@drawable/music_circle" />
 
-            <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content">
-                <Button android:id="@+id/btn_bluetooth" android:layout_width="match_parent" android:layout_height="48dp" android:text="Bluetooth" android:textColor="#FFFFFF" android:background="#00000000" android:gravity="left|center_vertical" android:paddingLeft="15dp" android:textSize="18sp" android:focusable="true"/>
-                <TextView android:layout_width="wrap_content" android:layout_height="48dp" android:text="〉" android:textColor="#888888" android:gravity="center_vertical" android:layout_gravity="right" android:paddingRight="15dp" android:textSize="16sp" android:focusable="false" android:clickable="false"/>
-            </FrameLayout>
-
-            <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content">
-                <Button android:id="@+id/btn_settings" android:layout_width="match_parent" android:layout_height="48dp" android:text="Settings" android:textColor="#FFFFFF" android:background="#00000000" android:gravity="left|center_vertical" android:paddingLeft="15dp" android:textSize="18sp" android:focusable="true"/>
-                <TextView android:layout_width="wrap_content" android:layout_height="48dp" android:text="〉" android:textColor="#888888" android:gravity="center_vertical" android:layout_gravity="right" android:paddingRight="15dp" android:textSize="16sp" android:focusable="false" android:clickable="false"/>
-            </FrameLayout>
-
-            <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content">
-                <Button android:id="@+id/btn_radio" android:layout_width="match_parent" android:layout_height="48dp" android:text="FM Radio" android:textColor="#FFFFFF" android:background="#00000000" android:gravity="left|center_vertical" android:paddingLeft="15dp" android:textSize="18sp" android:focusable="true"/>
-                <TextView android:layout_width="wrap_content" android:layout_height="48dp" android:text="〉" android:textColor="#888888" android:gravity="center_vertical" android:layout_gravity="right" android:paddingRight="15dp" android:textSize="16sp" android:focusable="false" android:clickable="false"/>
-            </FrameLayout>
-
-            <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content">
-                <Button android:id="@+id/btn_webserver" android:layout_width="match_parent" android:layout_height="48dp" android:text="PC Upload" android:textColor="#FFFFFF" android:background="#00000000" android:gravity="left|center_vertical" android:paddingLeft="15dp" android:textSize="18sp" android:focusable="true"/>
-                <TextView android:layout_width="wrap_content" android:layout_height="48dp" android:text="〉" android:textColor="#888888" android:gravity="center_vertical" android:layout_gravity="right" android:paddingRight="15dp" android:textSize="16sp" android:focusable="false" android:clickable="false"/>
-            </FrameLayout>
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:background="#00000000"
+        <TextView
+            android:id="@+id/tv_menu_preview_title"
+            android:layout_width="@dimen/y1_preview_width"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|end"
+            android:layout_marginTop="250dp"
+            android:layout_marginRight="@dimen/y1_preview_margin_right"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp"
+            android:textStyle="bold"
             android:gravity="center"
-            android:orientation="vertical"
-            android:padding="5dp">
+            android:singleLine="true"
+            android:ellipsize="marquee"
+            android:marqueeRepeatLimit="marquee_forever"
+            android:visibility="gone" />
 
-            <ImageView
-                android:id="@+id/iv_menu_preview"
-                android:layout_width="160dp"
-                android:layout_height="160dp"
-                android:scaleType="fitCenter"
-                android:src="@android:drawable/ic_media_play"/>
+        <TextView
+            android:id="@+id/tv_menu_preview_artist"
+            android:layout_width="@dimen/y1_preview_width"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|end"
+            android:layout_marginTop="272dp"
+            android:layout_marginRight="@dimen/y1_preview_margin_right"
+            android:textColor="#AAAAAA"
+            android:textSize="14sp"
+            android:gravity="center"
+            android:singleLine="true"
+            android:visibility="gone" />
+    </FrameLayout>
+
+    <FrameLayout
+        android:id="@+id/layout_browser_mode"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#00000000"
+        android:paddingLeft="10dp"
+        android:paddingTop="@dimen/y1_status_bar_height"
+        android:paddingRight="10dp"
+        android:paddingBottom="10dp"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical">
 
             <TextView
-                android:id="@+id/tv_menu_preview_title"
-                android:layout_width="160dp"
+                android:id="@+id/tv_browser_path"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
+                android:layout_marginBottom="6dp"
+                android:singleLine="true"
+                android:text="@string/common_path_music"
                 android:textColor="#FFFFFF"
                 android:textSize="16sp"
-                android:textStyle="bold"
+                android:visibility="gone" />
+
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1">
+
+                <FrameLayout
+                    android:id="@+id/browser_list_host"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent">
+
+                    <ScrollView
+                        android:id="@+id/scroll_view_browser"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:fillViewport="true">
+
+                        <LinearLayout
+                            android:id="@+id/container_browser_items"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical" />
+                    </ScrollView>
+                </FrameLayout>
+
+                <LinearLayout
+                    android:id="@+id/podcast_preview_pane"
+                    android:layout_width="@dimen/y1_preview_width"
+                    android:layout_height="match_parent"
+                    android:layout_gravity="top|end"
+                    android:layout_marginTop="@dimen/y1_settings_preview_title_top"
+                    android:layout_marginRight="@dimen/y1_settings_preview_margin_right"
+                    android:gravity="center_horizontal"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+
+                    <ImageView
+                        android:id="@+id/iv_podcast_preview_art"
+                        android:layout_width="@dimen/y1_preview_width"
+                        android:layout_height="wrap_content"
+                        android:adjustViewBounds="true"
+                        android:maxHeight="@dimen/y1_setting_icon_max"
+                        android:scaleType="fitCenter"
+                        android:visibility="gone" />
+
+                    <TextView
+                        android:id="@+id/tv_podcast_preview_show"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="12dp"
+                        android:ellipsize="marquee"
+                        android:gravity="center"
+                        android:marqueeRepeatLimit="marquee_forever"
+                        android:singleLine="true"
+                        android:textColor="#FFFFFF"
+                        android:textSize="16sp"
+                        android:visibility="gone" />
+
+                    <TextView
+                        android:id="@+id/tv_podcast_preview_episode"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:ellipsize="marquee"
+                        android:gravity="center"
+                        android:marqueeRepeatLimit="marquee_forever"
+                        android:singleLine="true"
+                        android:textColor="#AAAAAA"
+                        android:textSize="14sp"
+                        android:visibility="gone" />
+
+                    <TextView
+                        android:id="@+id/tv_podcast_preview_meta"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:gravity="center"
+                        android:textColor="#888888"
+                        android:textSize="12sp"
+                        android:visibility="gone" />
+                </LinearLayout>
+            </FrameLayout>
+        </LinearLayout>
+    </FrameLayout>
+
+    <FrameLayout
+        android:id="@+id/layout_settings_mode"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#00000000"
+        android:visibility="gone">
+
+        <FrameLayout
+            android:id="@+id/settings_menu_host"
+            android:layout_width="@dimen/y1_settings_menu_width"
+            android:layout_height="@dimen/y1_settings_menu_height"
+            android:layout_marginLeft="@dimen/y1_menu_left"
+            android:layout_marginTop="@dimen/y1_status_bar_height"
+            android:clipChildren="true">
+
+            <ScrollView
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:fillViewport="true"
+                android:scrollbars="none">
+
+                <LinearLayout
+                    android:id="@+id/container_settings_items"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
+            </ScrollView>
+        </FrameLayout>
+
+        <LinearLayout
+            android:id="@+id/settings_preview_pane"
+            android:layout_width="@dimen/y1_preview_width"
+            android:layout_height="match_parent"
+            android:layout_gravity="top|end"
+            android:layout_marginTop="@dimen/y1_settings_preview_title_top"
+            android:layout_marginRight="@dimen/y1_settings_preview_margin_right"
+            android:gravity="center_horizontal"
+            android:orientation="vertical">
+
+            <ImageView
+                android:id="@+id/iv_settings_preview_icon"
+                android:layout_width="@dimen/y1_preview_width"
+                android:layout_height="wrap_content"
+                android:adjustViewBounds="true"
+                android:maxHeight="@dimen/y1_setting_icon_max"
+                android:scaleType="fitCenter"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/tv_settings_preview_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
                 android:gravity="center"
                 android:singleLine="true"
                 android:ellipsize="marquee"
                 android:marqueeRepeatLimit="marquee_forever"
+                android:textColor="#FFFFFF"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <com.solar.launcher.StoragePieView
+                android:id="@+id/storage_pie_view"
+                android:layout_width="130dp"
+                android:layout_height="130dp"
+                android:layout_marginTop="12dp"
                 android:visibility="gone" />
 
             <TextView
-                android:id="@+id/tv_menu_preview_artist"
-                android:layout_width="160dp"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
-                android:textColor="#AAAAAA"
-                android:textSize="14sp"
-                android:gravity="center"
-                android:singleLine="true"
-                android:visibility="gone" />
-        </LinearLayout>
-    </LinearLayout>
-
-    <LinearLayout
-        android:id="@+id/layout_browser_mode"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:background="#66000000"
-        android:orientation="vertical"
-        android:paddingLeft="10dp"
-        android:paddingTop="36dp"
-        android:paddingRight="10dp"
-        android:paddingBottom="10dp"
-        android:visibility="gone">
-
-        <TextView
-            android:id="@+id/tv_browser_path"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="6dp"
-            android:singleLine="true"
-            android:text="Path: /Music"
-            android:textColor="#FFFFFF"
-            android:textSize="16sp" />
-
-        <ScrollView
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:fillViewport="true">
-
-            <LinearLayout
-                android:id="@+id/container_browser_items"
+                android:id="@+id/tv_settings_preview_state"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="vertical" />
-        </ScrollView>
-    </LinearLayout>
+                android:layout_marginTop="8dp"
+                android:gravity="center"
+                android:textColor="#FFFFFF"
+                android:textSize="16sp" />
+        </LinearLayout>
 
-    <LinearLayout
-        android:id="@+id/layout_settings_mode"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:orientation="vertical"
-        android:paddingTop="36dp"
-        android:paddingBottom="10dp"
-        android:paddingLeft="10dp"
-        android:paddingRight="10dp"
-        android:background="#66000000"
-        android:visibility="gone">
-        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="SETTINGS" android:textColor="#BBFFFFFF" android:textSize="16sp" android:textStyle="bold" android:singleLine="true" android:layout_marginBottom="6dp"/>
-        <ScrollView android:layout_width="match_parent" android:layout_height="match_parent" android:fillViewport="true">
-            <LinearLayout android:id="@+id/container_settings_items" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
-        </ScrollView>
-    </LinearLayout>
+        <FrameLayout
+            android:id="@+id/theme_gallery_interstitial"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="#E6000000"
+            android:clickable="true"
+            android:focusable="true"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:gravity="center_horizontal"
+                android:orientation="vertical"
+                android:paddingLeft="16dp"
+                android:paddingTop="@dimen/y1_settings_preview_title_top"
+                android:paddingRight="16dp">
+
+                <ImageView
+                    android:id="@+id/iv_theme_interstitial_cover"
+                    android:layout_width="@dimen/y1_preview_width"
+                    android:layout_height="wrap_content"
+                    android:adjustViewBounds="true"
+                    android:maxHeight="@dimen/y1_setting_icon_max"
+                    android:scaleType="fitCenter"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/tv_theme_interstitial_title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:ellipsize="marquee"
+                    android:gravity="center"
+                    android:marqueeRepeatLimit="marquee_forever"
+                    android:singleLine="true"
+                    android:textColor="#FFFFFF"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tv_theme_interstitial_author"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:gravity="center"
+                    android:singleLine="true"
+                    android:textColor="#AAAAAA"
+                    android:textSize="15sp" />
+
+                <Button
+                    android:id="@+id/btn_theme_interstitial_download"
+                    android:layout_width="match_parent"
+                    android:layout_height="@dimen/y1_menu_item_height"
+                    android:layout_marginTop="16dp"
+                    android:background="@android:color/transparent"
+                    android:focusable="true"
+                    android:text="@string/common_download"
+                    android:textColor="#FFFFFF" />
+
+                <Button
+                    android:id="@+id/btn_theme_interstitial_back"
+                    android:layout_width="match_parent"
+                    android:layout_height="@dimen/y1_menu_item_height"
+                    android:layout_marginTop="4dp"
+                    android:background="@android:color/transparent"
+                    android:focusable="true"
+                    android:text="@string/common_back"
+                    android:textColor="#AAAAAA" />
+            </LinearLayout>
+        </FrameLayout>
+    </FrameLayout>
 
     <LinearLayout
         android:id="@+id/layout_bluetooth_mode"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="vertical"
-        android:paddingTop="36dp"
+        android:paddingTop="@dimen/y1_status_bar_height"
         android:paddingBottom="10dp"
         android:paddingLeft="10dp"
         android:paddingRight="10dp"
-        android:background="#66000000"
+        android:background="#00000000"
         android:visibility="gone">
-        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="BLUETOOTH SCAN" android:textColor="#BBFFFFFF" android:textSize="16sp" android:textStyle="bold" android:layout_marginBottom="6dp"/>
-        <Button android:id="@+id/btn_scan_bt" android:layout_width="match_parent" android:layout_height="40dp" android:text="🔍 Scan Devices" android:textColor="#FFFFFF" android:textSize="16sp" android:background="#15FFFFFF" android:focusable="true"/>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/bluetooth_scan_header" android:textColor="#BBFFFFFF" android:textSize="16sp" android:textStyle="bold" android:layout_marginBottom="6dp" android:visibility="gone"/>
+        <Button android:id="@+id/btn_scan_bt" android:layout_width="match_parent" android:layout_height="@dimen/y1_menu_item_height" android:text="@string/bluetooth_scan_devices" android:background="@android:color/transparent" android:focusable="true"/>
         <ScrollView android:layout_width="match_parent" android:layout_height="match_parent" android:fillViewport="true" android:layout_marginTop="5dp">
             <LinearLayout android:id="@+id/container_bt_items" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
         </ScrollView>
@@ -183,14 +374,14 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="vertical"
-        android:paddingTop="36dp"
+        android:paddingTop="@dimen/y1_status_bar_height"
         android:paddingBottom="10dp"
         android:paddingLeft="10dp"
         android:paddingRight="10dp"
-        android:background="#66000000"
+        android:background="#00000000"
         android:visibility="gone">
-        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="WI-FI NETWORKS" android:textColor="#BBFFFFFF" android:textSize="16sp" android:textStyle="bold" android:layout_marginBottom="6dp"/>
-        <Button android:id="@+id/btn_scan_wifi" android:layout_width="match_parent" android:layout_height="40dp" android:text="🔍 Scan Networks" android:textColor="#FFFFFF" android:textSize="16sp" android:background="#15FFFFFF" android:focusable="true"/>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/wifi_networks_header" android:textColor="#BBFFFFFF" android:textSize="16sp" android:textStyle="bold" android:layout_marginBottom="6dp" android:visibility="gone"/>
+        <Button android:id="@+id/btn_scan_wifi" android:layout_width="match_parent" android:layout_height="@dimen/y1_menu_item_height" android:text="@string/wifi_scan_networks" android:background="@android:color/transparent" android:focusable="true"/>
         <ScrollView android:layout_width="match_parent" android:layout_height="match_parent" android:fillViewport="true" android:layout_marginTop="5dp">
             <LinearLayout android:id="@+id/container_wifi_items" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
         </ScrollView>
@@ -202,20 +393,20 @@
         android:layout_height="match_parent"
         android:orientation="vertical"
         android:gravity="center"
-        android:paddingTop="36dp"
+        android:paddingTop="@dimen/y1_status_bar_height"
         android:padding="15dp"
-        android:background="#66000000"
+        android:background="#00000000"
         android:visibility="gone">
-        <TextView android:id="@+id/tv_keyboard_ssid" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Target: My_Home_Wifi" android:textColor="#BBFFFFFF" android:textSize="16sp" android:textStyle="bold"/>
+        <TextView android:id="@+id/tv_keyboard_ssid" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Target: My_Home_Wifi" android:textSize="16sp" android:textStyle="bold"/>
         <TextView android:id="@+id/tv_keyboard_input" android:layout_width="match_parent" android:layout_height="40dp" android:text="" android:textColor="#FFFFFF" android:textSize="20sp" android:textStyle="bold" android:gravity="center" android:background="#222222" android:layout_marginTop="10dp" android:layout_marginBottom="15dp"/>
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center">
-            <TextView android:id="@+id/tv_key_pprev" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="a" android:textColor="#555555" android:textSize="14sp" android:layout_marginRight="12dp"/>
-            <TextView android:id="@+id/tv_key_prev" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="b" android:textColor="#AAAAAA" android:textSize="20sp" android:layout_marginRight="12dp"/>
-            <TextView android:id="@+id/tv_key_current" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="c" android:textColor="#FFFFFF" android:textSize="36sp" android:textStyle="bold"/>
-            <TextView android:id="@+id/tv_key_next" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="d" android:textColor="#AAAAAA" android:textSize="20sp" android:layout_marginLeft="12dp"/>
-            <TextView android:id="@+id/tv_key_nnext" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="e" android:textColor="#555555" android:textSize="14sp" android:layout_marginLeft="12dp"/>
+            <TextView android:id="@+id/tv_key_pprev" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="center" android:text="a" android:textColor="#555555" android:textSize="@dimen/y1_menu_text_size"/>
+            <TextView android:id="@+id/tv_key_prev" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="center" android:text="b" android:textColor="#AAAAAA" android:textSize="@dimen/y1_menu_text_size"/>
+            <TextView android:id="@+id/tv_key_current" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="center" android:text="c" android:textColor="#FFFFFF" android:textSize="@dimen/y1_menu_text_size" android:textStyle="bold"/>
+            <TextView android:id="@+id/tv_key_next" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="center" android:text="d" android:textColor="#AAAAAA" android:textSize="@dimen/y1_menu_text_size"/>
+            <TextView android:id="@+id/tv_key_nnext" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="center" android:text="e" android:textColor="#555555" android:textSize="@dimen/y1_menu_text_size"/>
         </LinearLayout>
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Wheel: Move | Center: Enter | Top: Back" android:textColor="#888888" android:textSize="12sp" android:layout_marginTop="15dp"/>
+        <TextView android:id="@+id/tv_keyboard_hint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/keyboard_hint" android:textSize="@dimen/y1_menu_text_size" android:layout_marginTop="15dp"/>
     </LinearLayout>
 
     <FrameLayout
@@ -226,77 +417,168 @@
         <ImageView android:id="@+id/iv_player_bg_blur" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="centerCrop" android:src="#111111"/>
         <View android:layout_width="match_parent" android:layout_height="match_parent" android:background="#44000000"/>
 
-        <RelativeLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="top" android:paddingTop="45dp" android:paddingLeft="15dp" android:paddingRight="15dp">
-            <TextView android:id="@+id/tv_player_track_count" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_alignParentLeft="true" android:text="00 / 00" android:textColor="#FFFFFF" android:textSize="14sp" android:textStyle="bold" />
-            <LinearLayout
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_alignParentRight="true"
-                android:orientation="horizontal">
-                <ImageView
-                    android:id="@+id/iv_player_shuffle_status"
-                    android:layout_width="24dp"
-                    android:layout_height="24dp"
-                    android:visibility="gone"
-                    android:layout_marginEnd="8dp" />
+        <LinearLayout
+            android:id="@+id/player_content_row"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="horizontal"
+            android:paddingTop="@dimen/y1_status_bar_height"
+            android:paddingBottom="@dimen/y1_player_progress_height"
+            android:paddingLeft="10dp"
+            android:paddingRight="10dp">
 
-                <ImageView
-                    android:id="@+id/iv_player_repeat_status"
-                    android:layout_width="24dp"
-                    android:layout_height="24dp"
-                    android:visibility="gone" />
-            </LinearLayout>
-        </RelativeLayout>
-
-        <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:gravity="center" android:paddingTop="55dp" android:paddingBottom="5dp" android:paddingLeft="16dp" android:paddingRight="16dp">
-            <FrameLayout android:layout_width="190dp" android:layout_height="190dp" android:layout_marginBottom="8dp">
-                <ImageView android:id="@+id/iv_album_art" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="centerCrop" android:src="@drawable/default_album" android:background="#222222" />
+            <FrameLayout
+                android:id="@+id/player_album_container"
+                android:layout_width="@dimen/y1_player_art_width"
+                android:layout_height="match_parent"
+                android:layout_marginTop="20dp">
+                <ImageView android:id="@+id/iv_album_art" android:layout_width="match_parent" android:layout_height="200dp" android:scaleType="centerCrop" android:src="@drawable/default_album" android:background="#222222" />
                 <ImageView android:id="@+id/iv_pause_overlay" android:layout_width="70dp" android:layout_height="70dp" android:layout_gravity="center" android:src="@android:drawable/ic_media_pause" android:visibility="gone" />
             </FrameLayout>
-            <TextView android:id="@+id/tv_player_title" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Title" android:textColor="#FFFFFF" android:textSize="22sp" android:textStyle="bold" android:gravity="center" android:singleLine="true"/>
-            <TextView android:id="@+id/tv_player_artist" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Artist" android:textColor="#E0E0E0" android:textSize="16sp" android:gravity="center" android:layout_marginTop="2dp" android:singleLine="true" android:layout_marginBottom="6dp"/>
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical">
-                <TextView android:id="@+id/tv_player_time_current" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="00:00" android:textColor="#FFFFFF" android:textSize="16sp" android:textStyle="bold" android:layout_marginRight="8dp"/>
-                <ProgressBar android:id="@+id/player_progress" style="?android:attr/progressBarStyleHorizontal" android:layout_width="0dp" android:layout_height="20dp" android:layout_weight="1" android:max="100" android:progress="0" android:layout_marginTop="3dp"/>
-                <TextView android:id="@+id/tv_player_time_total" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="00:00" android:textColor="#FFFFFF" android:textSize="16sp" android:textStyle="bold" android:layout_marginLeft="8dp"/>
+
+            <LinearLayout
+                android:id="@+id/player_info_column"
+                android:layout_width="@dimen/y1_player_info_width"
+                android:layout_height="match_parent"
+                android:layout_marginLeft="8dp"
+                android:layout_marginTop="26dp"
+                android:orientation="vertical">
+                <TextView android:id="@+id/tv_player_title" android:layout_width="match_parent" android:layout_height="42dp" android:text="@string/common_title" android:textColor="#FFFFFF" android:textSize="25sp" android:textStyle="bold" android:gravity="start|center_vertical" android:paddingLeft="13dp" android:singleLine="true" android:ellipsize="marquee" android:background="#1affffff"/>
+                <TextView android:id="@+id/tv_player_artist" android:layout_width="match_parent" android:layout_height="38dp" android:layout_marginTop="7dp" android:text="@string/common_artist" android:textColor="#FFFFFF" android:textSize="21sp" android:textStyle="bold" android:gravity="start|center_vertical" android:paddingLeft="13dp" android:singleLine="true" android:ellipsize="marquee" android:background="#1affffff"/>
+                <TextView android:id="@+id/tv_player_track_count" android:layout_width="match_parent" android:layout_height="38dp" android:layout_marginTop="7dp" android:text="00 / 00" android:textColor="#FFFFFF" android:textSize="21sp" android:textStyle="bold" android:gravity="start|center_vertical" android:paddingLeft="13dp" android:singleLine="true" android:background="#1affffff"/>
+                <LinearLayout android:id="@+id/player_status_row" android:layout_width="match_parent" android:layout_height="38dp" android:layout_marginTop="7dp" android:orientation="horizontal" android:gravity="center_vertical" android:paddingLeft="13dp" android:background="#1affffff">
+                    <ImageView android:id="@+id/iv_player_shuffle_status" android:layout_width="24dp" android:layout_height="24dp" android:visibility="gone" android:layout_marginRight="10dp"/>
+                    <ImageView android:id="@+id/iv_player_repeat_status" android:layout_width="24dp" android:layout_height="24dp" android:visibility="gone"/>
+                </LinearLayout>
             </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/player_visualizer_container"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:paddingTop="@dimen/y1_status_bar_height"
+            android:paddingBottom="@dimen/y1_player_progress_height"
+            android:paddingLeft="10dp"
+            android:paddingRight="10dp"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/tv_viz_title"
+                android:layout_width="match_parent"
+                android:layout_height="28dp"
+                android:background="#1affffff"
+                android:ellipsize="marquee"
+                android:gravity="center_vertical"
+                android:marqueeRepeatLimit="marquee_forever"
+                android:paddingLeft="8dp"
+                android:paddingRight="8dp"
+                android:singleLine="true"
+                android:text="@string/common_title"
+                android:textColor="#FFFFFF"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tv_viz_artist"
+                android:layout_width="match_parent"
+                android:layout_height="24dp"
+                android:layout_marginTop="4dp"
+                android:background="#1affffff"
+                android:ellipsize="marquee"
+                android:gravity="center_vertical"
+                android:marqueeRepeatLimit="marquee_forever"
+                android:paddingLeft="8dp"
+                android:paddingRight="8dp"
+                android:singleLine="true"
+                android:text="@string/common_artist"
+                android:textColor="#FFFFFF"
+                android:textSize="15sp" />
+
+            <TextView
+                android:id="@+id/tv_viz_track_count"
+                android:layout_width="match_parent"
+                android:layout_height="22dp"
+                android:layout_marginTop="4dp"
+                android:background="#1affffff"
+                android:gravity="center_vertical"
+                android:paddingLeft="8dp"
+                android:paddingRight="8dp"
+                android:singleLine="true"
+                android:text="00 / 00"
+                android:textColor="#FFFFFF"
+                android:textSize="14sp" />
+
+            <FrameLayout
+                android:id="@+id/player_visualizer_slot"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:layout_marginTop="6dp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/player_progress_bar"
+            android:layout_width="match_parent"
+            android:layout_height="@dimen/y1_player_progress_height"
+            android:layout_gravity="bottom"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingLeft="8dp"
+            android:paddingRight="8dp">
+            <TextView android:id="@+id/tv_player_time_current" android:layout_width="77dp" android:layout_height="wrap_content" android:text="00:00" android:textColor="#FFFFFF" android:textSize="15sp" android:textStyle="bold" android:gravity="center"/>
+            <FrameLayout
+                android:id="@+id/player_progress_track"
+                android:layout_width="0dp"
+                android:layout_height="16dp"
+                android:layout_weight="1"
+                android:layout_gravity="center_vertical">
+                <ProgressBar android:id="@+id/player_progress" style="?android:attr/progressBarStyleHorizontal" android:layout_width="match_parent" android:layout_height="8dp" android:layout_gravity="center_vertical" android:max="100" android:progress="0"/>
+                <View android:id="@+id/player_scrub_marker" android:layout_width="10dp" android:layout_height="10dp" android:layout_gravity="center_vertical" android:visibility="gone"/>
+            </FrameLayout>
+            <TextView android:id="@+id/tv_player_time_total" android:layout_width="77dp" android:layout_height="wrap_content" android:text="00:00" android:textColor="#FFFFFF" android:textSize="15sp" android:textStyle="bold" android:gravity="center"/>
         </LinearLayout>
     </FrameLayout>
 
     <RelativeLayout
         android:id="@+id/layout_status_bar"
         android:layout_width="match_parent"
-        android:layout_height="36dp"
-        android:paddingLeft="10dp"
-        android:paddingRight="10dp"
+        android:layout_height="@dimen/y1_status_bar_height"
+        android:paddingLeft="14dp"
+        android:paddingRight="14dp"
         android:background="#00000000">
 
         <TextView
             android:id="@+id/tv_status_clock"
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_alignParentLeft="true"
+            android:layout_toLeftOf="@+id/status_bar_icons"
+            android:layout_marginRight="8dp"
             android:layout_centerVertical="true"
+            android:singleLine="true"
+            android:ellipsize="marquee"
+            android:marqueeRepeatLimit="marquee_forever"
+            android:scrollHorizontally="true"
             android:text="12:00 AM"
             android:textColor="#FFFFFF"
             android:textSize="18sp"
-            android:textStyle="bold"
-            android:shadowColor="#FF000000"
-            android:shadowDx="1"
-            android:shadowDy="1"
-            android:shadowRadius="3" />
+            android:textStyle="bold" />
 
         <LinearLayout
+            android:id="@+id/status_bar_icons"
             android:layout_width="wrap_content"
             android:layout_height="match_parent"
             android:layout_alignParentRight="true"
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
-            <ImageView android:id="@+id/iv_status_headphone" android:layout_width="22dp" android:layout_height="22dp" android:src="@drawable/ic_headphone" android:visibility="gone" android:layout_marginRight="8dp"/>
-            <ImageView android:id="@+id/iv_status_wifi" android:layout_width="22dp" android:layout_height="22dp" android:src="@drawable/ic_wifi" android:visibility="gone" android:layout_marginRight="8dp"/>
-            <ImageView android:id="@+id/iv_status_bluetooth" android:layout_width="22dp" android:layout_height="22dp" android:src="@drawable/ic_bluetooth" android:visibility="gone" android:layout_marginRight="12dp"/>
-            <TextView android:id="@+id/tv_status_battery" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="100%" android:textColor="#FFFFFF" android:textSize="18sp" android:textStyle="bold" android:shadowColor="#FF000000" android:shadowDx="1" android:shadowDy="1" android:shadowRadius="3"/>
+            <ImageView android:id="@+id/iv_status_headphone" android:layout_width="@dimen/y1_status_icon_size" android:layout_height="@dimen/y1_status_icon_size" android:src="@drawable/ic_headphone" android:visibility="gone" android:scaleType="fitCenter" android:layout_marginRight="6dp"/>
+            <ImageView android:id="@+id/iv_status_wifi" android:layout_width="@dimen/y1_status_icon_size" android:layout_height="@dimen/y1_status_icon_size" android:src="@drawable/ic_wifi" android:visibility="gone" android:scaleType="fitCenter" android:layout_marginRight="6dp"/>
+            <ImageView android:id="@+id/iv_status_bluetooth" android:layout_width="@dimen/y1_status_icon_size" android:layout_height="@dimen/y1_status_icon_size" android:src="@drawable/ic_bluetooth" android:visibility="gone" android:scaleType="fitCenter" android:layout_marginRight="6dp"/>
+            <ImageView android:id="@+id/iv_status_battery" android:layout_width="wrap_content" android:layout_height="@dimen/y1_battery_icon_height" android:adjustViewBounds="true" android:scaleType="fitCenter" android:visibility="gone" android:layout_marginRight="4dp"/>
+            <TextView android:id="@+id/tv_status_battery" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="100%" android:textColor="#FFFFFF" android:textSize="16sp" android:textStyle="bold"/>
         </LinearLayout>
     </RelativeLayout>
 
@@ -310,7 +592,7 @@
         android:padding="20dp"
         android:gravity="center"
         android:visibility="gone">
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Volume" android:textColor="#FFFFFF" android:textSize="16sp" android:layout_marginBottom="10dp"/>
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/common_volume" android:textColor="#FFFFFF" android:textSize="16sp" android:layout_marginBottom="10dp"/>
         <ProgressBar android:id="@+id/volume_progress" style="?android:attr/progressBarStyleHorizontal" android:layout_width="match_parent" android:layout_height="15dp" android:max="15" android:progress="10"/>
     </LinearLayout>
 
@@ -320,13 +602,13 @@
         android:layout_height="match_parent"
         android:orientation="vertical"
         android:padding="30dp"
-        android:background="#66000000"
+        android:background="#00000000"
         android:visibility="gone"
         android:gravity="center">
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="DISPLAY BRIGHTNESS" android:textColor="#BBFFFFFF" android:textSize="20sp" android:textStyle="bold" android:layout_marginBottom="30dp"/>
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/player_brightness_header" android:textColor="#BBFFFFFF" android:textSize="20sp" android:textStyle="bold" android:layout_marginBottom="30dp" android:visibility="gone"/>
         <ProgressBar android:id="@+id/pb_brightness" style="?android:attr/progressBarStyleHorizontal" android:layout_width="match_parent" android:layout_height="20dp" android:max="255" android:layout_marginBottom="15dp"/>
         <TextView android:id="@+id/tv_brightness_val" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="100%" android:textColor="#FFFFFF" android:textSize="18sp" android:textStyle="bold"/>
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Turn the wheel to adjust the brightness." android:textColor="#888888" android:textSize="14sp" android:layout_marginTop="30dp"/>
+        <TextView android:id="@+id/tv_brightness_hint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/player_brightness_hint" android:textSize="14sp" android:layout_marginTop="30dp"/>
     </LinearLayout>
 
     <LinearLayout
@@ -335,13 +617,13 @@
         android:layout_height="match_parent"
         android:orientation="vertical"
         android:padding="30dp"
-        android:background="#66000000"
+        android:background="#00000000"
         android:visibility="gone"
         android:gravity="center">
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" text="STORAGE INFO" android:textColor="#BBFFFFFF" android:textSize="20sp" android:textStyle="bold" android:layout_marginBottom="30dp"/>
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/player_storage_header" android:textColor="#BBFFFFFF" android:textSize="20sp" android:textStyle="bold" android:layout_marginBottom="30dp" android:visibility="gone"/>
         <ProgressBar android:id="@+id/pb_storage" style="?android:attr/progressBarStyleHorizontal" android:layout_width="match_parent" android:layout_height="20dp" android:layout_marginBottom="15dp"/>
-        <TextView android:id="@+id/tv_storage_details" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Used: 0MB / Total: 0MB" android:textColor="#FFFFFF" android:textSize="18sp" android:textStyle="bold"/>
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Press [Back] to return." android:textColor="#888888" android:textSize="14sp" android:layout_marginTop="30dp"/>    </LinearLayout>
+        <TextView android:id="@+id/tv_storage_details" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/player_storage_used" android:textColor="#FFFFFF" android:textSize="18sp" android:textStyle="bold"/>
+        <TextView android:id="@+id/tv_storage_hint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/player_storage_back_hint" android:textSize="14sp" android:layout_marginTop="30dp"/>    </LinearLayout>
 
     <LinearLayout
         android:id="@+id/layout_webserver_mode"
@@ -349,13 +631,13 @@
         android:layout_height="match_parent"
         android:orientation="vertical"
         android:padding="30dp"
-        android:background="#66000000"
+        android:background="#00000000"
         android:visibility="gone"
         android:gravity="center">
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="WIRELESS PC UPLOAD" android:textColor="#BBFFFFFF" android:textSize="22sp" android:textStyle="bold" android:layout_marginBottom="40dp"/>
-        <TextView android:id="@+id/tv_server_status" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="🔴 SERVER STOPPED" android:textColor="#FF5555" android:textSize="24sp" android:textStyle="bold" android:layout_marginBottom="10dp"/>
-        <TextView android:id="@+id/tv_server_ip" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="http://---.---.---.---:8080" android:textColor="#888888" android:textSize="18sp" android:textStyle="bold" android:layout_marginBottom="50dp"/>
-        <Button android:id="@+id/btn_server_toggle" android:layout_width="350dp" android:layout_height="wrap_content" android:text="START SERVER" android:textSize="22sp" android:textColor="#FFFFFF" android:background="#00000000" android:padding="15dp" android:layout_marginBottom="30dp" android:focusable="true"/>
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Enter the above address in your PC browser.\nPress [Back] to return." android:textColor="#888888" android:textSize="16sp" android:gravity="center"/>
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/webserver_header" android:textColor="#BBFFFFFF" android:textSize="22sp" android:textStyle="bold" android:layout_marginBottom="40dp" android:visibility="gone"/>
+        <TextView android:id="@+id/tv_server_status" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/webserver_stopped_icon" android:textColor="#FF5555" android:textSize="24sp" android:textStyle="bold" android:layout_marginBottom="10dp"/>
+        <TextView android:id="@+id/tv_server_ip" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/webserver_ip_placeholder" android:textSize="18sp" android:textStyle="bold" android:layout_marginBottom="24dp"/>
+        <Button android:id="@+id/btn_server_toggle" android:layout_width="match_parent" android:layout_height="@dimen/y1_menu_item_height" android:text="@string/webserver_start" android:background="@android:color/transparent" android:layout_marginBottom="16dp" android:focusable="true"/>
+        <TextView android:id="@+id/tv_webserver_hint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/webserver_hint" android:textSize="16sp" android:gravity="center"/>
     </LinearLayout>
 </FrameLayout>

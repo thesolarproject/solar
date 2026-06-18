@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Y1" parent="android:Theme.Holo.NoActionBar">
+    <style name="Theme.Solar" parent="android:Theme.Holo.NoActionBar">
     </style>
 </resources>

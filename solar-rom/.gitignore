@@ -1,0 +1,7 @@
+rom.zip
+rom_type_b.zip
+*.apk
+.base/
+mount_sys/
+mount_user/
+dist/
