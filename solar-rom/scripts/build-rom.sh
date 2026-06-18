@@ -241,6 +241,7 @@ curl -fsSL -o "$BASE_DIR/rom.zip" "$BASE_URL"
 unzip -q "$BASE_DIR/rom.zip" -d "$BASE_DIR"
 
 echo "==> Mounting system.img and userdata.img"
+sudo modprobe loop 2>/dev/null || true
 sudo mount -t ext4 -o loop "$BASE_DIR/system.img" "$MOUNT_SYS"
 sudo mount -t ext4 -o loop "$BASE_DIR/userdata.img" "$MOUNT_USER"
 

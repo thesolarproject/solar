@@ -8,6 +8,9 @@ on:
 permissions:
   contents: write
 
+env:
+  SOLAR_GITHUB_REPO: thatwitchgirl/solar
+
 concurrency:
   group: solar-release-${{ github.ref }}
   cancel-in-progress: true
@@ -15,6 +18,7 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
@@ -44,7 +48,15 @@ jobs:
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Install ROM build dependencies
-        run: sudo apt-get update && sudo apt-get install -y unzip zip e2fsprogs curl
+        run: |
+          sudo apt-get update && sudo apt-get install -y unzip zip e2fsprogs curl util-linux kmod
+          sudo modprobe loop || true
+
+      - name: Verify Rockbox-Y1 base firmware URLs
+        run: |
+          curl -fsSIL -o /dev/null "https://github.com/rockbox-y1/rockbox/releases/download/type-a-base/rom.zip"
+          curl -fsSIL -o /dev/null "https://github.com/rockbox-y1/rockbox/releases/download/type-b-base/rom.zip"
+          echo "Rockbox type A/B base sources OK"
 
       - name: Decode platform signing keys
         env:
@@ -71,6 +83,8 @@ jobs:
           ./scripts/build.sh
 
       - name: Build ROM images
+        env:
+          SOLAR_GITHUB_REPO: thatwitchgirl/solar
         run: |
           APK="$GITHUB_WORKSPACE/app/build/outputs/apk/release/app-release.apk"
           test -f "$APK"
@@ -78,12 +92,15 @@ jobs:
           chmod +x solar-rom/scripts/build-rom.sh
           ./solar-rom/scripts/build-rom.sh a --apk "$APK" "$GITHUB_WORKSPACE/dist/rom.zip"
           ./solar-rom/scripts/build-rom.sh b --apk "$APK" "$GITHUB_WORKSPACE/dist/rom_type_b.zip"
+          ls -la dist/
 
       - name: Prepare release notes
         run: ./solar-rom/scripts/format-release-notes.sh release.json > RELEASE_NOTES.md
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: Solar ${{ steps.meta.outputs.version_name }} (${{ steps.meta.outputs.short_sha }})
@@ -95,6 +112,7 @@ jobs:
           fail_on_unmatched_files: true
           make_latest: ${{ github.ref == 'refs/heads/main' }}
           prerelease: ${{ github.ref == 'refs/heads/nightly' }}
+          generate_release_notes: false
 
       - name: Bump stable version for next release
         if: github.ref == 'refs/heads/main'
@@ -102,6 +120,8 @@ jobs:
 
       - name: Commit stable version bump
         if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.SOLAR_GITHUB_PAT }}
         run: |
           git config user.name "ThatWitchGirl"
           git config user.email "anonymous@local"
@@ -111,7 +131,7 @@ jobs:
             exit 0
           fi
           git commit -m "Bump stable version for next release."
-          git push
+          git push "https://x-access-token:${GH_TOKEN}@github.com/thatwitchgirl/solar.git" HEAD:main
 
       - name: Remove signing keys
         if: always()
