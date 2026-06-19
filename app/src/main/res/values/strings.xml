@@ -39,6 +39,7 @@
     <string name="settings_sub_soulseek_connection">Settings: Reach / Connection</string>
     <string name="settings_sub_soulseek_about">Settings: Reach / About</string>
     <string name="settings_sub_system_update">Settings: System Update</string>
+    <string name="settings_sub_system_update_download">Settings: Downloading update</string>
     <string name="settings_sub_home">Settings: Home Screen</string>
     <string name="settings_sub_home_arrange">Settings: Home Screen / Arrange</string>
     <string name="settings_sub_home_more_arrange">Settings: More Menu</string>
@@ -541,6 +542,12 @@
     <string name="update_available_message">Solar %1$s is available.</string>
     <string name="update_install">Install</string>
     <string name="update_later">Later</string>
+    <string name="update_download_relation_upgrade">Upgrade · from v%1$s</string>
+    <string name="update_download_relation_sidegrade">Switch release · from %1$s</string>
+    <string name="update_download_relation_downgrade">Downgrade · from v%1$s</string>
+    <string name="update_download_status_connecting">Connecting to GitHub…</string>
+    <string name="update_download_status_receiving">Downloading update</string>
+    <string name="update_download_failed">Download failed</string>
     <string name="context_action_lock_failed">Could not lock screen</string>
     <string name="podcasts_saved_on_device">Saved on device</string>
     <string name="podcasts_resume_badge">[Resume]</string>

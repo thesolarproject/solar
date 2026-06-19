@@ -9,6 +9,7 @@ public final class SettingsScreens {
     public static final String SOULSEEK_CONNECTION = "settings.soulseek.connection";
     public static final String SOULSEEK_ABOUT = "settings.soulseek.about";
     public static final String SYSTEM_UPDATE = "settings.system_update";
+    public static final String SYSTEM_UPDATE_DOWNLOAD = "settings.system_update.download";
     public static final String HOME = "settings.home";
     public static final String HOME_ARRANGE = "settings.home.arrange";
     public static final String HOME_MORE_ARRANGE = "settings.home.more_arrange";
@@ -32,6 +33,7 @@ public final class SettingsScreens {
         if (SOULSEEK_CONNECTION.equals(key)) return R.string.settings_sub_soulseek_connection;
         if (SOULSEEK_ABOUT.equals(key)) return R.string.settings_sub_soulseek_about;
         if (SYSTEM_UPDATE.equals(key)) return R.string.settings_sub_system_update;
+        if (SYSTEM_UPDATE_DOWNLOAD.equals(key)) return R.string.settings_sub_system_update_download;
         if (HOME.equals(key)) return R.string.settings_sub_home;
         if (HOME_ARRANGE.equals(key)) return R.string.settings_sub_home_arrange;
         if (HOME_MORE_ARRANGE.equals(key)) return R.string.settings_sub_home_more_arrange;

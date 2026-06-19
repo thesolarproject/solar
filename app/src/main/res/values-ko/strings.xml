@@ -35,6 +35,7 @@
     <string name="settings_sub_soulseek_connection">설정: Soulseek / 연결</string>
     <string name="settings_sub_soulseek_about">설정: Soulseek / 정보</string>
     <string name="settings_sub_system_update">설정: 시스템 업데이트</string>
+    <string name="settings_sub_system_update_download">설정: 업데이트 다운로드 중</string>
     <string name="settings_sub_home">설정: 홈 화면</string>
     <string name="settings_sub_home_arrange">설정: 홈 화면 / 정렬</string>
     <string name="settings_sub_background">설정: 배경</string>
@@ -333,6 +334,12 @@
     <string name="update_download_title">업데이트 다운로드 중</string>
     <string name="update_network_error">GitHub에 연결할 수 없습니다</string>
     <string name="update_none_found">릴리스를 찾을 수 없습니다</string>
+    <string name="update_download_relation_upgrade">업그레이드 · v%1$s에서</string>
+    <string name="update_download_relation_sidegrade">릴리스 전환 · %1$s에서</string>
+    <string name="update_download_relation_downgrade">다운그레이드 · v%1$s에서</string>
+    <string name="update_download_status_connecting">GitHub에 연결 중…</string>
+    <string name="update_download_status_receiving">업데이트 다운로드 중</string>
+    <string name="update_download_failed">다운로드 실패</string>
     <string name="soulseek_search_row">검색</string>
     <string name="soulseek_account_row">계정</string>
     <string name="soulseek_wifi_required">Reach에는 인터넷 연결이 필요합니다.</string>

@@ -366,6 +366,29 @@ public class MainActivity extends Activity {
     private int soulseekFailedPendingAction = 0;
     private Button soulseekTryAnotherRow = null;
     private boolean soulseekReSearchRowsShown = false;
+    private SolarUpdateClient.ReleaseInfo otaActiveDownload = null;
+    private java.util.concurrent.atomic.AtomicBoolean otaDownloadCancel = null;
+    private Thread otaDownloadThread = null;
+    private ProgressBar otaDownloadProgressBar = null;
+    private TextView otaDownloadPercentText = null;
+    private TextView otaDownloadDetailText = null;
+    private Button otaDownloadStatusRow = null;
+    private long otaDownloadStartMs = 0;
+    private long otaDownloadLastDone = 0;
+    private long otaDownloadLastSpeedMs = 0;
+    private long otaDownloadLastProgressUiMs = 0;
+    private int otaDownloadLocalCode = 0;
+    private String otaDownloadLocalName = "";
+    private final Handler otaDownloadUiHandler = new Handler();
+    private final Runnable otaDownloadTickRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!SettingsScreens.SYSTEM_UPDATE_DOWNLOAD.equals(settingsSubScreenKey)
+                    || otaActiveDownload == null) return;
+            updateOtaDownloadStatusUi();
+            otaDownloadUiHandler.postDelayed(this, 1000);
+        }
+    };
     private File reachGrowingCacheFile = null;
     private long reachGrowingPreparedBytes = 0;
     private long reachGrowingTotalBytes = 0;
@@ -7788,6 +7811,7 @@ public class MainActivity extends Activity {
             if (handleLanguageSettingsBack()) return;
             if (handleSoulseekSettingsBack()) return;
             if (handleThemeGalleryBack()) return;
+            if (handleSystemUpdateBack()) return;
             changeScreen(STATE_MENU);
         }
     }
@@ -8759,90 +8783,281 @@ public class MainActivity extends Activity {
             Toast.makeText(this, getString(R.string.update_already_installed), Toast.LENGTH_SHORT).show();
             return;
         }
-        final ProgressBar progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-        progressBar.setMax(100);
-        final TextView tvProgress = new TextView(this);
-        tvProgress.setGravity(android.view.Gravity.CENTER);
-        tvProgress.setPadding(0, 30, 0, 0);
-        tvProgress.setText(getString(R.string.update_checking));
-        LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(50, 50, 50, 50);
-        layout.addView(progressBar);
-        layout.addView(tvProgress);
-        String dialogTitle = getString(R.string.update_download_title) + " — " + release.listLabel();
-        final AlertDialog progressDialog = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-                .setTitle(dialogTitle)
-                .setView(layout)
-                .setCancelable(false)
-                .create();
-        progressDialog.show();
-        final String apkUrl = release.apkUrl;
+        if (currentScreenState != STATE_SETTINGS) {
+            changeScreen(STATE_SETTINGS);
+        }
+        beginOtaDownloadUi(release, localCode, localName);
+        startOtaDownload(release);
+    }
 
-        new Thread(new Runnable() {
+    private boolean handleSystemUpdateBack() {
+        if (SettingsScreens.SYSTEM_UPDATE_DOWNLOAD.equals(settingsSubScreenKey)) {
+            cancelOtaDownload();
+            return true;
+        }
+        if (SettingsScreens.SYSTEM_UPDATE.equals(settingsSubScreenKey)) {
+            buildSettingsUI();
+            return true;
+        }
+        return false;
+    }
+
+    private void beginOtaDownloadUi(SolarUpdateClient.ReleaseInfo release, int localCode, String localName) {
+        otaActiveDownload = release;
+        otaDownloadLocalCode = localCode;
+        otaDownloadLocalName = localName != null ? localName : "";
+        otaDownloadStartMs = android.os.SystemClock.uptimeMillis();
+        otaDownloadLastDone = 0;
+        otaDownloadLastSpeedMs = otaDownloadStartMs;
+        otaDownloadLastProgressUiMs = 0;
+        setSettingsSubScreen(SettingsScreens.SYSTEM_UPDATE_DOWNLOAD);
+        updateStatusBarTitle();
+        buildOtaDownloadUI(release, localCode, localName);
+        otaDownloadUiHandler.removeCallbacks(otaDownloadTickRunnable);
+        otaDownloadUiHandler.postDelayed(otaDownloadTickRunnable, 1000);
+    }
+
+    private void buildOtaDownloadUI(SolarUpdateClient.ReleaseInfo release, int localCode, String localName) {
+        if (!BuildConfig.FEATURE_OTA_UPDATE || release == null) return;
+        containerSettingsItems.removeAllViews();
+        if (tvSettingsPreviewTitle != null) {
+            tvSettingsPreviewTitle.setVisibility(View.VISIBLE);
+            tvSettingsPreviewTitle.setText(release.listLabel());
+            tvSettingsPreviewTitle.setSelected(true);
+            enableMarquee(tvSettingsPreviewTitle);
+            ThemeManager.applyThemedTextStyle(tvSettingsPreviewTitle, ThemeManager.getTextColorPrimary());
+        }
+        if (tvSettingsPreviewState != null) {
+            tvSettingsPreviewState.setVisibility(View.VISIBLE);
+            tvSettingsPreviewState.setText(getString(R.string.update_download_status_connecting));
+            ThemeManager.applyThemedTextStyle(tvSettingsPreviewState, ThemeManager.getTextColorSecondary());
+        }
+
+        Button titleRow = createListButton(release.listLabel());
+        titleRow.setEnabled(false);
+        containerSettingsItems.addView(titleRow);
+
+        Button relationRow = createListButton(formatOtaDownloadRelation(release, localCode, localName));
+        relationRow.setEnabled(false);
+        containerSettingsItems.addView(relationRow);
+
+        int hPad = (int) (10 * getResources().getDisplayMetrics().density);
+        int rowKind = y1RowKindForScreen();
+        LinearLayout progressRow = new LinearLayout(this);
+        progressRow.setOrientation(LinearLayout.HORIZONTAL);
+        progressRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        progressRow.setPadding(hPad, hPad / 2, hPad, hPad / 2);
+        progressRow.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, y1RowHeightPx));
+
+        otaDownloadProgressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        otaDownloadProgressBar.setMax(100);
+        otaDownloadProgressBar.setProgress(0);
+        LinearLayout.LayoutParams barLp = new LinearLayout.LayoutParams(0, y1RowHeightPx / 2, 1f);
+        barLp.rightMargin = hPad;
+        otaDownloadProgressBar.setLayoutParams(barLp);
+        progressRow.addView(otaDownloadProgressBar);
+
+        otaDownloadPercentText = new TextView(this);
+        otaDownloadPercentText.setTextColor(y1RowTextColorNormal(rowKind));
+        otaDownloadPercentText.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                getResources().getDimension(R.dimen.y1_menu_text_size));
+        otaDownloadPercentText.setText(getString(R.string.soulseek_download_progress, 0));
+        progressRow.addView(otaDownloadPercentText);
+        containerSettingsItems.addView(progressRow);
+
+        otaDownloadDetailText = new TextView(this);
+        otaDownloadDetailText.setTextColor(y1RowTextColorNormal(rowKind));
+        otaDownloadDetailText.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                getResources().getDimension(R.dimen.y1_menu_text_size) * 0.85f);
+        otaDownloadDetailText.setPadding(hPad, 0, hPad, hPad / 2);
+        otaDownloadDetailText.setText(getString(R.string.soulseek_download_detail,
+                "0 B", "?", getString(R.string.soulseek_download_speed_unknown),
+                getString(R.string.soulseek_download_eta_pending)));
+        containerSettingsItems.addView(otaDownloadDetailText);
+
+        otaDownloadStatusRow = createListButton(getString(R.string.update_download_status_connecting));
+        otaDownloadStatusRow.setEnabled(false);
+        containerSettingsItems.addView(otaDownloadStatusRow);
+
+        Button cancel = createListButton(getString(R.string.soulseek_cancel_download));
+        cancel.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                cancelOtaDownload();
+            }
+        });
+        containerSettingsItems.addView(cancel);
+        cancel.requestFocus();
+    }
+
+    private String formatOtaDownloadRelation(SolarUpdateClient.ReleaseInfo release,
+            int localCode, String localName) {
+        String local = localName != null ? localName.trim() : "";
+        SolarUpdateClient.InstallRelation relation = release.compareToInstalled(localCode, local);
+        if (relation == SolarUpdateClient.InstallRelation.UPGRADE) {
+            return getString(R.string.update_download_relation_upgrade, local);
+        }
+        if (relation == SolarUpdateClient.InstallRelation.DOWNGRADE) {
+            return getString(R.string.update_download_relation_downgrade, local);
+        }
+        return getString(R.string.update_download_relation_sidegrade, local);
+    }
+
+    private void updateOtaDownloadStatusUi() {
+        if (!SettingsScreens.SYSTEM_UPDATE_DOWNLOAD.equals(settingsSubScreenKey)
+                || otaActiveDownload == null) return;
+        if (tvSettingsPreviewState != null) {
+            int pct = otaDownloadProgressBar != null ? otaDownloadProgressBar.getProgress() : 0;
+            if (pct > 0) {
+                tvSettingsPreviewState.setText(getString(R.string.soulseek_download_progress, pct));
+            } else {
+                tvSettingsPreviewState.setText(getString(R.string.update_download_status_connecting));
+            }
+        }
+        if (otaDownloadStatusRow != null) {
+            int pct = otaDownloadProgressBar != null ? otaDownloadProgressBar.getProgress() : 0;
+            otaDownloadStatusRow.setText(pct > 0
+                    ? getString(R.string.soulseek_downloading, otaActiveDownload.listLabel(), pct)
+                    : getString(R.string.update_download_status_connecting));
+        }
+    }
+
+    private void updateOtaDownloadProgress(int pct, long done, long total) {
+        if (otaDownloadProgressBar != null) otaDownloadProgressBar.setProgress(pct);
+        if (otaDownloadPercentText != null) {
+            otaDownloadPercentText.setText(getString(R.string.soulseek_download_progress, pct));
+        }
+        if (otaDownloadDetailText != null) {
+            long now = android.os.SystemClock.uptimeMillis();
+            String speed = getString(R.string.soulseek_download_speed_unknown);
+            String eta = getString(R.string.soulseek_download_eta_pending);
+            if (done > otaDownloadLastDone && now > otaDownloadLastSpeedMs) {
+                long dt = now - otaDownloadLastSpeedMs;
+                long dd = done - otaDownloadLastDone;
+                if (dt > 0 && dd > 0) {
+                    long bps = dd * 1000 / dt;
+                    speed = formatSoulseekSpeed(bps);
+                    if (bps > 0 && total > done) {
+                        long sec = (total - done) / bps;
+                        eta = sec < 3600
+                                ? getString(R.string.soulseek_download_eta, sec + "s")
+                                : getString(R.string.soulseek_download_eta, (sec / 60) + "m");
+                    } else if (done >= total && total > 0) {
+                        eta = getString(R.string.soulseek_download_eta_done);
+                    }
+                }
+                otaDownloadLastDone = done;
+                otaDownloadLastSpeedMs = now;
+            }
+            String doneLabel = formatSoulseekSize(done);
+            String totalLabel = total > 0 ? formatSoulseekSize(total) : "?";
+            otaDownloadDetailText.setText(getString(R.string.soulseek_download_detail,
+                    doneLabel, totalLabel, speed, eta));
+        }
+        if (tvSettingsPreviewState != null && pct > 0) {
+            tvSettingsPreviewState.setText(getString(R.string.soulseek_download_progress, pct));
+        }
+        if (otaDownloadStatusRow != null && otaActiveDownload != null) {
+            otaDownloadStatusRow.setText(getString(R.string.soulseek_downloading,
+                    otaActiveDownload.listLabel(), pct));
+        }
+    }
+
+    private void clearOtaDownloadUiRefs() {
+        otaDownloadProgressBar = null;
+        otaDownloadPercentText = null;
+        otaDownloadDetailText = null;
+        otaDownloadStatusRow = null;
+    }
+
+    private void cancelOtaDownload() {
+        if (otaDownloadCancel != null) otaDownloadCancel.set(true);
+        if (otaDownloadThread != null) otaDownloadThread.interrupt();
+        otaDownloadUiHandler.removeCallbacks(otaDownloadTickRunnable);
+        otaActiveDownload = null;
+        otaDownloadCancel = null;
+        otaDownloadThread = null;
+        clearOtaDownloadUiRefs();
+        buildUpdateSettingsUI();
+    }
+
+    private void startOtaDownload(final SolarUpdateClient.ReleaseInfo release) {
+        if (otaDownloadThread != null && otaDownloadThread.isAlive()) return;
+        otaDownloadCancel = new java.util.concurrent.atomic.AtomicBoolean(false);
+        final String apkUrl = release.apkUrl;
+        otaDownloadThread = new Thread(new Runnable() {
             @Override
             public void run() {
+                File updateFile = null;
                 try {
-                    com.solar.launcher.net.TlsHelper.ensureSecurityProvider();
-                    okhttp3.OkHttpClient client = com.solar.launcher.net.SolarHttp.longReadClient();
-                    okhttp3.Request.Builder rb = new okhttp3.Request.Builder()
-                            .url(apkUrl)
-                            .header("User-Agent", "SolarLauncher/1.0")
-                            .header("Accept", "application/vnd.android.package-archive,*/*")
-                            .header("Accept-Encoding", "identity");
-                    okhttp3.Response resp = client.newCall(rb.build()).execute();
-                    if (!resp.isSuccessful() || resp.body() == null) {
-                        int code = resp.code();
-                        resp.close();
-                        throw new java.io.IOException("HTTP " + code);
-                    }
-                    final long fileLength = resp.body().contentLength();
                     File dir = getDir("update", Context.MODE_PRIVATE);
-                    final File updateFile = new File(dir, "Solar_Update.apk");
-                    java.io.FileOutputStream fos = new java.io.FileOutputStream(updateFile);
-                    java.io.InputStream is = resp.body().byteStream();
-                    byte[] buffer = new byte[4096];
-                    int len;
-                    long total = 0;
-                    while ((len = is.read(buffer)) != -1) {
-                        total += len;
-                        fos.write(buffer, 0, len);
-                        if (fileLength > 0) {
-                            final int progress = (int) (total * 100 / fileLength);
-                            runOnUiThread(new Runnable() {
+                    updateFile = new File(dir, "Solar_Update.apk");
+                    if (updateFile.exists()) updateFile.delete();
+                    com.solar.launcher.net.SolarHttp.downloadToFile(apkUrl, updateFile,
+                            new com.solar.launcher.net.SolarHttp.DownloadProgress() {
                                 @Override
-                                public void run() {
-                                    progressBar.setProgress(progress);
-                                    tvProgress.setText(progress + "%");
+                                public void onProgress(final long bytesRead, final long totalBytes) {
+                                    long now = android.os.SystemClock.uptimeMillis();
+                                    if (now - otaDownloadLastProgressUiMs < 200 && totalBytes > 0) {
+                                        int pct = (int) (bytesRead * 100 / totalBytes);
+                                        if (pct < 100) return;
+                                    }
+                                    otaDownloadLastProgressUiMs = now;
+                                    final int pct = totalBytes > 0
+                                            ? (int) Math.min(100, bytesRead * 100 / totalBytes) : 0;
+                                    final long done = bytesRead;
+                                    final long total = totalBytes;
+                                    runOnUiThread(new Runnable() {
+                                        @Override
+                                        public void run() {
+                                            if (!SettingsScreens.SYSTEM_UPDATE_DOWNLOAD
+                                                    .equals(settingsSubScreenKey)) return;
+                                            updateOtaDownloadProgress(pct, done, total);
+                                        }
+                                    });
                                 }
-                            });
-                        }
-                    }
-                    fos.close();
-                    is.close();
-                    resp.close();
-                    if (fileLength > 0 && total != fileLength) {
-                        if (updateFile.exists()) updateFile.delete();
-                        throw new IllegalStateException("Incomplete download");
-                    }
+                            }, 0L, null, otaDownloadCancel);
+                    final File ready = updateFile;
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
-                            progressDialog.dismiss();
-                            installApk(updateFile, release);
+                            otaDownloadUiHandler.removeCallbacks(otaDownloadTickRunnable);
+                            otaActiveDownload = null;
+                            otaDownloadCancel = null;
+                            otaDownloadThread = null;
+                            clearOtaDownloadUiRefs();
+                            installApk(ready, release);
+                            if (!isInstalledAsSystemApp()) {
+                                buildUpdateSettingsUI();
+                            }
                         }
                     });
                 } catch (Exception e) {
+                    if (updateFile != null && updateFile.exists()) updateFile.delete();
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
-                            progressDialog.dismiss();
-                            Toast.makeText(MainActivity.this, getString(R.string.toast_download_failed), Toast.LENGTH_LONG).show();
+                            boolean cancelled = otaDownloadCancel != null && otaDownloadCancel.get();
+                            otaDownloadUiHandler.removeCallbacks(otaDownloadTickRunnable);
+                            otaActiveDownload = null;
+                            otaDownloadCancel = null;
+                            otaDownloadThread = null;
+                            clearOtaDownloadUiRefs();
+                            if (cancelled) {
+                                buildUpdateSettingsUI();
+                                return;
+                            }
+                            Toast.makeText(MainActivity.this,
+                                    getString(R.string.update_download_failed), Toast.LENGTH_LONG).show();
+                            buildUpdateSettingsUI();
                         }
                     });
                 }
             }
-        }).start();
+        }, "SolarOtaDownload");
+        otaDownloadThread.start();
     }
 
     private LinearLayout createHomeOrderRow(final HomeMenuConfig.Entry entry, boolean moving) {
