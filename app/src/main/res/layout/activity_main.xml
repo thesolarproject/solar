@@ -142,7 +142,7 @@
 
                 <LinearLayout
                     android:id="@+id/podcast_preview_pane"
-                    android:layout_width="@dimen/y1_preview_width"
+                    android:layout_width="@dimen/y1_podcast_preview_width"
                     android:layout_height="match_parent"
                     android:layout_gravity="top|end"
                     android:layout_marginTop="@dimen/y1_settings_preview_title_top"
@@ -153,10 +153,10 @@
 
                     <ImageView
                         android:id="@+id/iv_podcast_preview_art"
-                        android:layout_width="@dimen/y1_preview_width"
+                        android:layout_width="@dimen/y1_podcast_preview_width"
                         android:layout_height="wrap_content"
                         android:adjustViewBounds="true"
-                        android:maxHeight="@dimen/y1_setting_icon_max"
+                        android:maxHeight="@dimen/y1_podcast_preview_art_max"
                         android:scaleType="fitCenter"
                         android:visibility="gone" />
 

@@ -464,9 +464,12 @@ public class MainActivity extends Activity {
     private FrameLayout settingsMenuHost;
     private View settingsPreviewPane;
     private boolean centerLongPressHandled = false;
-    /** Hold past this KeyEvent repeat count, then release — sleep (com.innioasis.y1 LongDownCenterUtil). */
     private boolean centerPrepareSleep = false;
-    private static final int CENTER_SLEEP_REPEAT = 50;
+    private long centerKeyDownTime = 0;
+    private static final long CENTER_SLEEP_HOLD_MS = 1500;
+    private final Runnable centerSleepPrepareRunnable = new Runnable() {
+        @Override public void run() { centerPrepareSleep = true; }
+    };
     private long backKeyDownTime = 0;
     private boolean backLongPressHandled = false;
     private static final long BACK_LONG_PRESS_MS = 600;
@@ -6571,7 +6574,7 @@ public class MainActivity extends Activity {
         lockScreen();
     }
 
-    /** Center/OK hold — arm sleep on release after repeat threshold (stock Y1 / LongDownCenterUtil). */
+    /** Center/OK hold ~1.5s then release to sleep (stock Y1 pattern, shorter threshold). */
     private boolean trackCenterKeyDown(KeyEvent event, boolean fromContextMenu) {
         if (fromContextMenu) {
             suppressListClickUntil = System.currentTimeMillis() + CONTEXT_MENU_CLICK_SUPPRESS_MS;
@@ -6579,14 +6582,21 @@ public class MainActivity extends Activity {
         if (event.getRepeatCount() == 0) {
             centerLongPressHandled = false;
             centerPrepareSleep = false;
-        } else if (event.getRepeatCount() >= CENTER_SLEEP_REPEAT) {
+            centerKeyDownTime = System.currentTimeMillis();
+            clockHandler.removeCallbacks(centerSleepPrepareRunnable);
+            clockHandler.postDelayed(centerSleepPrepareRunnable, CENTER_SLEEP_HOLD_MS);
+        } else if (System.currentTimeMillis() - centerKeyDownTime >= CENTER_SLEEP_HOLD_MS) {
             centerPrepareSleep = true;
         }
         return true;
     }
 
     private boolean handleCenterKeyUp(KeyEvent event, boolean fromContextMenu) {
-        if (centerPrepareSleep && !centerLongPressHandled) {
+        clockHandler.removeCallbacks(centerSleepPrepareRunnable);
+        boolean heldLongEnough = centerPrepareSleep
+                || (centerKeyDownTime > 0
+                && System.currentTimeMillis() - centerKeyDownTime >= CENTER_SLEEP_HOLD_MS);
+        if (heldLongEnough && !centerLongPressHandled) {
             centerPrepareSleep = false;
             handleCenterLongPress();
             centerLongPressHandled = true;

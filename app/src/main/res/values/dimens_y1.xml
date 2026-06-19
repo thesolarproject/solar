@@ -25,4 +25,7 @@
     <dimen name="y1_settings_preview_margin_right">22dp</dimen>
     <dimen name="y1_settings_preview_title_top">58dp</dimen>
     <dimen name="y1_setting_icon_max">146dp</dimen>
+    <!-- ~1.5× settings preview art; width capped so dual-pane list (218dp) stays clear -->
+    <dimen name="y1_podcast_preview_width">211dp</dimen>
+    <dimen name="y1_podcast_preview_art_max">219dp</dimen>
 </resources>
