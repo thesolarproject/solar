@@ -13,6 +13,8 @@ permissions:
 
 env:
   SOLAR_GITHUB_REPO: thesolarproject/solar
+  SOLAR_ROM_BASE_CACHE: ${{ github.workspace }}/.ci-cache/rockbox-bases
+  GRADLE_OPTS: -Dorg.gradle.parallel=true -Dorg.gradle.caching=true
 
 jobs:
   release:
@@ -38,24 +40,51 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+
+      - name: Cache Android SDK packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/lib/android/sdk/platform-tools
+            /usr/local/lib/android/sdk/platforms
+            /usr/local/lib/android/sdk/build-tools
+          key: android-sdk-${{ runner.os }}-35-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties', 'app/build.gradle') }}
+          restore-keys: |
+            android-sdk-${{ runner.os }}-35-
 
       - name: Install SDK packages
         run: |
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
+      - name: Cache apt packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/apt-cache
+          key: apt-${{ runner.os }}-rom-deps-v1
+          restore-keys: |
+            apt-${{ runner.os }}-rom-deps-
+
       - name: Install ROM build dependencies
         run: |
-          sudo apt-get update && sudo apt-get install -y unzip zip e2fsprogs curl util-linux kmod openssl
+          mkdir -p "${{ runner.temp }}/apt-cache"
+          sudo apt-get update
+          sudo apt-get install -y -o dir::cache::archives="${{ runner.temp }}/apt-cache" \
+            unzip zip e2fsprogs curl util-linux kmod openssl
           sudo modprobe loop || true
 
-      - name: Verify Rockbox-Y1 base firmware URLs
-        run: |
-          curl -fsSIL -o /dev/null "https://github.com/rockbox-y1/rockbox/releases/download/type-a-base/rom.zip"
-          curl -fsSIL -o /dev/null "https://github.com/rockbox-y1/rockbox/releases/download/type-b-base/rom.zip"
-          echo "Rockbox type A/B base sources OK"
+      - name: Cache Rockbox-Y1 base firmware
+        uses: actions/cache@v4
+        with:
+          path: .ci-cache/rockbox-bases
+          key: rockbox-bases-v1
+          restore-keys: |
+            rockbox-bases-
 
       - name: Decode platform signing keys
         env:
@@ -84,6 +113,7 @@ jobs:
       - name: Build ROM images
         env:
           SOLAR_GITHUB_REPO: thesolarproject/solar
+          SOLAR_ROM_BASE_CACHE: ${{ env.SOLAR_ROM_BASE_CACHE }}
         run: |
           APK="$GITHUB_WORKSPACE/app/build/outputs/apk/release/app-release.apk"
           test -f "$APK"

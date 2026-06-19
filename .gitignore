@@ -24,6 +24,7 @@ local.properties
 *.logcat
 Screenshot_*.png
 /ci-keys/
+.ci-cache/
 
 # ROM build outputs (local)
 /rom.zip

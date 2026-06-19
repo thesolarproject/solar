@@ -92,11 +92,34 @@ require_cmd() {
 
 if [ "$TYPE" = "a" ]; then
     BASE_URL="https://github.com/rockbox-y1/rockbox/releases/download/type-a-base/rom.zip"
+    BASE_CACHE_NAME="type-a-base.rom.zip"
     OUTPUT="${OUTPUT:-$REPO_ROOT/rom.zip}"
 else
     BASE_URL="https://github.com/rockbox-y1/rockbox/releases/download/type-b-base/rom.zip"
+    BASE_CACHE_NAME="type-b-base.rom.zip"
     OUTPUT="${OUTPUT:-$REPO_ROOT/rom_type_b.zip}"
 fi
+
+fetch_base_rom() {
+    local dest="$1"
+    local cache_dir="${SOLAR_ROM_BASE_CACHE:-}"
+    if [ -n "$cache_dir" ]; then
+        mkdir -p "$cache_dir"
+        local cached="$cache_dir/$BASE_CACHE_NAME"
+        if [ -s "$cached" ]; then
+            echo "==> Using cached type-${TYPE} base firmware"
+            cp "$cached" "$dest"
+            return
+        fi
+        echo "==> Downloading type-${TYPE} base firmware (caching for CI)"
+        curl -fsSL -o "$cached.part" "$BASE_URL"
+        mv "$cached.part" "$cached"
+        cp "$cached" "$dest"
+        return
+    fi
+    echo "==> Downloading type-${TYPE} base firmware"
+    curl -fsSL -o "$dest" "$BASE_URL"
+}
 
 require_cmd curl
 require_cmd unzip
@@ -252,8 +275,8 @@ else
     download_solar_apk "$STAGING_APK"
 fi
 
-echo "==> Downloading type-${TYPE} base firmware"
-curl -fsSL -o "$BASE_DIR/rom.zip" "$BASE_URL"
+echo "==> Fetching type-${TYPE} base firmware"
+fetch_base_rom "$BASE_DIR/rom.zip"
 unzip -q "$BASE_DIR/rom.zip" -d "$BASE_DIR"
 
 echo "==> Mounting system.img and userdata.img"

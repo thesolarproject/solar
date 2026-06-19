@@ -57,4 +57,6 @@ Override release repo for ROM downloads: `SOLAR_GITHUB_REPO=thatwitchgirl/solar`
 
 Both call `.github/workflows/release-build.yml`: sign the release APK (platform keys in repo secrets), build both ROM zips, publish a GitHub release, and update OTA.
 
+CI caches Gradle dependencies (`gradle/actions/setup-gradle`), Android SDK packages, apt packages for ROM tools, and Rockbox-Y1 base firmware zips (`SOLAR_ROM_BASE_CACHE`). There is no npm/Node toolchain in this repo.
+
 Required secrets: `SOLAR_PLATFORM_KEY_PK8_B64`, `SOLAR_PLATFORM_KEY_PEM_B64` (base64-encoded AOSP test platform key material).
