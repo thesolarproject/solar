@@ -207,6 +207,9 @@ public final class SolarUpdateClient {
         if (r.compareToInstalled(0, "0.3") != InstallRelation.DOWNGRADE) {
             throw new AssertionError("stable downgrade");
         }
+        if (n.compareToInstalled(0, "0.5") != InstallRelation.SIDEGRADE) {
+            throw new AssertionError("stable to nightly sidgrade");
+        }
         String sample = "<?xml version=\"1.0\"?><solar-updates base=\"https://example.com/ota/\">"
                 + "<release tag=\"v0.2\" versionName=\"0.2\" versionCode=\"0\" nightly=\"false\" apk=\"solar-v0.2.apk\"/>"
                 + "<release tag=\"nightly-9\" versionName=\"nightly-9\" versionCode=\"9\" nightly=\"true\" apk=\"solar-nightly-9.apk\"/>"

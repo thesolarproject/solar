@@ -1,19 +1,18 @@
-name: Build Solar APK and ROMs
+name: Release build
 
 on:
-  push:
-    branches: [main, nightly]
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      channel:
+        description: Release channel (nightly or stable)
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 env:
   SOLAR_GITHUB_REPO: thesolarproject/solar
-
-concurrency:
-  group: solar-release-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   release:
@@ -110,8 +109,8 @@ jobs:
             dist/rom.zip
             dist/rom_type_b.zip
           fail_on_unmatched_files: true
-          make_latest: ${{ github.ref == 'refs/heads/main' }}
-          prerelease: ${{ github.ref == 'refs/heads/nightly' }}
+          make_latest: ${{ inputs.channel == 'stable' }}
+          prerelease: ${{ inputs.channel == 'nightly' }}
           generate_release_notes: false
 
       - name: Publish OTA catalog
@@ -119,21 +118,19 @@ jobs:
           SOLAR_GITHUB_PAT: ${{ secrets.SOLAR_GITHUB_PAT }}
         run: |
           chmod +x scripts/publish-ota-updates.sh
-          NIGHTLY=false
-          if [ "${{ github.ref }}" = "refs/heads/nightly" ]; then NIGHTLY=true; fi
           ./scripts/publish-ota-updates.sh add \
             --apk app/build/outputs/apk/release/app-release.apk \
             --tag "${{ steps.meta.outputs.tag }}" \
             --version-name "${{ steps.meta.outputs.version_name }}" \
             --version-code "${{ steps.meta.outputs.version_code }}" \
-            $([ "$NIGHTLY" = true ] && echo --nightly)
+            $([ "${{ inputs.channel }}" = "nightly" ] && echo --nightly)
 
       - name: Bump stable version for next release
-        if: github.ref == 'refs/heads/main'
+        if: inputs.channel == 'stable'
         run: ./solar-rom/scripts/bump-stable-version.sh
 
       - name: Commit stable version bump
-        if: github.ref == 'refs/heads/main'
+        if: inputs.channel == 'stable'
         env:
           GH_TOKEN: ${{ secrets.SOLAR_GITHUB_PAT }}
         run: |
@@ -144,7 +141,7 @@ jobs:
             echo "No version bump to commit"
             exit 0
           fi
-          git commit -m "Bump stable version for next release."
+          git commit -m "Bump stable version for next release. [skip ci]"
           git push "https://x-access-token:${GH_TOKEN}@github.com/thesolarproject/solar.git" HEAD:main
 
       - name: Remove signing keys

@@ -6,12 +6,14 @@ Release source: [github.com/thatwitchgirl/solar](https://github.com/thatwitchgir
 
 ## Branches
 
-| Branch | Releases | Versioning |
-|--------|----------|------------|
-| `nightly` | Every push | Tags `nightly-{build}` — APK, `rom.zip`, `rom_type_b.zip` |
-| `main` | Stable | Tags `v0.1`, `v0.2`, … (+0.1 per release); first stable is **0.1** |
+| Branch | CI workflow | Versioning |
+|--------|-------------|------------|
+| `nightly` | **Nightly release** — every push | Tags `nightly-{build}` — APK, `rom.zip`, `rom_type_b.zip` (prerelease) |
+| `main` | **Stable release** — every push | Tags `v0.1`, `v0.2`, … (+0.1 per release); first stable is **0.1** |
 
-Day-to-day development targets **`nightly`**. Merge to **`main`** when cutting a stable release.
+Day-to-day development pushes **`nightly`** and gets installable builds automatically — no merge required.
+
+Push **`main`** only when intentionally cutting a semver stable release (cherry-picks or direct commits). Merging `nightly` into `main` is optional, not the normal build path.
 
 ## Local build
 
@@ -48,6 +50,11 @@ Override release repo for ROM downloads: `SOLAR_GITHUB_REPO=thatwitchgirl/solar`
 
 ## CI
 
-`.github/workflows/build-release.yml` runs on pushes to **`main`** and **`nightly`**: signs the release APK (platform keys in repo secrets), builds both ROM zips, and publishes a GitHub release.
+| Workflow | Trigger |
+|----------|---------|
+| `.github/workflows/build-nightly.yml` | Push to **`nightly`** (or manual dispatch) |
+| `.github/workflows/build-stable.yml` | Push to **`main`** (or manual dispatch); skips version-bump-only commits |
+
+Both call `.github/workflows/release-build.yml`: sign the release APK (platform keys in repo secrets), build both ROM zips, publish a GitHub release, and update OTA.
 
 Required secrets: `SOLAR_PLATFORM_KEY_PK8_B64`, `SOLAR_PLATFORM_KEY_PEM_B64` (base64-encoded AOSP test platform key material).

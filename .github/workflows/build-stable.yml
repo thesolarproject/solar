@@ -1,0 +1,20 @@
+name: Stable release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: solar-release-stable
+  cancel-in-progress: true
+
+jobs:
+  release:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      !startsWith(github.event.head_commit.message, 'Bump stable version')
+    uses: ./.github/workflows/release-build.yml
+    with:
+      channel: stable
+    secrets: inherit
