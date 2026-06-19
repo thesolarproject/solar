@@ -81,6 +81,17 @@ public final class ConnectivityHelper {
         return HomeMenuConfig.ID_SOULSEEK.equals(id);
     }
 
+    /** Set by MainActivity when Reach login fails on an online network. */
+    private static volatile boolean reachLoginOk = true;
+
+    public static void setReachLoginOk(boolean ok) {
+        reachLoginOk = ok;
+    }
+
+    public static boolean isReachLoginOk() {
+        return reachLoginOk;
+    }
+
     /** Needs routable internet before starting an online-only action. */
     public static boolean itemNeedsInternet(String id) {
         return itemNeedsInternetForDiscovery(id);
@@ -109,6 +120,7 @@ public final class ConnectivityHelper {
         if (id == null) return false;
         id = HomeMenuConfig.migrateIdStatic(id);
         if (HomeMenuConfig.ID_MORE.equals(id)) return true;
+        if (HomeMenuConfig.ID_SOULSEEK.equals(id)) return internetAvailable && reachLoginOk;
         if (itemNeedsInternetForDiscovery(id)) return internetAvailable;
         if (itemNeedsLocalNetwork(id)) return localNetworkAvailable;
         if (HomeMenuConfig.ID_PODCASTS.equals(id)) return internetAvailable || podcastsSaved;

@@ -69,6 +69,39 @@ public final class SoulseekSearchSuggestions {
         return reSearchQueries(result);
     }
 
+    /** ID3 tags → re-search permutations (artist/album/title/genre combos). */
+    public static List<String> suggestionsFromId3(String title, String artist, String album, String genre) {
+        List<String> phrases = new ArrayList<String>();
+        addPhrase(phrases, artist);
+        addPhrase(phrases, album);
+        addPhrase(phrases, title);
+        addPhrase(phrases, genre);
+        List<String> out = new ArrayList<String>();
+        if (phrases.size() >= 2) {
+            for (int i = 0; i < phrases.size() && out.size() < MAX_RESEARCH; i++) {
+                for (int j = i + 1; j < phrases.size() && out.size() < MAX_RESEARCH; j++) {
+                    addReSearchPair(out, phrases.get(i), phrases.get(j), MAX_RESEARCH);
+                }
+            }
+        } else if (phrases.size() == 1) {
+            addIfValidOrdered(out, sentenceCase(phrases.get(0)));
+            addIfValidOrdered(out, phrases.get(0));
+        }
+        while (out.size() > MAX_RESEARCH) out.remove(out.size() - 1);
+        return out;
+    }
+
+    private static void addPhrase(List<String> phrases, String s) {
+        if (s == null) return;
+        String t = s.trim();
+        if (t.isEmpty() || "Unknown Artist".equalsIgnoreCase(t) || "Unknown Album".equalsIgnoreCase(t)) return;
+        String key = t.toLowerCase(Locale.US);
+        for (String p : phrases) {
+            if (p.toLowerCase(Locale.US).equals(key)) return;
+        }
+        phrases.add(t);
+    }
+
     static List<String> suggestedQueries(String filename, int max) {
         return reSearchQueries(filename, max);
     }
