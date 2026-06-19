@@ -8803,6 +8803,7 @@ public class MainActivity extends Activity {
     }
 
     private void beginOtaDownloadUi(SolarUpdateClient.ReleaseInfo release, int localCode, String localName) {
+        // ponytail: ota-chain-test wave 2 — symbolic release for OTA verification
         otaActiveDownload = release;
         otaDownloadLocalCode = localCode;
         otaDownloadLocalName = localName != null ? localName : "";
