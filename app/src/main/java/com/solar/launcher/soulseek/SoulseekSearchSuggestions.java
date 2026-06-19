@@ -10,10 +10,12 @@ import java.util.regex.Pattern;
 /** ponytail: filename → four one-tap Reach re-search queries from title/artist phrases. */
 public final class SoulseekSearchSuggestions {
     private static final int MAX_RESEARCH = 4;
+    private static final int MAX_ID3_SUGGESTIONS = 12;
 
     private static final Pattern LEADING_TRACK = Pattern.compile("^\\d{1,4}[\\s.\\-_)]*");
     private static final Pattern PHRASE_HYPHEN = Pattern.compile("\\s-\\s");
     private static final Pattern PHRASE_AMP = Pattern.compile("\\s&\\s");
+    private static final Pattern LIST_SEP = Pattern.compile("[,;]+");
 
     private SoulseekSearchSuggestions() {}
 
@@ -69,26 +71,66 @@ public final class SoulseekSearchSuggestions {
         return reSearchQueries(result);
     }
 
-    /** ID3 tags → re-search permutations (artist/album/title/genre combos). */
+    /** ID3 / tags → Reach search suggestions (comma/semicolon lists, & splits). */
     public static List<String> suggestionsFromId3(String title, String artist, String album, String genre) {
         List<String> phrases = new ArrayList<String>();
-        addPhrase(phrases, artist);
-        addPhrase(phrases, album);
-        addPhrase(phrases, title);
-        addPhrase(phrases, genre);
+        addExpandedTag(phrases, artist);
+        addExpandedTag(phrases, album);
+        addExpandedTag(phrases, title);
+        addExpandedTag(phrases, genre);
         List<String> out = new ArrayList<String>();
+        for (String p : phrases) {
+            addIfValidOrdered(out, sentenceCase(p));
+            if (out.size() >= MAX_ID3_SUGGESTIONS) return trimTo(out, MAX_ID3_SUGGESTIONS);
+        }
+        for (String p : phrases) {
+            addIfValidOrdered(out, p);
+            if (out.size() >= MAX_ID3_SUGGESTIONS) return trimTo(out, MAX_ID3_SUGGESTIONS);
+        }
         if (phrases.size() >= 2) {
-            for (int i = 0; i < phrases.size() && out.size() < MAX_RESEARCH; i++) {
-                for (int j = i + 1; j < phrases.size() && out.size() < MAX_RESEARCH; j++) {
-                    addReSearchPair(out, phrases.get(i), phrases.get(j), MAX_RESEARCH);
+            for (int i = 0; i < phrases.size() && out.size() < MAX_ID3_SUGGESTIONS; i++) {
+                for (int j = i + 1; j < phrases.size() && out.size() < MAX_ID3_SUGGESTIONS; j++) {
+                    addReSearchPair(out, phrases.get(i), phrases.get(j), MAX_ID3_SUGGESTIONS);
                 }
             }
-        } else if (phrases.size() == 1) {
-            addIfValidOrdered(out, sentenceCase(phrases.get(0)));
-            addIfValidOrdered(out, phrases.get(0));
         }
-        while (out.size() > MAX_RESEARCH) out.remove(out.size() - 1);
+        return trimTo(out, MAX_ID3_SUGGESTIONS);
+    }
+
+    private static List<String> trimTo(List<String> out, int max) {
+        while (out.size() > max) out.remove(out.size() - 1);
         return out;
+    }
+
+    /** Split comma/semicolon ID3 lists and & collaborations into search phrases. */
+    private static void addExpandedTag(List<String> phrases, String raw) {
+        if (raw == null) return;
+        String t = raw.trim();
+        if (t.isEmpty() || "Unknown Artist".equalsIgnoreCase(t) || "Unknown Album".equalsIgnoreCase(t)) {
+            return;
+        }
+        if (LIST_SEP.matcher(t).find()) {
+            for (String segment : LIST_SEP.split(t)) {
+                addExpandedSegment(phrases, segment);
+            }
+        } else {
+            addExpandedSegment(phrases, t);
+        }
+    }
+
+    private static void addExpandedSegment(List<String> phrases, String segment) {
+        String p = cleanPhrase(segment);
+        if (p == null) return;
+        addPhrase(phrases, p);
+        if (p.contains("&")) {
+            String[] bits = PHRASE_AMP.split(p, -1);
+            for (String bit : bits) {
+                String b = cleanPhrase(bit);
+                if (b != null) addPhrase(phrases, b);
+            }
+            String flat = p.replace("&", " ").replaceAll("\\s+", " ").trim();
+            if (flat.length() >= 2) addPhrase(phrases, flat);
+        }
     }
 
     private static void addPhrase(List<String> phrases, String s) {
@@ -193,6 +235,15 @@ public final class SoulseekSearchSuggestions {
         List<String> out = new ArrayList<String>();
         Set<String> seen = new HashSet<String>();
         for (String part : raw) {
+            if (part.contains(",") || part.contains(";")) {
+                for (String segment : LIST_SEP.split(part)) {
+                    String cleaned = cleanPhrase(segment);
+                    if (cleaned == null) continue;
+                    String key = cleaned.toLowerCase(Locale.US);
+                    if (seen.add(key)) out.add(cleaned);
+                }
+                continue;
+            }
             String cleaned = cleanPhrase(part);
             if (cleaned == null) continue;
             String key = cleaned.toLowerCase(Locale.US);

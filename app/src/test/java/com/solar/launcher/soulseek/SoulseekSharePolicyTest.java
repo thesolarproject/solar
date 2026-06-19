@@ -14,10 +14,10 @@ public class SoulseekSharePolicyTest {
   }
 
   @Test
-  public void activeWhenReachUiAndWifi() {
+  public void activeWhenSolarInUseAndWifi() {
     SoulseekSharePolicy p = new SoulseekSharePolicy();
     p.update(false, true, true);
-    if (p.state() != SoulseekSharePolicy.State.ACTIVE) throw new AssertionError("reach ui");
+    if (p.state() != SoulseekSharePolicy.State.ACTIVE) throw new AssertionError("solar in use");
   }
 
   @Test
@@ -30,16 +30,16 @@ public class SoulseekSharePolicyTest {
   }
 
   @Test
-  public void staysActiveWhenLeaveReachWhileCharging() {
+  public void staysActiveWhenScreenOffWhileCharging() {
     SoulseekSharePolicy p = new SoulseekSharePolicy();
     p.update(true, true, true);
     p.update(true, true, false);
-    if (p.state() != SoulseekSharePolicy.State.ACTIVE) throw new AssertionError("charging without reach");
+    if (p.state() != SoulseekSharePolicy.State.ACTIVE) throw new AssertionError("charging without solar");
     if (!p.acceptNewUploads()) throw new AssertionError("accept while charging");
   }
 
   @Test
-  public void drainingWhenLeaveReachOnBattery() {
+  public void drainingWhenSolarInactiveOnBattery() {
     SoulseekSharePolicy p = new SoulseekSharePolicy();
     p.update(false, true, true);
     p.update(false, true, false);

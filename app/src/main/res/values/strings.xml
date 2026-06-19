@@ -431,12 +431,14 @@
     <string name="soulseek_download_from">from user: %1$s</string>
     <string name="soulseek_sharing_on">Sharing: on (%1$d files)</string>
     <string name="soulseek_sharing_draining">Sharing: finishing uploads…</string>
-    <string name="soulseek_sharing_off">Sharing: off (plug in with Wi‑Fi, or open Reach on battery)</string>
-    <string name="soulseek_sharing_hint">Plugged in with Wi‑Fi, Music and Podcasts are shared in the background — Reach can be closed and you can listen to music or leave the device idle. On battery, sharing runs only while Reach is open; uploads finish briefly after you leave.</string>
+    <string name="soulseek_sharing_off">Sharing: off (plug in with Wi‑Fi, or use Solar on battery)</string>
+    <string name="soulseek_sharing_hint">Plugged in with Wi‑Fi, Music and Podcasts are shared in the background — Reach can be closed and you can listen to music or leave the device idle. On battery, sharing runs while you use Solar; uploads finish briefly after the screen turns off.</string>
     <string name="soulseek_from_user">from user: %1$s</string>
     <string name="soulseek_recent_searches">Recent searches</string>
     <string name="soulseek_add_to_library">Add to library</string>
     <string name="soulseek_saved_to_library">Saved to library</string>
+    <string name="soulseek_save_pending">Saving to library when download finishes…</string>
+    <string name="soulseek_save_pending_cancelled">Library save cancelled — download stopped</string>
     <string name="soulseek_save_failed">Could not save to library</string>
     <string name="soulseek_phase_finding_peer">Finding peer: %1$s</string>
     <string name="soulseek_phase_connecting">Connecting to %1$s</string>
@@ -560,6 +562,7 @@
     <string name="update_download_status_verifying_install">Verifying system APK…</string>
     <string name="update_download_status_reboot_pending">Update installed — reboot required</string>
     <string name="update_install_failed">Install failed</string>
+    <string name="update_reboot_failed">Reboot failed — reboot manually to finish the update</string>
     <string name="context_action_lock_failed">Could not lock screen</string>
     <string name="podcasts_saved_on_device">Saved on device</string>
     <string name="podcasts_resume_badge">[Resume]</string>

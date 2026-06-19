@@ -17,6 +17,14 @@ if [ -d "$SD" ]; then
     chmod 755 "$SD/Music" "$SD/Podcasts" "$SD/Themes" 2>/dev/null
 fi
 
+# AVRCP shared state (Koensayr legacy path; BT stack mmaps as different uid)
+mkdir -p /data/data/com.innioasis.y1/files 2>/dev/null
+chmod 771 /data/data/com.innioasis.y1 /data/data/com.innioasis.y1/files 2>/dev/null
+
+if [ -f /data/local/tmp/solar-ota-pending-reboot ]; then
+    log -p w -t SolarInit "OTA reboot pending — finish update with a reboot"
+fi
+
 if [ ! -f /system/lib/libconscrypt_jni.so ]; then
     log -p w -t SolarInit "missing /system/lib/libconscrypt_jni.so — OkHttp/Reach TLS needs clean_install or Solar ROM"
 fi

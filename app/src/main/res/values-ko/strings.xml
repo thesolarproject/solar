@@ -400,12 +400,14 @@
     <string name="soulseek_download_from">사용자: %1$s</string>
     <string name="soulseek_sharing_on">공유: 켜짐 (%1$d개 파일)</string>
     <string name="soulseek_sharing_draining">공유: 업로드 마무리 중…</string>
-    <string name="soulseek_sharing_off">공유: 꺼짐 (Wi‑Fi 충전 또는 배터리에서 Reach 열기)</string>
-    <string name="soulseek_sharing_hint">Wi‑Fi로 충전 중이면 Reach를 닫거나 음악을 들어도 Music·Podcasts가 백그라운드에서 공유됩니다. 배터리에서는 Reach 사용 중에만 공유되며, 나가면 업로드는 잠시 후 중단됩니다.</string>
+    <string name="soulseek_sharing_off">공유: 꺼짐 (Wi‑Fi 충전 또는 배터리에서 Solar 사용)</string>
+    <string name="soulseek_sharing_hint">Wi‑Fi로 충전 중이면 Reach를 닫거나 음악을 들어도 Music·Podcasts가 백그라운드에서 공유됩니다. 배터리에서는 Solar 사용 중에만 공유되며, 화면이 꺼지면 업로드는 잠시 후 중단됩니다.</string>
     <string name="soulseek_from_user">사용자: %1$s</string>
     <string name="soulseek_recent_searches">최근 검색</string>
     <string name="soulseek_add_to_library">라이브러리에 추가</string>
     <string name="soulseek_saved_to_library">라이브러리에 저장됨</string>
+    <string name="soulseek_save_pending">다운로드가 끝나면 라이브러리에 저장합니다…</string>
+    <string name="soulseek_save_pending_cancelled">다운로드가 중단되어 저장이 취소되었습니다</string>
     <string name="soulseek_save_failed">라이브러리에 저장하지 못함</string>
     <string name="soulseek_phase_finding_peer">피어 찾는 중: %1$s</string>
     <string name="soulseek_phase_connecting">%1$s에 연결 중</string>

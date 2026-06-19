@@ -126,6 +126,8 @@ require_cmd unzip
 require_cmd zip
 require_cmd cmp
 require_cmd openssl
+require_cmd md5sum
+require_cmd stat
 require_cmd sudo
 
 resolve_latest_solar_tag() {
@@ -220,6 +222,40 @@ audit_rom_contents() {
     if [ -f "$sys_mount/app/org.rockbox.apk" ]; then
         echo "audit fail: org.rockbox.apk still present" >&2
         errors=$((errors + 1))
+    fi
+
+    if [ ! -f "$sys_mount/usr/keylayout/AVRCP.kl" ]; then
+        echo "audit warn: AVRCP.kl missing (Koensayr patches not applied?)" >&2
+    fi
+
+    if [ ! -f "$sys_mount/app/Y1Bridge.apk" ]; then
+        echo "audit warn: Y1Bridge.apk missing (Koensayr patches not applied?)" >&2
+    fi
+
+    if [ ! -f "$sys_mount/lib/libextavrcp_jni.so" ]; then
+        echo "audit fail: libextavrcp_jni.so missing" >&2
+        errors=$((errors + 1))
+    fi
+
+    if [ ! -f "$base_dir/boot.img" ]; then
+        echo "audit fail: boot.img missing" >&2
+        errors=$((errors + 1))
+    elif [ "$(md5sum "$base_dir/boot.img" | awk '{print $1}')" != "83b946d1799b4f0281ba8e808ed7911b" ]; then
+        echo "audit warn: boot.img is not stock Innioasis 3.0.7 (Rockbox or custom?)" >&2
+    fi
+
+    if [ ! -f "$base_dir/logo.bin" ]; then
+        echo "audit fail: logo.bin missing" >&2
+        errors=$((errors + 1))
+    elif [ "$(stat -c%s "$base_dir/logo.bin" 2>/dev/null || echo 0)" -gt 1048576 ]; then
+        echo "audit warn: logo.bin looks like Rockbox-sized splash — expected stock Innioasis" >&2
+    fi
+
+    if [ ! -f "$sys_mount/media/bootanimation.zip" ]; then
+        echo "audit fail: /system/media/bootanimation.zip missing" >&2
+        errors=$((errors + 1))
+    elif [ "$(md5sum "$sys_mount/media/bootanimation.zip" | awk '{print $1}')" != "b65b1227350f4ded743a1fe61b0a4eb1" ]; then
+        echo "audit warn: bootanimation.zip is not stock Innioasis (Rockbox or custom?)" >&2
     fi
 
     if [ ! -f "$sys_mount/usr/keylayout/Generic.kl" ] || [ ! -f "$sys_mount/usr/keylayout/Stock.kl" ]; then
@@ -328,6 +364,23 @@ sudo cp "$SCRIPT_DIR/Stock.kl" "$MOUNT_SYS/usr/keylayout/Stock.kl"
 sudo cp "$SCRIPT_DIR/Stock.kl" "$MOUNT_SYS/usr/keylayout/Generic.kl"
 sudo chmod 644 "$MOUNT_SYS/usr/keylayout/Stock.kl" "$MOUNT_SYS/usr/keylayout/Generic.kl"
 sudo chown root:root "$MOUNT_SYS/usr/keylayout/Stock.kl" "$MOUNT_SYS/usr/keylayout/Generic.kl"
+
+BOOT_ASSETS="$SCRIPT_DIR/../assets/innioasis-boot"
+if [ -d "$BOOT_ASSETS" ] && [ -f "$BOOT_ASSETS/boot.img" ]; then
+    echo "==> Innioasis boot splash (replace Rockbox boot.img / logo / bootanimation)"
+    chmod +x "$SCRIPT_DIR/apply-innioasis-boot.sh"
+    "$SCRIPT_DIR/apply-innioasis-boot.sh" "$BASE_DIR" "$MOUNT_SYS"
+else
+    echo "==> Skipping Innioasis boot splash (missing $BOOT_ASSETS)"
+fi
+
+if [ -d "$REPO_ROOT/solar-rom/koensayr/src/patches" ] || [ -n "${KOENSAYR_DIR:-}" ]; then
+    echo "==> Koensayr AVRCP + Bluetooth patches"
+    chmod +x "$SCRIPT_DIR/apply-koensayr-avrcp.sh"
+    "$SCRIPT_DIR/apply-koensayr-avrcp.sh" "$MOUNT_SYS"
+else
+    echo "==> Skipping Koensayr AVRCP (clone koensayr into solar-rom/koensayr or set KOENSAYR_DIR)"
+fi
 
 echo "==> Patching userdata partition"
 sudo rm -rf "$MOUNT_USER/org.rockbox"

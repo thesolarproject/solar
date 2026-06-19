@@ -211,6 +211,27 @@ public final class PlaybackCoordinator {
         if (activeMode == Mode.NONE) activeMode = Mode.MUSIC;
     }
 
+    /** Insert Reach stream after the current music slot; returns new music index. */
+    public int insertReachStreamAfterCurrent(File temp, String meta) {
+        if (temp == null) return 0;
+        activeMode = Mode.MUSIC;
+        int musicIdx = musicIndex();
+        int queueIdx = musicSlotToQueueIndex(musicIdx);
+        if (queueIdx < 0) {
+            queue.append(PlayQueue.QueueItem.reach(temp, meta));
+            musicOriginal.add(temp);
+            queue.setIndex(queue.items().size() - 1);
+            return musicOriginal.size() - 1;
+        }
+        int insertQ = queueIdx + 1;
+        queue.insertAt(insertQ, PlayQueue.QueueItem.reach(temp, meta));
+        int insertMusic = musicIdx + 1;
+        if (insertMusic >= musicOriginal.size()) musicOriginal.add(temp);
+        else musicOriginal.add(insertMusic, temp);
+        queue.setIndex(insertQ);
+        return insertMusic;
+    }
+
     public void removeMusicTrackAt(int index) {
         int idx = 0;
         for (int i = 0; i < queue.items().size(); i++) {

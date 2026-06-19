@@ -11,6 +11,8 @@ public final class SessionLifecycle {
         if (from == MainActivity.STATE_SOULSEEK && to != MainActivity.STATE_SOULSEEK) {
             if (activity.keepReachStreamHandoffForScreen(to)) {
                 activity.pauseSoulseekUiOnly();
+            } else if (activity.shouldPreserveSoulseekSharingOnReachExit()) {
+                activity.teardownReachUiOnly();
             } else {
                 activity.teardownSoulseekSession();
             }

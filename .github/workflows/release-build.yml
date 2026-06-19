@@ -110,6 +110,13 @@ jobs:
           chmod +x gradlew scripts/build.sh
           ./scripts/build.sh
 
+      - name: Checkout Koensayr (AVRCP patches)
+        uses: actions/checkout@v4
+        with:
+          repository: SeanathanVT/koensayr
+          path: solar-rom/koensayr
+          fetch-depth: 1
+
       - name: Build ROM images
         env:
           SOLAR_GITHUB_REPO: thesolarproject/solar

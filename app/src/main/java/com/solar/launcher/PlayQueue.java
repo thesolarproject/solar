@@ -98,6 +98,13 @@ public final class PlayQueue {
         items.add(item);
     }
 
+    public void insertAt(int i, QueueItem item) {
+        if (item == null || i < 0 || i > items.size()) return;
+        items.add(i, item);
+        if (index >= i) index++;
+        clampIndex();
+    }
+
     public void appendFiles(List<File> tracks, boolean reachTemp) {
         if (tracks == null) return;
         for (File f : tracks) {

@@ -54,4 +54,20 @@ public class PlaybackCoordinatorTest {
         pc.activateMusic(new ArrayList<File>(), 0, false);
         if (pc.isMusicActive()) throw new AssertionError("empty should clear music mode");
     }
+
+    @Test
+    public void insertReachStreamAfterCurrent_preservesOrderAndSelectsNewTrack() {
+        PlaybackCoordinator pc = new PlaybackCoordinator();
+        List<File> pl = files("a", "b", "c");
+        pc.activateMusic(pl, 0, false);
+        File reach = new File("/cache/reach.mp3");
+        int idx = pc.insertReachStreamAfterCurrent(reach, "Reach Track");
+        assertEquals(1, idx);
+        assertEquals(4, pc.musicPlaylist().size());
+        assertEquals("/music/a", pc.musicPlaylist().get(0).getPath());
+        assertSame(reach, pc.musicPlaylist().get(1));
+        assertEquals("/music/b", pc.musicPlaylist().get(2).getPath());
+        assertEquals(1, pc.musicIndex());
+        assertEquals(PlayQueue.ItemKind.REACH_STREAM, pc.currentItem().kind);
+    }
 }

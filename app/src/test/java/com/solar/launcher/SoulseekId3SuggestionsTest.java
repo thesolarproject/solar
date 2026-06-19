@@ -13,6 +13,6 @@ public class SoulseekId3SuggestionsTest {
         List<String> out = SoulseekSearchSuggestions.suggestionsFromId3(
                 "Track", "Artist", "Album", "Rock");
         if (out.isEmpty()) throw new AssertionError("empty");
-        if (out.size() > 4) throw new AssertionError("max 4");
+        if (out.size() > 12) throw new AssertionError("max 12");
     }
 }

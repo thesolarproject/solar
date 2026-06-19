@@ -372,6 +372,8 @@ public final class SoulseekClient extends Thread {
   public void search(final String query) {
     cancelSearch();
     searchCancelled = false;
+    final List<String> queries = SoulseekSearchVariants.expand(query);
+    if (queries.isEmpty()) return;
     final Thread t = new Thread(new Runnable() {
       @Override
       public void run() {
@@ -383,7 +385,10 @@ public final class SoulseekClient extends Thread {
           pendingResults.clear();
           seenResultKeys.clear();
           synchronized (serverLock) {
-            sendSearchLocked(token, query);
+            for (String q : queries) {
+              if (searchCancelled) return;
+              sendSearchLocked(token, q);
+            }
           }
           notifyStatus("Waiting for peers…");
           long deadline = System.currentTimeMillis() + SEARCH_COLLECT_MS;
