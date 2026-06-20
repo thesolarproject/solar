@@ -20,8 +20,6 @@ public final class SettingsScreens {
     public static final String THEME_VARIANT = "settings.theme_variant";
     /** EQ preset picker: key + preset name in settingsSubScreenExtra. */
     public static final String EQ = "settings.eq";
-    /** Music playback queue editor (reorder / remove). */
-    public static final String MUSIC_QUEUE = "settings.music_queue";
 
     public static int titleResId(String key) {
         if (key == null) return 0;
@@ -41,7 +39,6 @@ public final class SettingsScreens {
         if (LANGUAGE.equals(key)) return R.string.settings_sub_language;
         if (EQ.equals(key)) return R.string.settings_sub_eq;
         if (THEME_VARIANT.equals(key)) return R.string.settings_sub_theme_variant;
-        if (MUSIC_QUEUE.equals(key)) return R.string.settings_sub_music_queue;
         return 0;
     }
 

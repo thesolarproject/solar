@@ -250,6 +250,9 @@
     <string name="wifi_networks_header">Wi-Fi 네트워크</string>
     <string name="wifi_scan_networks">🔍 네트워크 검색</string>
     <string name="wifi_off">Wi-Fi 꺼짐</string>
+    <string name="wifi_off_warning_title">Wi-Fi를 끌까요?</string>
+    <string name="wifi_off_warning_message">다운로드, 스트리밍 또는 음악 공유가 중단됩니다.</string>
+    <string name="wifi_off_confirm">끄기</string>
     <string name="wifi_open_network">공개 네트워크 (직접 연결)</string>
     <string name="keyboard_target_wifi">대상: %1$s</string>
     <string name="keyboard_soulseek_username">Soulseek 사용자 이름</string>
@@ -279,9 +282,9 @@
     <string name="library_playlist_saved">%1$s 저장됨</string>
     <string name="library_playlist_save_failed">재생목록 저장 실패</string>
     <string name="library_edit_queue">재생 큐 보기</string>
+    <string name="library_edit_playlist">재생 목록 편집</string>
     <string name="library_queue_remove">큐에서 제거</string>
     <string name="library_queue_removed">큐에서 제거됨</string>
-    <string name="settings_sub_music_queue">재생 큐 보기</string>
     <string name="player_brightness_header">화면 밝기</string>
     <string name="player_brightness_hint">휠을 돌려 밝기를 조절하세요.</string>
     <string name="player_storage_header">저장소 정보</string>
@@ -437,11 +440,13 @@
     <string name="podcasts_save_hint">가운데 길게: 라이브러리에 저장</string>
     <string name="podcasts_saved_badge">[저장됨]</string>
     <string name="context_menu_title">옵션</string>
+    <string name="context_tier_wifi">Wi-Fi</string>
+    <string name="context_wifi_connected">연결됨</string>
+    <string name="context_tier_bluetooth">블루투스</string>
     <string name="context_browse_artist">아티스트: %1$s</string>
     <string name="context_browse_album">앨범: %1$s</string>
     <string name="context_browse_genre">장르: %1$s</string>
     <string name="context_browse_playlist">재생 목록: %1$s</string>
-    <string name="context_action_button_radius">버튼 모서리</string>
     <string name="context_action_save_episode">라이브러리에 저장</string>
     <string name="context_action_back_episodes">에피소드 목록으로</string>
     <string name="context_action_play_now">지금 재생</string>
@@ -469,6 +474,8 @@
     <string name="context_action_open_apps">앱</string>
     <string name="context_action_lock_screen">화면 잠금</string>
     <string name="context_action_lock_failed">화면을 잠글 수 없습니다</string>
+    <string name="context_quick_volume">볼륨</string>
+    <string name="context_hold_back_hint">뒤로 버튼 길게 눌러 옵션</string>
     <string name="podcasts_saved_on_device">기기에 저장됨</string>
     <string name="podcasts_resume_badge">[이어듣기]</string>
     <string name="podcasts_empty_saved">SD 카드에 저장된 에피소드가 없습니다.</string>
@@ -537,7 +544,6 @@
     <string name="dialog_clear_cache_message">다운로드한 앨범 커버를 모두 삭제하여 저장 공간을 확보하시겠습니까?</string>
     <string name="dialog_clear_cache_ok">%1$d개의 커버 이미지를 삭제했습니다.</string>
     <string name="dialog_clear_cache_failed">캐시를 지우지 못했습니다.</string>
-    <string name="dialog_button_radius_title">버튼 모서리 반경</string>
     <string name="dialog_radius_theme">테마 기본값 사용</string>
     <string name="dialog_radius_square">0 dp (사각)</string>
     <string name="dialog_radius_dp">%1$d dp</string>

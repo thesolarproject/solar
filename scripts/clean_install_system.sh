@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Remove third-party launchers from Y1 (root) and install Solar as /system/app.
+# Fast iteration install by default: update Solar in /data (no reboot).
+# Pass --system to force legacy /system overwrite flow.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=/dev/null
 source "$ROOT/scripts/env.sh"
 APK="$ROOT/app/build/outputs/apk/release/app-release.apk"
+MODE="${1:-fast}"
 
 [[ -f "$APK" ]] || {
   echo "Missing $APK — run ./scripts/build.sh first" >&2
@@ -21,6 +23,30 @@ sleep 2
 run_su() {
   adb shell "su -c '$*'" 2>/dev/null || adb shell "$*"
 }
+
+if [[ "$MODE" != "--system" ]]; then
+  echo "== Fast iteration install (userdata overlay, no reboot) =="
+  echo "== Installing with adb install -r -d =="
+  if adb install -r -d "$APK"; then
+    adb shell am force-stop com.solar.launcher >/dev/null 2>&1 || true
+    sleep 1
+    adb shell am start -S -n com.solar.launcher/.MainActivity >/dev/null 2>&1 || true
+    VER="$(aapt dump badging "$APK" 2>/dev/null | sed -n 's/.*versionName=\([^ ]*\).*/\1/p' | head -1)"
+    echo "DONE: installed iteration APK (versionName=${VER:-unknown}) — launcher cold-started"
+    exit 0
+  fi
+  echo "Fast install failed; retrying once with pm install via root..." >&2
+  adb push "$APK" /data/local/tmp/solar-iteration.apk >/dev/null
+  if run_su "pm install -r -d /data/local/tmp/solar-iteration.apk"; then
+    adb shell am force-stop com.solar.launcher >/dev/null 2>&1 || true
+    sleep 1
+    adb shell am start -S -n com.solar.launcher/.MainActivity >/dev/null 2>&1 || true
+    echo "DONE: installed iteration APK via pm install — launcher cold-started"
+    exit 0
+  fi
+  echo "ERROR: fast install failed. Run with --system for full /system reinstall." >&2
+  exit 1
+fi
 
 echo "== Root + remount /system =="
 adb root 2>/dev/null || true

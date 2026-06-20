@@ -6,37 +6,44 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
-/** ponytail: exclusive music vs podcast queues; inactive session kept in memory. */
+/** ponytail: unified queue for playback order; legacy music/podcast views synced from PlayQueue. */
 public final class PlaybackCoordinator {
     public enum Mode { NONE, MUSIC, PODCAST }
 
+    private final PlayQueue queue = new PlayQueue();
     private Mode activeMode = Mode.NONE;
     private final List<File> musicOriginal = new ArrayList<File>();
-    private final List<File> musicActive = new ArrayList<File>();
-    private int musicIndex = 0;
-    private final List<OpenRssClient.Episode> podcastQueue = new ArrayList<OpenRssClient.Episode>();
-    private int podcastIndex = -1;
     private String podcastShowTitle = "";
     private boolean podcastFromSavedLibrary = false;
+    private File musicInitiator;
+    private String musicActivePlaylistName;
+
+    public PlayQueue unifiedQueue() {
+        return queue;
+    }
 
     public Mode activeMode() {
         return activeMode;
     }
 
     public boolean isPodcastActive() {
-        return activeMode == Mode.PODCAST;
+        PlayQueue.QueueItem c = queue.current();
+        return activeMode == Mode.PODCAST || (c != null && c.kind == PlayQueue.ItemKind.PODCAST_EPISODE);
     }
 
     public boolean isMusicActive() {
-        return activeMode == Mode.MUSIC;
+        PlayQueue.QueueItem c = queue.current();
+        return activeMode == Mode.MUSIC
+                || (c != null && (c.kind == PlayQueue.ItemKind.MUSIC_FILE
+                || c.kind == PlayQueue.ItemKind.REACH_STREAM));
     }
 
     public boolean hasAnyQueue() {
-        return !musicActive.isEmpty() || !podcastQueue.isEmpty();
+        return queue.size() > 0;
     }
 
     public List<File> musicPlaylist() {
-        return musicActive;
+        return queue.musicFiles();
     }
 
     public List<File> musicOriginal() {
@@ -44,27 +51,38 @@ public final class PlaybackCoordinator {
     }
 
     public int musicIndex() {
-        clampMusicIndex();
-        return musicIndex;
+        syncLegacyMusicIndex();
+        int idx = 0;
+        PlayQueue.QueueItem cur = queue.current();
+        if (cur == null || cur.file == null) return 0;
+        for (PlayQueue.QueueItem q : queue.items()) {
+            if (q.kind == PlayQueue.ItemKind.MUSIC_FILE || q.kind == PlayQueue.ItemKind.REACH_STREAM) {
+                if (q.file.equals(cur.file)) return idx;
+                idx++;
+            }
+        }
+        return 0;
     }
 
     public void setMusicIndex(int index) {
-        musicIndex = index;
-        clampMusicIndex();
+        int idx = 0;
+        for (int i = 0; i < queue.items().size(); i++) {
+            PlayQueue.QueueItem q = queue.items().get(i);
+            if (q.kind == PlayQueue.ItemKind.MUSIC_FILE || q.kind == PlayQueue.ItemKind.REACH_STREAM) {
+                if (idx == index) {
+                    queue.setIndex(i);
+                    return;
+                }
+                idx++;
+            }
+        }
+        queue.clampIndex();
     }
 
-    /** Keep index in range — avoids corrupt queue / track-count UI after edits. */
     void clampMusicIndex() {
-        if (musicActive.isEmpty()) {
-            musicIndex = 0;
-            return;
-        }
-        if (musicIndex < 0 || musicIndex >= musicActive.size()) {
-            musicIndex = Math.max(0, Math.min(musicIndex, musicActive.size() - 1));
-        }
+        queue.clampIndex();
     }
 
-    /** Safe "01 / 05" label for Now Playing (never NaN/∞). */
     public static String formatTrackPosition(int index, int total) {
         if (total <= 0) return "— / —";
         int pos = index + 1;
@@ -73,28 +91,52 @@ public final class PlaybackCoordinator {
         return String.format(java.util.Locale.US, "%02d / %02d", pos, total);
     }
 
+    public String formatActivePosition() {
+        return formatTrackPosition(queue.index(), queue.size());
+    }
+
     public List<OpenRssClient.Episode> podcastQueue() {
-        return podcastQueue;
+        return queue.podcastEpisodes();
     }
 
     public int podcastIndex() {
-        return podcastIndex;
+        PlayQueue.QueueItem cur = queue.current();
+        if (cur == null || cur.kind != PlayQueue.ItemKind.PODCAST_EPISODE) return -1;
+        int idx = 0;
+        for (PlayQueue.QueueItem q : queue.items()) {
+            if (q.kind == PlayQueue.ItemKind.PODCAST_EPISODE) {
+                if (q.episode == cur.episode) return idx;
+                idx++;
+            }
+        }
+        return -1;
     }
 
     public void setPodcastIndex(int index) {
-        podcastIndex = index;
+        int idx = 0;
+        for (int i = 0; i < queue.items().size(); i++) {
+            PlayQueue.QueueItem q = queue.items().get(i);
+            if (q.kind == PlayQueue.ItemKind.PODCAST_EPISODE) {
+                if (idx == index) {
+                    queue.setIndex(i);
+                    return;
+                }
+                idx++;
+            }
+        }
     }
 
     public String podcastShowTitle() {
+        PlayQueue.QueueItem c = queue.current();
+        if (c != null && c.kind == PlayQueue.ItemKind.PODCAST_EPISODE) return c.podcastShowTitle;
         return podcastShowTitle;
     }
 
     public boolean podcastFromSavedLibrary() {
+        PlayQueue.QueueItem c = queue.current();
+        if (c != null && c.kind == PlayQueue.ItemKind.PODCAST_EPISODE) return c.podcastFromSaved;
         return podcastFromSavedLibrary;
     }
-
-    private File musicInitiator;
-    private String musicActivePlaylistName;
 
     public File musicInitiator() {
         return musicInitiator;
@@ -108,76 +150,102 @@ public final class PlaybackCoordinator {
         musicActivePlaylistName = (name != null && !name.isEmpty()) ? name : null;
     }
 
+    private void syncLegacyMusicIndex() {
+        queue.clampIndex();
+    }
+
     public void activateMusic(List<File> playlist, int startIndex, boolean shuffle) {
         musicOriginal.clear();
-        musicActive.clear();
         musicInitiator = null;
         if (playlist == null || playlist.isEmpty()) {
-            musicIndex = 0;
+            queue.clear();
             activeMode = Mode.NONE;
             return;
         }
         activeMode = Mode.MUSIC;
         musicOriginal.addAll(playlist);
-        musicActive.addAll(playlist);
-        File currentSong = musicOriginal.get(Math.max(0, Math.min(startIndex, musicOriginal.size() - 1)));
+        List<PlayQueue.QueueItem> items = new ArrayList<PlayQueue.QueueItem>();
+        List<File> order = new ArrayList<File>(playlist);
+        File currentSong = playlist.get(Math.max(0, Math.min(startIndex, playlist.size() - 1)));
         musicInitiator = currentSong;
         if (shuffle) {
-            java.util.Collections.shuffle(musicActive);
-            musicIndex = musicActive.indexOf(currentSong);
-            if (musicIndex < 0) musicIndex = 0;
-        } else {
-            musicIndex = Math.max(0, Math.min(startIndex, musicActive.size() - 1));
+            java.util.Collections.shuffle(order);
         }
+        int qStart = 0;
+        for (int i = 0; i < order.size(); i++) {
+            items.add(PlayQueue.QueueItem.music(order.get(i)));
+            if (order.get(i).equals(currentSong)) qStart = i;
+        }
+        queue.setAll(items, qStart);
     }
 
     public void reshuffleMusic(boolean shuffle) {
         if (musicOriginal.isEmpty()) return;
-        File current = musicActive.isEmpty() ? null : musicActive.get(musicIndex);
-        if (shuffle) {
-            java.util.Collections.shuffle(musicActive);
-        } else {
-            musicActive.clear();
-            musicActive.addAll(musicOriginal);
+        File current = queue.current() != null ? queue.current().file : null;
+        List<File> order = new ArrayList<File>(musicOriginal);
+        if (shuffle) java.util.Collections.shuffle(order);
+        List<PlayQueue.QueueItem> items = new ArrayList<PlayQueue.QueueItem>();
+        int qStart = 0;
+        for (int i = 0; i < order.size(); i++) {
+            items.add(PlayQueue.QueueItem.music(order.get(i)));
+            if (current != null && order.get(i).equals(current)) qStart = i;
         }
-        if (current != null) {
-            musicIndex = musicActive.indexOf(current);
-            if (musicIndex < 0) musicIndex = 0;
-        }
+        queue.setAll(items, qStart);
     }
 
     public void appendToMusicQueue(List<File> tracks) {
         if (tracks == null) return;
         for (File f : tracks) {
             if (f != null && f.isFile()) {
-                musicActive.add(f);
+                queue.append(PlayQueue.QueueItem.music(f));
                 if (!musicOriginal.contains(f)) musicOriginal.add(f);
             }
         }
-        if (activeMode == Mode.NONE && !musicActive.isEmpty()) activeMode = Mode.MUSIC;
+        if (activeMode == Mode.NONE && !queue.isEmpty()) activeMode = Mode.MUSIC;
+    }
+
+    public void appendReachToQueue(File temp, String meta) {
+        if (temp == null || !temp.isFile()) return;
+        queue.append(PlayQueue.QueueItem.reach(temp, meta));
+        if (!musicOriginal.contains(temp)) musicOriginal.add(temp);
+        if (activeMode == Mode.NONE) activeMode = Mode.MUSIC;
     }
 
     public void removeMusicTrackAt(int index) {
-        if (index < 0 || index >= musicActive.size()) return;
-        File removed = musicActive.remove(index);
-        if (musicIndex > index) musicIndex--;
-        else if (musicIndex == index && musicIndex >= musicActive.size()) {
-            musicIndex = Math.max(0, musicActive.size() - 1);
+        int idx = 0;
+        for (int i = 0; i < queue.items().size(); i++) {
+            PlayQueue.QueueItem q = queue.items().get(i);
+            if (q.kind == PlayQueue.ItemKind.MUSIC_FILE || q.kind == PlayQueue.ItemKind.REACH_STREAM) {
+                if (idx == index) {
+                    File removed = q.file;
+                    queue.removeAt(i);
+                    musicOriginal.remove(removed);
+                    return;
+                }
+                idx++;
+            }
         }
-        clampMusicIndex();
-        musicOriginal.remove(removed);
     }
 
     public void moveMusicTrack(int from, int to) {
-        if (from < 0 || from >= musicActive.size() || to < 0 || to >= musicActive.size() || from == to) return;
-        File f = musicActive.remove(from);
-        musicActive.add(to, f);
-        if (musicIndex == from) musicIndex = to;
-        else if (from < musicIndex && to >= musicIndex) musicIndex--;
-        else if (from > musicIndex && to <= musicIndex) musicIndex++;
-        clampMusicIndex();
+        int fromQ = musicSlotToQueueIndex(from);
+        int toQ = musicSlotToQueueIndex(to);
+        if (fromQ < 0 || toQ < 0) return;
+        queue.move(fromQ, toQ);
         musicOriginal.clear();
-        musicOriginal.addAll(musicActive);
+        musicOriginal.addAll(queue.musicFiles());
+    }
+
+    private int musicSlotToQueueIndex(int slot) {
+        int idx = 0;
+        for (int i = 0; i < queue.items().size(); i++) {
+            PlayQueue.QueueItem q = queue.items().get(i);
+            if (q.kind == PlayQueue.ItemKind.MUSIC_FILE || q.kind == PlayQueue.ItemKind.REACH_STREAM) {
+                if (idx == slot) return i;
+                idx++;
+            }
+        }
+        return -1;
     }
 
     public void activatePodcast(List<OpenRssClient.Episode> episodes, int index, String showTitle,
@@ -185,10 +253,92 @@ public final class PlaybackCoordinator {
         activeMode = Mode.PODCAST;
         podcastFromSavedLibrary = fromSavedLibrary;
         podcastShowTitle = showTitle != null ? showTitle : "";
-        podcastQueue.clear();
-        if (episodes != null) podcastQueue.addAll(episodes);
-        podcastIndex = podcastQueue.isEmpty()
-                ? -1
-                : Math.max(0, Math.min(index, podcastQueue.size() - 1));
+        List<PlayQueue.QueueItem> items = new ArrayList<PlayQueue.QueueItem>();
+        if (episodes != null) {
+            for (OpenRssClient.Episode ep : episodes) {
+                items.add(PlayQueue.QueueItem.podcast(ep, podcastShowTitle, fromSavedLibrary));
+            }
+        }
+        int start = items.isEmpty() ? 0 : Math.max(0, Math.min(index, items.size() - 1));
+        queue.setAll(items, start);
+    }
+
+    public void moveQueueItem(int from, int to) {
+        if (from < 0 || to < 0 || from >= queue.size() || to >= queue.size() || from == to) return;
+        int np = queue.index();
+        if (from == np) return;
+        if (to == np && (from == np + 1 || from == np - 1)) {
+            queue.swap(from, to);
+        } else if (from == np || to == np) {
+            return;
+        } else {
+            queue.move(from, to);
+        }
+        musicOriginal.clear();
+        musicOriginal.addAll(queue.musicFiles());
+    }
+
+    public void removeQueueItemAt(int index) {
+        if (index < 0 || index >= queue.size()) return;
+        queue.removeAt(index);
+        musicOriginal.clear();
+        musicOriginal.addAll(queue.musicFiles());
+        if (queue.isEmpty()) activeMode = Mode.NONE;
+    }
+
+    /** Cold start — restore unified order without rebuilding music/podcast subsets. */
+    public void restoreQueueState(List<PlayQueue.QueueItem> items, int index) {
+        if (items == null || items.isEmpty()) {
+            queue.clear();
+            musicOriginal.clear();
+            activeMode = Mode.NONE;
+            musicInitiator = null;
+            return;
+        }
+        queue.setAll(items, index);
+        musicOriginal.clear();
+        musicOriginal.addAll(queue.musicFiles());
+        PlayQueue.QueueItem c = queue.current();
+        if (c == null) {
+            activeMode = Mode.NONE;
+            musicInitiator = null;
+            return;
+        }
+        if (c.kind == PlayQueue.ItemKind.PODCAST_EPISODE) {
+            activeMode = Mode.PODCAST;
+            podcastShowTitle = c.podcastShowTitle;
+            podcastFromSavedLibrary = c.podcastFromSaved;
+            musicInitiator = null;
+        } else if (c.kind == PlayQueue.ItemKind.MUSIC_FILE || c.kind == PlayQueue.ItemKind.REACH_STREAM) {
+            activeMode = Mode.MUSIC;
+            musicInitiator = c.file;
+            podcastShowTitle = "";
+            podcastFromSavedLibrary = false;
+        } else {
+            activeMode = Mode.NONE;
+            musicInitiator = null;
+        }
+    }
+
+    public void clearQueue() {
+        queue.clear();
+        musicOriginal.clear();
+        activeMode = Mode.NONE;
+    }
+
+    public int nextIndex(boolean repeatAll) {
+        return queue.nextIndex(repeatAll);
+    }
+
+    public int prevIndex(boolean repeatAll) {
+        return queue.prevIndex(repeatAll);
+    }
+
+    public void setQueueIndex(int i) {
+        queue.setIndex(i);
+    }
+
+    public PlayQueue.QueueItem currentItem() {
+        return queue.current();
     }
 }

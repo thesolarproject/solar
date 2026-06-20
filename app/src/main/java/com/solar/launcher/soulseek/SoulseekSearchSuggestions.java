@@ -1,5 +1,7 @@
 package com.solar.launcher.soulseek;
 
+import com.solar.launcher.ArtistParser;
+
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -10,6 +12,7 @@ import java.util.regex.Pattern;
 /** ponytail: filename → four one-tap Reach re-search queries from title/artist phrases. */
 public final class SoulseekSearchSuggestions {
     private static final int MAX_RESEARCH = 4;
+    private static final int MAX_ID3_SUGGESTIONS = 12;
 
     private static final Pattern LEADING_TRACK = Pattern.compile("^\\d{1,4}[\\s.\\-_)]*");
     private static final Pattern PHRASE_HYPHEN = Pattern.compile("\\s-\\s");
@@ -67,6 +70,43 @@ public final class SoulseekSearchSuggestions {
 
     public static List<String> suggestedQueries(SoulseekClient.Result result) {
         return reSearchQueries(result);
+    }
+
+    /** ID3 tags → individual artist/title/album search suggestions. */
+    public static List<String> suggestionsFromId3(String title, String artist, String album, String genre) {
+        List<String> out = new ArrayList<String>();
+        for (String a : ArtistParser.splitArtists(artist)) {
+            addIfValidOrdered(out, a);
+        }
+        String cleanTitle = cleanId3Tag(title);
+        if (cleanTitle != null) {
+            addIfValidOrdered(out, cleanTitle);
+            String sc = sentenceCase(cleanTitle);
+            if (!sc.equalsIgnoreCase(cleanTitle)) addIfValidOrdered(out, sc);
+        }
+        String cleanAlbum = cleanId3Tag(album);
+        if (cleanAlbum != null) addIfValidOrdered(out, cleanAlbum);
+        String cleanGenre = cleanId3Tag(genre);
+        if (cleanGenre != null && !"Unknown Genre".equalsIgnoreCase(cleanGenre)) {
+            addIfValidOrdered(out, cleanGenre);
+        }
+        java.util.List<String> artists = ArtistParser.splitArtists(artist);
+        if (!artists.isEmpty() && cleanTitle != null) {
+            addIfValidOrdered(out, artists.get(0) + " " + cleanTitle);
+        }
+        if (!artists.isEmpty() && cleanAlbum != null) {
+            addIfValidOrdered(out, artists.get(0) + " " + cleanAlbum);
+        }
+        while (out.size() > MAX_ID3_SUGGESTIONS) out.remove(out.size() - 1);
+        return out;
+    }
+
+    private static String cleanId3Tag(String s) {
+        if (s == null) return null;
+        String t = s.trim();
+        if (t.isEmpty()) return null;
+        if ("Unknown Artist".equalsIgnoreCase(t) || "Unknown Album".equalsIgnoreCase(t)) return null;
+        return t;
     }
 
     static List<String> suggestedQueries(String filename, int max) {

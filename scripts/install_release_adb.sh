@@ -114,10 +114,14 @@ run_su() {
 }
 
 if is_system; then
-  echo "== System app — copy to /system/app (supports downgrade) =="
-  run_su "mount -o remount,rw /system && cp $DEVICE_APK /system/app/com.solar.launcher.apk && chmod 644 /system/app/com.solar.launcher.apk && sync"
-  echo "== Rebooting =="
-  "${ADB[@]}" reboot
+  echo "== System app — fast userdata overlay install (no reboot) =="
+  if run_su "pm install -r -d $DEVICE_APK"; then
+    "${ADB[@]}" shell am force-stop com.solar.launcher >/dev/null 2>&1 || true
+    echo "DONE: installed $TAG as userdata overlay over system app"
+  else
+    echo "pm install failed for system app overlay" >&2
+    exit 1
+  fi
 else
   echo "== User install — pm install -r =="
   if run_su "pm install -r $DEVICE_APK"; then

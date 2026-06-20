@@ -62,7 +62,6 @@ public class ThemeManager {
     private static final Map<String, Bitmap> scaledRowBitmapCache = new HashMap<>();
     private static Typeface cachedFont;
     private static String cachedFontKey = "";
-    private static int buttonRadiusOverride = Integer.MIN_VALUE;
     private static boolean statusBarMatchItemText = true;
 
     /** ponytail: external Themes/ with filesDir fallback when sdcard missing (emulator). */
@@ -335,14 +334,15 @@ public class ThemeManager {
         return statusBarMatchItemText;
     }
 
-    /** ponytail: statusConfig.statusBarColor with alpha; transparent when unset (wallpaper shows through) */
+    /** ponytail: statusConfig.statusBarColor with alpha; dark fallback when unset on non-Y1 themes */
     public static int getStatusBarBackgroundColor() {
         JSONObject status = getCurrentTheme().root.optJSONObject("statusConfig");
         if (status != null) {
             int c = parseColorOpt(status, "statusBarColor");
             if (c != Integer.MIN_VALUE) return c;
         }
-        return 0x00000000;
+        if (hasY1Blocks(getCurrentTheme().root)) return 0x00000000;
+        return 0xE6121212;
     }
 
     /** solarConfig.statusBarTextColor if set; else item text when match on, else Y1 statusConfig chain. */
@@ -438,18 +438,6 @@ public class ThemeManager {
             if (c != Integer.MIN_VALUE) return c;
         }
         return 0x44FFFFFF;
-    }
-
-    public static void setButtonRadiusOverride(int dp) {
-        buttonRadiusOverride = dp;
-    }
-
-    public static void clearButtonRadiusOverride() {
-        buttonRadiusOverride = Integer.MIN_VALUE;
-    }
-
-    public static boolean hasButtonRadiusOverride() {
-        return buttonRadiusOverride >= 0;
     }
 
     private static JSONObject solarBlock(JSONObject root) {
@@ -589,6 +577,74 @@ public class ThemeManager {
         return lum > 140 ? 0xFF000000 : 0xFFFFFFFF;
     }
 
+    /** Fixed neutral panel for hold-Back context menus — not theme dialogConfig art. */
+    public static int getContextMenuPanelColor() {
+        return 0xEE252528;
+    }
+
+    /** WCAG relative luminance (sRGB), 0..1 */
+    public static double relativeLuminance(int argb) {
+        double r = channelLinear((argb >> 16) & 0xFF);
+        double g = channelLinear((argb >> 8) & 0xFF);
+        double b = channelLinear(argb & 0xFF);
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    }
+
+    private static double channelLinear(int c) {
+        double s = c / 255.0;
+        return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+    }
+
+    public static double contrastRatio(int fg, int bg) {
+        double l1 = relativeLuminance(fg);
+        double l2 = relativeLuminance(bg);
+        double lighter = Math.max(l1, l2);
+        double darker = Math.min(l1, l2);
+        return (lighter + 0.05) / (darker + 0.05);
+    }
+
+    /** ponytail: min 3:1 for menu labels on neutral panel; fix light-on-light themes */
+    public static int ensureReadableOnBackground(int textColor, int backgroundColor) {
+        int fg = textColor | 0xFF000000;
+        int bg = (backgroundColor | 0xFF000000);
+        if (contrastRatio(fg, bg) >= 3.0) return textColor;
+        return relativeLuminance(bg) > 0.45 ? 0xFF1A1A1A : 0xFFE8E8E8;
+    }
+
+    /** Selected row text — only adjust when selection uses a solid fill, not a theme bitmap. */
+    public static int textOnRowSelection(int selectedColor) {
+        return textOnRowSelection(selectedColor, false);
+    }
+
+    public static int textOnRowSelection(int selectedColor, boolean menuRows) {
+        if (usesThemedSelectionBitmap(menuRows)) return selectedColor;
+        if (hasY1Blocks(getCurrentTheme().root)) return selectedColor;
+        return ensureReadableOnBackground(selectedColor, getRowSelectionFillColor());
+    }
+
+    /** Y1 themes decorate selected rows with PNG assets, not solid progressColor fills. */
+    public static boolean usesThemedSelectionBitmap(boolean menuRows) {
+        ThemeEntry t = getCurrentTheme();
+        if (menuRows) {
+            JSONObject menu = t.root.optJSONObject("menuConfig");
+            if (menu != null) {
+                String path = menu.optString("menuItemSelectedBackground", "").trim();
+                if (!path.isEmpty() && getThemeBitmap(path) != null) return true;
+            }
+        }
+        JSONObject item = t.root.optJSONObject("itemConfig");
+        if (item != null) {
+            String path = item.optString("itemSelectedBackground", "").trim();
+            if (!path.isEmpty() && getThemeBitmap(path) != null) return true;
+        }
+        return false;
+    }
+
+    public static int contextMenuMutedText(int themeHintColor) {
+        int muted = withAlpha(themeHintColor, 0xBB);
+        return ensureReadableOnBackground(muted, getContextMenuPanelColor());
+    }
+
     public static void applyThemedTextStyle(TextView tv, int fillColor) {
         if (tv == null) return;
         tv.setTextColor(fillColor);
@@ -602,7 +658,6 @@ public class ThemeManager {
     }
 
     public static int getButtonRadius() {
-        if (buttonRadiusOverride >= 0) return buttonRadiusOverride;
         ThemeEntry t = getCurrentTheme();
         JSONObject solar = solarBlock(t.root);
         if (solar != null && solar.has("button_radius")) return solar.optInt("button_radius", 10);
@@ -672,6 +727,30 @@ public class ThemeManager {
         Bitmap bmp = getThemeBitmap(dialog.optString("dialogBackground", ""));
         if (bmp == null) return null;
         return new BitmapDrawable(res, bmp);
+    }
+
+    public static int getDialogBackgroundColor() {
+        JSONObject dialog = getCurrentTheme().root.optJSONObject("dialogConfig");
+        if (dialog != null) {
+            int c = parseColorOpt(dialog, "dialogBackgroundColor");
+            if (c != Integer.MIN_VALUE) return c;
+        }
+        return 0xE6000000;
+    }
+
+    public static Drawable getDialogOptionRowBackgroundScaled(android.content.res.Resources res,
+            boolean selected, int widthPx, int heightPx) {
+        if (widthPx <= 0 || heightPx <= 0) return null;
+        JSONObject dialog = getCurrentTheme().root.optJSONObject("dialogConfig");
+        if (dialog == null) return null;
+        String path = selected
+                ? dialog.optString("dialogOptionSelectedBackground", "")
+                : dialog.optString("dialogOptionBackground", "");
+        if (path.isEmpty()) return null;
+        Bitmap bmp = getThemeBitmap(path);
+        if (bmp == null) return null;
+        Bitmap scaled = cachedScaledRowBitmap("dialog", selected, widthPx, heightPx, bmp);
+        return new BitmapDrawable(res, scaled);
     }
 
     public static Bitmap centerCropBitmap(Bitmap src, int targetW, int targetH) {
@@ -1486,6 +1565,13 @@ public class ThemeManager {
             alphaProgress.put("playerConfig", new JSONObject().put("progressColor", "#8044ff00"));
             availableThemes.set(0, new ThemeEntry("/tmp", "alphap", "alphap", alphaProgress));
             if ((getProgressColor() >>> 24) != 0x80) throw new AssertionError("alpha progressColor");
+            int panel = getContextMenuPanelColor();
+            if (ensureReadableOnBackground(0xFFE8E8E8, panel) != 0xFFE8E8E8) {
+                throw new AssertionError("context menu keep readable text");
+            }
+            int fixed = ensureReadableOnBackground(0xFF555555, panel);
+            if (contrastRatio(fixed, panel) < 3.0) throw new AssertionError("context menu fix contrast");
+            if ((fixed & 0xFFFFFF) == 0x555555) throw new AssertionError("context menu fix applied");
         } catch (AssertionError e) {
             throw e;
         } catch (Exception e) {

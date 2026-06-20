@@ -125,6 +125,7 @@
     <string name="reach_stop_download_confirm">Stop download</string>
     <string name="reach_error_too_many_peers">Too many peer connections — try again in a moment.</string>
     <string name="common_cancel">Cancel</string>
+    <string name="common_ok">OK</string>
     <string name="podcasts_download_paused">Download paused — offline playback limited to buffered audio.</string>
 
     <!-- Soulseek extras -->
@@ -217,7 +218,7 @@
     <string name="home_menu_fm">FM Radio</string>
     <string name="home_menu_pc_upload">Wi‑Fi Transfer</string>
     <string name="home_menu_podcasts">Podcasts</string>
-    <string name="home_menu_soulseek">Reach</string>
+    <string name="home_menu_soulseek">Get Music</string>
     <string name="home_menu_themes">Themes</string>
     <string name="home_menu_more">More</string>
     <string name="more_menu_empty">No shortcuts in More</string>
@@ -280,6 +281,9 @@
     <string name="wifi_networks_header">WI-FI NETWORKS</string>
     <string name="wifi_scan_networks">🔍 Scan Networks</string>
     <string name="wifi_off">Wi-Fi is OFF</string>
+    <string name="wifi_off_warning_title">Turn off Wi-Fi?</string>
+    <string name="wifi_off_warning_message">This will interrupt downloads, streaming, or music sharing in progress.</string>
+    <string name="wifi_off_confirm">Turn off</string>
     <string name="wifi_open_network">Open Network (Direct Connect)</string>
     <string name="keyboard_target_wifi">Target: %1$s</string>
     <string name="keyboard_soulseek_username">Reach Username</string>
@@ -311,10 +315,9 @@
     <string name="library_playlist_saved">Saved %1$s</string>
     <string name="library_playlist_save_failed">Could not save playlist</string>
     <string name="library_edit_queue">View Queue</string>
+    <string name="library_edit_playlist">Edit playlist</string>
     <string name="library_queue_remove">Remove from queue</string>
     <string name="library_queue_removed">Removed from queue</string>
-    <string name="settings_sub_music_queue">View queue</string>
-
     <!-- Player / overlays -->
     <string name="player_brightness_header">DISPLAY BRIGHTNESS</string>
     <string name="player_brightness_hint">Turn the wheel to adjust the brightness.</string>
@@ -498,7 +501,6 @@
     <string name="context_browse_album">Album: %1$s</string>
     <string name="context_browse_genre">Genre: %1$s</string>
     <string name="context_browse_playlist">Playlist: %1$s</string>
-    <string name="context_action_button_radius">Button corners</string>
     <string name="context_action_save_episode">Save to Library</string>
     <string name="context_action_back_episodes">Back to episodes</string>
     <string name="context_action_play_now">Play now</string>
@@ -522,9 +524,26 @@
     <string name="context_action_open_player">Open player</string>
     <string name="context_action_open_music">Open music library</string>
     <string name="context_action_open_podcasts">Open podcasts</string>
-    <string name="context_action_open_reach">Open Reach</string>
+    <string name="context_action_open_reach">Get Music</string>
     <string name="context_action_open_apps">Open Apps</string>
     <string name="context_action_lock_screen">Lock Screen</string>
+    <string name="context_quick_volume">Volume</string>
+    <string name="context_hold_back_hint">Hold back button for Options</string>
+    <string name="context_quick_power">Power</string>
+    <string name="context_quick_queue">Queue</string>
+    <string name="context_tier_wifi">Wi-Fi</string>
+    <string name="context_wifi_connected">Connected</string>
+    <string name="context_tier_bluetooth">Bluetooth</string>
+    <string name="context_shutdown_title">Shut down?</string>
+    <string name="context_shutdown_message">The device will power off.</string>
+    <string name="context_shutdown_confirm">Shut down</string>
+    <string name="context_find_like_this">Find like this</string>
+    <string name="update_installing_title">Installing update</string>
+    <string name="update_install_reboot">Installing update… device will reboot.</string>
+    <string name="update_available_title">Update available</string>
+    <string name="update_available_message">Solar %1$s is available.</string>
+    <string name="update_install">Install</string>
+    <string name="update_later">Later</string>
     <string name="context_action_lock_failed">Could not lock screen</string>
     <string name="podcasts_saved_on_device">Saved on device</string>
     <string name="podcasts_resume_badge">[Resume]</string>
@@ -596,7 +615,6 @@
     <string name="dialog_clear_cache_message">Delete all downloaded album covers to free up storage space?</string>
     <string name="dialog_clear_cache_ok">Deleted %1$d cover images.</string>
     <string name="dialog_clear_cache_failed">Failed to clear cache.</string>
-    <string name="dialog_button_radius_title">Button corner radius</string>
     <string name="dialog_radius_theme">Use theme default</string>
     <string name="dialog_radius_square">0 dp (square)</string>
     <string name="dialog_radius_dp">%1$d dp</string>
