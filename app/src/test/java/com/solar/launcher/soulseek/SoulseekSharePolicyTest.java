@@ -5,6 +5,16 @@ import org.junit.Test;
 public class SoulseekSharePolicyTest {
 
   @Test
+  public void offWhenUserDisabled() {
+    SoulseekSharePolicy p = new SoulseekSharePolicy();
+    p.setUserEnabled(false);
+    p.update(true, true, true);
+    if (p.state() != SoulseekSharePolicy.State.OFF) throw new AssertionError("user off");
+    if (p.announceShares()) throw new AssertionError("no announce");
+    if (p.acceptNewUploads()) throw new AssertionError("no uploads");
+  }
+
+  @Test
   public void activeWhenChargingAndWifi() {
     SoulseekSharePolicy p = new SoulseekSharePolicy();
     p.update(true, true, false);

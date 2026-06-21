@@ -7,6 +7,7 @@
     <dimen name="y1_menu_width">204dp</dimen>
     <dimen name="y1_menu_height">307dp</dimen>
     <dimen name="y1_menu_item_height">45dp</dimen>
+    <dimen name="y1_library_row_height">58dp</dimen>
     <dimen name="y1_menu_text_size">22sp</dimen>
     <dimen name="y1_menu_text_pad_left">5dp</dimen>
     <dimen name="y1_context_back_pad_right">2dp</dimen>

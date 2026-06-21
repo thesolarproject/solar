@@ -12,6 +12,7 @@ public final class SoulseekAccount {
     public static final String PREF_PASS = "soulseek_pass";
     public static final String PREF_CUSTOM = "soulseek_custom";
     public static final String PREF_HIDE_FLAC = "soulseek_hide_flac";
+    public static final String PREF_SHARING_ENABLED = "soulseek_sharing_enabled";
 
     private static final Pattern USERNAME_OK =
             Pattern.compile("^[A-Za-z0-9_-]{1,20}$");

@@ -302,10 +302,32 @@ public final class HomeMenuConfig {
         prefs.edit().putString(PREF_MORE_ORDER, joinIds(cleaned)).commit();
     }
 
+    public static List<String> loadHomeEditorMoveIds(SharedPreferences prefs) {
+        List<String> ids = new ArrayList<String>(loadHomeOrderIds(prefs));
+        if (isMoreEnabled(prefs)) {
+            if (!ids.contains(ID_MORE)) ids.add(ID_MORE);
+        } else {
+            ids.remove(ID_MORE);
+        }
+        return ids;
+    }
+
+    public static void saveHomeEditorMoveOrder(SharedPreferences prefs, List<String> ids) {
+        if (prefs == null || ids == null) return;
+        saveOrder(prefs, ids);
+    }
+
+    public static void moveEditorHome(SharedPreferences prefs, int from, int to) {
+        List<String> ids = new ArrayList<String>(loadHomeEditorMoveIds(prefs));
+        if (from < 0 || from >= ids.size() || to < 0 || to >= ids.size() || from == to) return;
+        String item = ids.remove(from);
+        ids.add(to, item);
+        saveHomeEditorMoveOrder(prefs, ids);
+    }
+
     public static void move(SharedPreferences prefs, int from, int to) {
         List<String> ids = new ArrayList<String>(loadHomeOrderIds(prefs));
         if (from < 0 || from >= ids.size() || to < 0 || to >= ids.size() || from == to) return;
-        if (ID_MORE.equals(ids.get(from))) return;
         String item = ids.remove(from);
         ids.add(to, item);
         saveOrder(prefs, ids);
@@ -331,7 +353,13 @@ public final class HomeMenuConfig {
             for (String id : order) {
                 if (id == null) continue;
                 id = migrateId(id.trim());
-                if (id.isEmpty() || ID_MORE.equals(id) || seen.contains(id) || find(id) == null) continue;
+                if (id.isEmpty() || seen.contains(id)) continue;
+                if (ID_MORE.equals(id)) {
+                    seen.add(id);
+                    out.add(id);
+                    continue;
+                }
+                if (find(id) == null) continue;
                 seen.add(id);
                 out.add(id);
             }

@@ -4,6 +4,11 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=/dev/null
 source "$ROOT/scripts/env.sh"
 cd "$ROOT"
+CATALOG="$ROOT/catalog/artist-separators.csv"
+ASSET="$ROOT/app/src/main/assets/artist-separators.csv"
+if [[ -f "$CATALOG" ]]; then
+  cp "$CATALOG" "$ASSET"
+fi
 chmod +x gradlew
 ./gradlew assembleRelease "$@"
 

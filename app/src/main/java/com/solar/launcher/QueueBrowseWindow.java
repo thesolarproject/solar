@@ -1,6 +1,15 @@
 package com.solar.launcher;
 
-/** Visible slice of a large queue list — browse mode only. */
+/**
+ * Visible slice of a large queue list — browse mode only.
+ *
+ * Viewport slot rules (3 visible rows, {@link QueueMoveWindow#VISIBLE_ROWS}):
+ * <ul>
+ *   <li>Browse: first track anchors slot 0, last track slot 2, middle rows slot 1 when count &gt; 4.</li>
+ *   <li>Move (handled in {@code ThemedContextMenu}): mover stays in center slot until first/last.</li>
+ * </ul>
+ * All three slots must show consecutive tracks with no empty gap between them.
+ */
 final class QueueBrowseWindow {
     static final int VIRTUAL_MIN_ROWS = 16;
     static final int ROW_BUFFER = 2;

@@ -13,13 +13,22 @@ public final class SoulseekSharePolicy {
 
     private volatile State state = State.OFF;
     private volatile long drainStartedAt;
+    private volatile boolean userEnabled = true;
 
     public State state() {
         return state;
     }
 
+    public boolean isUserEnabled() {
+        return userEnabled;
+    }
+
+    public void setUserEnabled(boolean enabled) {
+        userEnabled = enabled;
+    }
+
     public void update(boolean charging, boolean wifi, boolean reachUi) {
-        if (!wifi) {
+        if (!userEnabled || !wifi) {
             state = State.OFF;
             return;
         }

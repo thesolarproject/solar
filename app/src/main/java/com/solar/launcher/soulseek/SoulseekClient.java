@@ -4,6 +4,8 @@ import android.content.Context;
 import android.net.wifi.WifiManager;
 import android.os.PowerManager;
 
+import org.json.JSONObject;
+
 import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -35,9 +37,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public final class SoulseekClient extends Thread {
   private static final int PEER_READ_TIMEOUT_MS = 30000;
+  private static final int PEER_CONNECT_MS = 10000;
   private static final int SEARCH_COLLECT_MS = 10000;
   private static final int DOWNLOAD_TRANSFER_TIMEOUT_MS = 300000;
-  private static final int DOWNLOAD_PEER_WAIT_MS = 30000;
+  private static final int DOWNLOAD_PEER_WAIT_MS = 45000;
   private static final int DOWNLOAD_FILE_CONNECT_MS = 45000;
   private static final int OUTBOUND_FILE_WAIT_MS = 12000;
   private static final int NATPMP_RENEW_MS = 20 * 60 * 1000;
@@ -225,6 +228,8 @@ public final class SoulseekClient extends Thread {
   private volatile SoulseekSharePolicy sharePolicy = new SoulseekSharePolicy();
   private final Object uploadLock = new Object();
   private volatile boolean uploadInProgress;
+  private volatile Thread shareAnnounceThread;
+  private volatile boolean shareAnnounceCoalesce;
 
   public void setShareIndex(SoulseekShareIndex index) {
     shareIndex = index != null ? index : SoulseekShareIndex.empty();
@@ -243,28 +248,78 @@ public final class SoulseekClient extends Thread {
   }
 
   public void refreshShareAnnouncement() {
-    new Thread(new Runnable() {
+    shareAnnounceCoalesce = true;
+    if (isSearchActive()) return;
+    if (shareAnnounceThread != null && shareAnnounceThread.isAlive()) return;
+    shareAnnounceThread = new Thread(new Runnable() {
       @Override
       public void run() {
         try {
-          ensureConnected();
-          synchronized (serverLock) {
-            if (!loggedIn) return;
-            int dirs = 0;
-            int files = 0;
-            if (sharePolicy.announceShares()) {
-              dirs = shareIndex.dirCount();
-              files = shareIndex.fileCount();
-            }
-            sendServerLocked(SoulseekWire.MSG_SHARED_FOLDER_FILES,
-                SoulseekWire.packSharedFolderCounts(dirs, files));
-            debugLog("share announce dirs=" + dirs + " files=" + files);
-          }
-        } catch (Exception e) {
-          debugLog("share announce fail: " + e);
+          do {
+            shareAnnounceCoalesce = false;
+            runShareAnnouncementOnce();
+          } while (shareAnnounceCoalesce);
+        } finally {
+          shareAnnounceThread = null;
         }
       }
-    }, "ShareAnnounce").start();
+    }, "ShareAnnounce");
+    shareAnnounceThread.setDaemon(true);
+    shareAnnounceThread.start();
+  }
+
+  private void runShareAnnouncementOnce() {
+    if (isSearchActive()) {
+      shareAnnounceCoalesce = true;
+      return;
+    }
+    try {
+      if (!sharePolicy.announceShares()) {
+        announceShareCountsIfConnected(0, 0);
+        // #region agent log
+        agentLog("SoulseekClient.runShareAnnouncementOnce", "skip sharing off", "H1",
+            new JSONObject().put("announceShares", false));
+        // #endregion
+        return;
+      }
+      ensureConnected();
+      synchronized (serverLock) {
+        if (!loggedIn) return;
+        announceShareCountsLocked(shareIndex.dirCount(), shareIndex.fileCount());
+      }
+    } catch (Exception e) {
+      debugLog("share announce fail: " + e);
+      // #region agent log
+      try {
+        agentLog("SoulseekClient.runShareAnnouncementOnce", "fail", "H1",
+            new JSONObject().put("err", e.getClass().getSimpleName())
+                .put("msg", e.getMessage() != null ? e.getMessage() : ""));
+      } catch (Exception ignored) {}
+      // #endregion
+    }
+  }
+
+  private void announceShareCountsIfConnected(int dirs, int files) {
+    synchronized (serverLock) {
+      if (!loggedIn || serverSocket == null || serverSocket.isClosed()) return;
+      try {
+        announceShareCountsLocked(dirs, files);
+      } catch (Exception e) {
+        debugLog("share announce fail: " + e);
+      }
+    }
+  }
+
+  private void announceShareCountsLocked(int dirs, int files) throws IOException {
+    sendServerLocked(SoulseekWire.MSG_SHARED_FOLDER_FILES,
+        SoulseekWire.packSharedFolderCounts(dirs, files));
+    debugLog("share announce dirs=" + dirs + " files=" + files);
+    // #region agent log
+    try {
+      agentLog("SoulseekClient.runShareAnnouncementOnce", "announced", "H1",
+          new JSONObject().put("dirs", dirs).put("files", files));
+    } catch (Exception ignored) {}
+    // #endregion
   }
 
   public int getListenPort() {
@@ -364,6 +419,11 @@ public final class SoulseekClient extends Thread {
     return xferInProgress || (dt != null && dt.isAlive());
   }
 
+  public boolean isSearchActive() {
+    Thread t = searchThread;
+    return t != null && t.isAlive();
+  }
+
   /** Shutdown listen/server threads when no download is running. */
   public void pauseWhenIdle() {
     if (!isTransferActive()) shutdown();
@@ -376,39 +436,97 @@ public final class SoulseekClient extends Thread {
       @Override
       public void run() {
         try {
-          ensureConnected();
-          if (searchCancelled) return;
-          final int token = searchToken.getAndIncrement();
-          activeSearchToken = token;
-          pendingResults.clear();
-          seenResultKeys.clear();
-          synchronized (serverLock) {
-            sendSearchLocked(token, query);
-          }
-          notifyStatus("Waiting for peers…");
-          long deadline = System.currentTimeMillis() + SEARCH_COLLECT_MS;
-          while (System.currentTimeMillis() < deadline && !searchCancelled) {
-            Thread.sleep(200);
-          }
-          if (searchCancelled) return;
-          if (listener != null) listener.onSearchFinished(token, pendingResults.size());
+          runSearchQuery(query);
         } catch (InterruptedException e) {
           if (!searchCancelled) Thread.currentThread().interrupt();
         } catch (final Throwable err) {
           if (searchCancelled) return;
-          String msg = err.getMessage() != null ? err.getMessage() : "Search failed";
-          if (msg.startsWith("Login rejected:")) {
-            notifyLoginFailed(msg.substring("Login rejected:".length()).trim());
-          } else {
-            notifyError(msg);
+          if (isTransientConnectError(err)) {
+            try {
+              loggedIn = false;
+              synchronized (serverLock) {
+                closeQuietly(serverSocket);
+                serverSocket = null;
+              }
+              sleepQuiet(600);
+              if (!searchCancelled) runSearchQuery(query);
+              return;
+            } catch (Throwable retryErr) {
+              if (searchCancelled) return;
+              reportSearchFailure(retryErr);
+              return;
+            }
           }
+          reportSearchFailure(err);
         } finally {
+          if (shareAnnounceCoalesce && !isSearchActive()) {
+            refreshShareAnnouncement();
+          }
           if (searchThread == Thread.currentThread()) searchThread = null;
         }
       }
     }, "SoulseekSearch");
     searchThread = t;
     t.start();
+  }
+
+  private void runSearchQuery(String query) throws Exception {
+    ensureConnected();
+    if (searchCancelled) return;
+    final int token = searchToken.getAndIncrement();
+    activeSearchToken = token;
+    pendingResults.clear();
+    seenResultKeys.clear();
+    synchronized (serverLock) {
+      sendSearchLocked(token, query);
+    }
+    notifyStatus("Waiting for peers…");
+    long deadline = System.currentTimeMillis() + SEARCH_COLLECT_MS;
+    while (System.currentTimeMillis() < deadline && !searchCancelled) {
+      Thread.sleep(200);
+    }
+    if (searchCancelled) return;
+    if (listener != null) listener.onSearchFinished(token, pendingResults.size());
+    // #region agent log
+    try {
+      agentLog("SoulseekClient.search", "search finished", "H3",
+          new JSONObject().put("token", token).put("results", pendingResults.size())
+              .put("q", activeSearchQuery));
+    } catch (Exception ignored) {}
+    // #endregion
+  }
+
+  private void reportSearchFailure(Throwable err) {
+    String msg = formatError(err);
+    debugLog("search fail: " + err.getClass().getSimpleName() + " " + msg);
+    // #region agent log
+    try {
+      agentLog("SoulseekClient.search", "search fail", "H2",
+          new JSONObject().put("err", err.getClass().getSimpleName()).put("msg", msg));
+    } catch (Exception ignored) {}
+    // #endregion
+    if (msg.startsWith("Login rejected:")) {
+      notifyLoginFailed(msg.substring("Login rejected:".length()).trim());
+    } else {
+      notifyError(msg);
+    }
+    if (listener != null) {
+      listener.onSearchFinished(activeSearchToken, pendingResults.size());
+    }
+  }
+
+  private static boolean isTransientConnectError(Throwable err) {
+    if (err == null) return false;
+    String msg = err.getMessage();
+    if (msg != null) {
+      String lower = msg.toLowerCase(Locale.US);
+      if (lower.contains("econnreset") || lower.contains("disconnected")
+              || lower.contains("eof") || lower.contains("socket closed")
+              || lower.contains("not connected")) {
+        return true;
+      }
+    }
+    return err instanceof java.net.SocketException || err instanceof java.io.EOFException;
   }
 
   public void cancelDownload() {
@@ -460,32 +578,39 @@ public final class SoulseekClient extends Thread {
   @Override
   public void run() {
     while (running.get()) {
+      Socket sock = null;
       try {
-        InputStream in;
         synchronized (serverLock) {
-          if (serverSocket == null || serverSocket.isClosed()) {
+          while (running.get() && (serverSocket == null || serverSocket.isClosed())) {
             serverLock.wait(500);
-            continue;
           }
-          in = serverSocket.getInputStream();
+          if (!running.get()) break;
+          sock = serverSocket;
         }
+        InputStream in = sock.getInputStream();
         SoulseekWire.ServerFrame frame = SoulseekWire.readServerFrame(in);
         synchronized (serverLock) {
+          if (sock != serverSocket) continue;
           handleServerFrameLocked(frame);
         }
       } catch (InterruptedException e) {
         break;
       } catch (Exception e) {
-        loggedIn = false;
-        hasDistribParent = false;
+        if (sock == null) break;
         synchronized (serverLock) {
+          if (sock != serverSocket) {
+            debugLog("server read stale: " + e);
+            continue;
+          }
+          loggedIn = false;
+          hasDistribParent = false;
           closeQuietly(serverSocket);
           serverSocket = null;
           closeQuietly(distribSocket);
           distribSocket = null;
         }
         debugLog("server read error: " + e);
-        if (running.get()) notifyError(e.getMessage() != null ? e.getMessage() : "Disconnected");
+        if (running.get()) notifyError(formatError(e));
         sleepQuiet(500);
       }
     }
@@ -564,7 +689,15 @@ public final class SoulseekClient extends Thread {
     phaseLog("dl0", true, "login listen=" + reportedListenPort);
     notifyStatus("Connected as " + username);
     notifyConnected();
-    refreshShareAnnouncement();
+    // #region agent log
+    try {
+      agentLog("SoulseekClient.connectAndLoginLocked", "login ok", "H2",
+          new JSONObject().put("listen", listenPort).put("reported", reportedListenPort)
+              .put("nat", lastNatpmp != null ? lastNatpmp.status : "null")
+              .put("hasParent", hasDistribParent));
+    } catch (Exception ignored) {}
+    // #endregion
+    if (sharePolicy.announceShares()) refreshShareAnnouncement();
   }
 
   private void startNatpmpRenewal() {
@@ -650,6 +783,13 @@ public final class SoulseekClient extends Thread {
     debugLog("search token=" + token + " q=" + activeSearchQuery);
     phaseLog("dl1", true, "FileSearch token=" + token);
     notifyStatus("Searching: " + activeSearchQuery);
+    // #region agent log
+    try {
+      agentLog("SoulseekClient.sendSearchLocked", "search sent", "H3",
+          new JSONObject().put("token", token).put("q", activeSearchQuery)
+              .put("loggedIn", loggedIn).put("hasParent", hasDistribParent));
+    } catch (Exception ignored) {}
+    // #endregion
   }
 
   private void failDownload(String reason) {
@@ -791,7 +931,7 @@ public final class SoulseekClient extends Thread {
         Socket direct = null;
         try {
           direct = new Socket();
-          direct.connect(new InetSocketAddress(ep.host, ep.port), 5000);
+          direct.connect(new InetSocketAddress(ep.host, ep.port), PEER_CONNECT_MS);
           direct.setSoTimeout(PEER_READ_TIMEOUT_MS);
           directWinner.offer(direct);
           debugLog("direct download ok " + peerUser + " " + ep.host + ":" + ep.port);
@@ -1144,7 +1284,7 @@ public final class SoulseekClient extends Thread {
         Socket peer = null;
         try {
           peer = new Socket();
-          peer.connect(new InetSocketAddress(host, port), 5000);
+          peer.connect(new InetSocketAddress(host, port), PEER_CONNECT_MS);
           peer.setSoTimeout(PEER_READ_TIMEOUT_MS);
           peer.getOutputStream().write(SoulseekWire.peerInitMessage(SoulseekWire.PEER_INIT_PIERCE,
               SoulseekWire.packUInt32(token)));
@@ -1605,6 +1745,19 @@ public final class SoulseekClient extends Thread {
 
   private void notifyStatus(String msg) {
     if (listener != null) listener.onStatus(msg);
+  }
+
+  private static String formatError(Throwable err) {
+    if (err == null) return "Unknown error";
+    String msg = err.getMessage();
+    if (msg == null || msg.trim().isEmpty()) {
+      return err.getClass().getSimpleName();
+    }
+    return msg;
+  }
+
+  private void agentLog(String location, String message, String hypothesisId, JSONObject data) {
+    ReachDebugLog.log(appContext, location, message, hypothesisId, data);
   }
 
   private void notifyError(String msg) {

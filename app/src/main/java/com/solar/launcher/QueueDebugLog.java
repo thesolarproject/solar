@@ -6,11 +6,11 @@ import org.json.JSONObject;
 
 import java.io.FileOutputStream;
 
-/** Debug-mode NDJSON — pull via adb from /storage/sdcard0/debug-d88428.log */
+/** Debug-mode NDJSON — pull via adb from /storage/sdcard0/debug-d4c6a7.log */
 final class QueueDebugLog {
     private static final String TAG = "SolarQueueDbg";
-    private static final String SESSION = "d88428";
-    private static final String LOG_PATH = "/storage/sdcard0/debug-d88428.log";
+    private static final String SESSION = "d4c6a7";
+    private static final String LOG_PATH = "/storage/sdcard0/debug-d4c6a7.log";
 
     private QueueDebugLog() {}
 

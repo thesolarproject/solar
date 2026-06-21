@@ -1313,6 +1313,19 @@ public class ThemeManager {
         return getThemeBitmap(path);
     }
 
+    /**
+     * Home preview for Solar-only shortcuts: {@code solarConfig.app{Name}} when set;
+     * Podcasts falls back to stock {@code homePageConfig.audiobooks}.
+     */
+    public static Bitmap getSolarAppHomeIcon(Context context, String appName, int defaultResId) {
+        Bitmap solar = getSolarAppIcon(appName);
+        if (solar != null) return solar;
+        if ("Podcasts".equals(appName)) {
+            return getHomeIcon(context, "audiobooks", defaultResId);
+        }
+        return null;
+    }
+
     /** homePageConfig key with stock drawable fallback */
     public static Bitmap getHomeIcon(Context context, String y1Key, int defaultResId) {
         JSONObject home = getCurrentTheme().root.optJSONObject("homePageConfig");

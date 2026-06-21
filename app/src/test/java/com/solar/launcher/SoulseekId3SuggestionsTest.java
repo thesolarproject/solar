@@ -2,14 +2,30 @@ package com.solar.launcher;
 
 import com.solar.launcher.soulseek.SoulseekSearchSuggestions;
 
+import org.junit.After;
 import org.junit.Test;
 
 import java.util.List;
 
 public class SoulseekId3SuggestionsTest {
 
+    @After
+    public void tearDown() {
+        ArtistSeparatorCatalog.resetForTests();
+    }
+
+    private static void loadCatalogWithChaseAndStatus() {
+        try {
+            ArtistSeparatorCatalog.install(ArtistSeparatorCatalog.parse(
+                    "version,split_ampersand\n1,true\n\"Chase & Status\"\n"));
+        } catch (Exception e) {
+            throw new AssertionError(e);
+        }
+    }
+
     @Test
     public void suggestionsFromId3_includesSplitArtistsTitleAlbum() {
+        loadCatalogWithChaseAndStatus();
         List<String> out = SoulseekSearchSuggestions.suggestionsFromId3(
                 "Baddadan", "Chase & Status, Bou, IRAH, Flowdan, Trigga", "Album X", "Drum & Bass");
         if (out.isEmpty()) throw new AssertionError("empty");

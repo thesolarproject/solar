@@ -243,6 +243,28 @@ public class HomeMenuConfigTest {
         }
     }
 
+    @Test
+    public void loadHomeEditorMoveIds_includesMoreWhenEnabled() {
+        HomeMenuConfig.setMoreEnabled(prefs, true);
+        List<String> ids = HomeMenuConfig.loadHomeEditorMoveIds(prefs);
+        if (!ids.contains(HomeMenuConfig.ID_MORE)) {
+            throw new AssertionError("more should be in move list when enabled");
+        }
+    }
+
+    @Test
+    public void moveEditorHome_canMoveMoreTile() {
+        HomeMenuConfig.setMoreEnabled(prefs, true);
+        List<String> before = HomeMenuConfig.loadHomeEditorMoveIds(prefs);
+        int moreIdx = before.indexOf(HomeMenuConfig.ID_MORE);
+        if (moreIdx <= 0) return;
+        HomeMenuConfig.moveEditorHome(prefs, moreIdx, 0);
+        List<String> after = HomeMenuConfig.loadHomeEditorMoveIds(prefs);
+        if (!HomeMenuConfig.ID_MORE.equals(after.get(0))) {
+            throw new AssertionError("more should move to index 0");
+        }
+    }
+
     private static final class MemPrefs implements SharedPreferences {
         final Map<String, Object> map = new HashMap<String, Object>();
 

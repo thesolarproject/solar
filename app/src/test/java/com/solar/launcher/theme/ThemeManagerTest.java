@@ -88,6 +88,26 @@ public class ThemeManagerTest {
     }
 
     @Test
+    public void podcastsHomeIconPrefersSolarConfig() throws Exception {
+        JSONObject root = new JSONObject();
+        root.put("homePageConfig", new JSONObject().put("audiobooks", "Audiobooks_YS.png"));
+        root.put("solarConfig", new JSONObject().put("appPodcasts", "custom_podcasts.png"));
+        ThemeManager.availableThemes.clear();
+        ThemeManager.availableThemes.add(new ThemeManager.ThemeEntry("/tmp", "t", "t", root));
+        if (!ThemeManager.hasThemeSolarConfigKey("appPodcasts")) {
+            throw new AssertionError("appPodcasts should be set");
+        }
+        root.getJSONObject("solarConfig").remove("appPodcasts");
+        ThemeManager.availableThemes.set(0, new ThemeManager.ThemeEntry("/tmp", "t", "t", root));
+        if (ThemeManager.getSolarAppIcon("Podcasts") != null) {
+            throw new AssertionError("unset appPodcasts should not resolve solar icon");
+        }
+        if (ThemeManager.hasThemeSolarConfigKey("appPodcasts")) {
+            throw new AssertionError("empty appPodcasts should not count as set");
+        }
+    }
+
+    @Test
     public void selfCheck() {
         ThemeManager.selfCheck();
     }

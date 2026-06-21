@@ -662,6 +662,7 @@ public final class ThemedContextMenu {
         return rowH + 2;
     }
 
+    /** Fixed 3-row queue panel — browse fills all slots; move mode uses center slot until first/last. */
     private int queueViewportHeight() {
         return queueRowSlotHeight() * QUEUE_MOVE_VISIBLE_ROWS;
     }
@@ -712,6 +713,10 @@ public final class ThemedContextMenu {
     }
 
     /** Scroll offset from absolute queue index — stable before row layout completes. */
+    /**
+     * Fallback scroll offset from queue index — used before row views are laid out.
+     * Prefer {@link #queueBrowseScrollY(int, int, int)} once {@link #findQueueRowByIndex} resolves.
+     */
     private int queueScrollTargetY(int index, int count, int viewport) {
         if (index < 0 || count <= 0 || viewport <= 0) return 0;
         int slotH = queueRowSlotHeight();
@@ -721,6 +726,22 @@ public final class ThemedContextMenu {
         int slot = queueScrollViewportSlot(index, count);
         int maxScroll = queueScrollMaxY();
         return Math.min(Math.max(0, topPad + index * slotH - slot * slotH), maxScroll);
+    }
+
+    /**
+     * Browse-mode scroll — snap the focused row into its viewport slot using laid-out row tops
+     * so three consecutive tracks always fill the panel (no blank slot between neighbours).
+     * Move mode uses the 3-slot ribbon instead; do not call this while {@link #isQueueMoveActive()}.
+     */
+    private int queueBrowseScrollY(int index, int count, int viewport) {
+        applyQueueViewportPadding();
+        int slot = queueScrollViewportSlot(index, count);
+        int slotH = queueRowSlotHeight();
+        View row = findQueueRowByIndex(index);
+        if (row != null && row.getHeight() > 0) {
+            return Math.min(Math.max(0, row.getTop() - slot * slotH), queueScrollMaxY());
+        }
+        return queueScrollTargetY(index, count, viewport);
     }
 
     private void scrollQueueRowToViewportSlotNow(int index) {
@@ -734,9 +755,26 @@ public final class ThemedContextMenu {
         int viewport = itemsScroll.getHeight();
         if (viewport <= 0) return;
         if (queueMode && !isQueueMoveActive()) {
-            applyQueueViewportPadding();
-            int scrollY = queueScrollTargetY(index, count, viewport);
+            int scrollY = queueBrowseScrollY(index, count, viewport);
             itemsScroll.scrollTo(0, scrollY);
+            // #region agent log
+            try {
+                JSONObject d = new JSONObject();
+                d.put("runId", "post-fix");
+                d.put("index", index);
+                d.put("count", count);
+                d.put("viewport", viewport);
+                d.put("scrollY", scrollY);
+                d.put("topPad", itemsHost.getPaddingTop());
+                d.put("childCount", itemsHost.getChildCount());
+                d.put("ribbonActive", queueMoveRibbonActive);
+                d.put("slot", queueScrollViewportSlot(index, count));
+                View row = findQueueRowByIndex(index);
+                d.put("rowTop", row != null ? row.getTop() : -1);
+                QueueDebugLog.log("ThemedContextMenu.scrollQueueRowToViewportSlotNow",
+                        "scrolled", "H3", d);
+            } catch (Exception ignored) {}
+            // #endregion
             SolarAdbTest.queueScroll(focusIndex, count,
                     itemsHost.getPaddingTop(), itemsScroll.getScrollY(), queueScrollMaxY(),
                     queueScrollViewportSlot(index, count), queueNowPlayingIndex());
@@ -759,14 +797,13 @@ public final class ThemedContextMenu {
         scrollQueueRowToViewportSlotNow(index);
         if (itemsScroll == null || itemsHost == null) return;
         if (queueMode && !isQueueMoveActive()) {
-            if (itemsScroll.getHeight() <= 0) {
-                itemsHost.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        scrollQueueRowToViewportSlotNow(index);
-                    }
-                });
-            }
+            // Browse: padding / virtual window updates shift row tops — re-scroll after layout.
+            itemsHost.post(new Runnable() {
+                @Override
+                public void run() {
+                    scrollQueueRowToViewportSlotNow(index);
+                }
+            });
             return;
         }
         itemsHost.post(new Runnable() {
@@ -1622,7 +1659,7 @@ public final class ThemedContextMenu {
         flashQueueConfirm(placedIndex);
     }
 
-    /** Confirm flash after move — list should already be rebuilt in browse mode. */
+    /** Confirm flash after move — restore browse list (MainActivity also rebuilds; belt-and-braces). */
     public void flashQueueConfirm(int placedIndex) {
         if (!queueMode || itemsHost == null) {
             queueMoveFrom = -1;
@@ -1630,9 +1667,14 @@ public final class ThemedContextMenu {
         }
         clearQueueConfirm();
         queueMoveFrom = -1;
+        exitQueueMoveRibbon();
         focusIndex = Math.max(0, Math.min(placedIndex, Math.max(0, queueRows.length - 1)));
         focusZone = FocusZone.TIER_CONTENT;
         queueConfirmAtIndex = focusIndex;
+        queueBrowseWindowStart = 0;
+        rebuildQueueList();
+        updateListHeightToContent();
+        scrollQueueViewportForIndex(focusIndex);
         refreshAll();
         animateQueueConfirmCheckmark(focusIndex);
     }
@@ -1884,9 +1926,48 @@ public final class ThemedContextMenu {
     }
 
     private void rebuildQueueList() {
+        // #region agent log
+        try {
+            JSONObject d = new JSONObject();
+            d.put("itemsHostNull", itemsHost == null);
+            d.put("queueMode", queueMode);
+            d.put("moveActive", isQueueMoveActive());
+            d.put("moveFrom", queueMoveFrom);
+            d.put("ribbonActive", queueMoveRibbonActive);
+            d.put("rowCount", queueRows != null ? queueRows.length : 0);
+            d.put("childBefore", itemsHost != null ? itemsHost.getChildCount() : -1);
+            QueueDebugLog.log("ThemedContextMenu.rebuildQueueList", "entry", "H2-H4", d);
+        } catch (Exception ignored) {}
+        // #endregion
         if (itemsHost == null || !queueMode || isQueueMoveActive()) return;
         if (useQueueBrowseVirtual()) rebuildQueueBrowseWindow();
         else rebuildQueueRows();
+        // #region agent log
+        try {
+            JSONObject d = new JSONObject();
+            d.put("virtual", useQueueBrowseVirtual());
+            d.put("childAfter", itemsHost.getChildCount());
+            d.put("scrollH", itemsScroll != null ? itemsScroll.getHeight() : 0);
+            if (queueRows.length > 0 && itemsHost.getChildCount() > 0) {
+                View first = null;
+                for (int c = 0; c < itemsHost.getChildCount(); c++) {
+                    View row = itemsHost.getChildAt(c);
+                    if (row.getTag() instanceof Integer
+                            && ((Integer) row.getTag()).intValue() >= 0) {
+                        first = row;
+                        break;
+                    }
+                }
+                if (first != null) {
+                    TextView t = (TextView) first.findViewWithTag(TAG_QUEUE_TITLE);
+                    d.put("firstIdx", first.getTag());
+                    d.put("firstText", t != null ? t.getText().toString() : "");
+                    d.put("firstTextColor", t != null ? t.getCurrentTextColor() : 0);
+                }
+            }
+            QueueDebugLog.log("ThemedContextMenu.rebuildQueueList", "done", "H2-H4-H5", d);
+        } catch (Exception ignored) {}
+        // #endregion
     }
 
     private int queueBrowseVisibleRows() {
@@ -2130,9 +2211,28 @@ public final class ThemedContextMenu {
 
     private void updateListHeightToContent() {
         if (itemsScroll == null || itemsHost == null) return;
-        if (queueMode && itemsHost.getPaddingTop() != 0) {
+        int padBefore = itemsHost.getPaddingTop();
+        // Browse: keep viewport padding stable through measure+scroll (clearing it caused slot gaps).
+        // Move ribbon: padding must stay zero — the 3-slot ribbon owns the whole viewport.
+        if (queueMode && !isQueueMoveActive()) {
+            applyQueueViewportPadding();
+        } else if (queueMode && itemsHost.getPaddingTop() != 0) {
             itemsHost.setPadding(0, 0, 0, 0);
         }
+        // #region agent log
+        if (queueMode) {
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("padBefore", padBefore);
+                d.put("padAfter", itemsHost.getPaddingTop());
+                d.put("childCount", itemsHost.getChildCount());
+                d.put("scrollY", itemsScroll.getScrollY());
+                d.put("scrollH", itemsScroll.getHeight());
+                d.put("rowCount", queueRows != null ? queueRows.length : 0);
+                QueueDebugLog.log("ThemedContextMenu.updateListHeightToContent", "queue layout", "H5", d);
+            } catch (Exception ignored) {}
+        }
+        // #endregion
         itemsHost.measure(
                 View.MeasureSpec.makeMeasureSpec(panelWidthPx, View.MeasureSpec.AT_MOST),
                 View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
@@ -2713,8 +2813,9 @@ public final class ThemedContextMenu {
             focusIndex = next;
             if (queueMode) {
                 ensureQueueBrowseWindowForFocus();
+                // Rebuild via rebuildQueueList — picks full list vs virtual window by queue size.
                 if (findQueueRowByIndex(focusIndex) == null) {
-                    rebuildQueueBrowseWindow();
+                    rebuildQueueList();
                 }
                 applyQueueViewportPadding();
                 if (prev >= 0 && prev != focusIndex) refreshQueueRowAt(prev);

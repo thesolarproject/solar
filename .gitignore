@@ -15,7 +15,20 @@
 local.properties
 /reference/
 /.cursor
+# Local dev / adb / emulator scripts (not used by CI — see .github/workflows/build-release.yml)
+/scripts/audit_strings.sh
+/scripts/clean_install_system.sh
+/scripts/ensure_emulator_network.sh
+/scripts/install-y1-init.sh
+/scripts/install.sh
+/scripts/install_modern_cacerts.sh
+/scripts/install_release_adb.sh
+/scripts/push-y1-system-prep.sh
+/scripts/run_emulator.sh
+/scripts/test_context_queue_adb.sh
+/scripts/test_podcast_emulator.sh
 /scripts/test_soulseek_device.sh
+/solar-rom/scripts/bump-nightly-version.sh
 
 # Stray docs / screenshots at repo root
 /docs/

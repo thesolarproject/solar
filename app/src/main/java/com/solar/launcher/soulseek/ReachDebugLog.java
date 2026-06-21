@@ -1,4 +1,4 @@
-package com.solar.launcher;
+package com.solar.launcher.soulseek;
 
 import android.content.Context;
 import android.util.Log;
@@ -8,13 +8,13 @@ import org.json.JSONObject;
 import java.io.File;
 import java.io.FileWriter;
 
-/** Debug-mode NDJSON logger — session 6cc566; pull via adb from /storage/sdcard0/. */
-final class DebugAgentLog {
-    private static final String TAG = "SolarNetDbg";
-    private static final String FILE = "debug-6cc566.log";
-    private static final String SESSION = "6cc566";
+/** Debug-mode NDJSON logger — session 170f59; pull via adb from app files dir. */
+final class ReachDebugLog {
+    private static final String TAG = "SolarReachDbg";
+    private static final String FILE = "debug-170f59.log";
+    private static final String SESSION = "170f59";
 
-    private DebugAgentLog() {}
+    private ReachDebugLog() {}
 
     static void log(Context ctx, String location, String message, String hypothesisId, JSONObject data) {
         try {
@@ -28,13 +28,6 @@ final class DebugAgentLog {
             if (data != null) o.put("data", data);
             String line = o.toString();
             Log.i(TAG, line);
-            try {
-                File sdcard = new File("/storage/sdcard0", FILE);
-                FileWriter w = new FileWriter(sdcard, true);
-                w.write(line);
-                w.write('\n');
-                w.close();
-            } catch (Exception ignored2) {}
             if (ctx != null) {
                 File f = new File(ctx.getFilesDir(), FILE);
                 FileWriter w = new FileWriter(f, true);
@@ -42,6 +35,13 @@ final class DebugAgentLog {
                 w.write('\n');
                 w.close();
             }
+            try {
+                File sdcard = new File("/storage/sdcard0", FILE);
+                FileWriter w = new FileWriter(sdcard, true);
+                w.write(line);
+                w.write('\n');
+                w.close();
+            } catch (Exception ignored2) {}
         } catch (Exception ignored) {}
     }
 }

@@ -62,6 +62,7 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 import java.io.File;
@@ -158,11 +159,10 @@ public class MainActivity extends Activity {
     private String virtualQueryType = "";
     private String virtualQueryValue = "";
     private String virtualQueryArtist = "";
-    private static final int LIB_SORT_TITLE = 0;
-    private static final int LIB_SORT_ARTIST = 1;
-    private static final int LIB_SORT_ALBUM = 2;
-    private static final int LIB_SORT_DATE = 3;
-    private int librarySortMode = LIB_SORT_TITLE;
+    private String artistOwnAlbumCacheKey = "";
+    private boolean artistOwnAlbumCacheValue;
+    private LibraryBrowsePrefs libraryBrowsePrefs;
+    private int libraryBrowseSettingsMenuFocusIndex;
     private int appsListGen = 0;
     private long suppressListClickUntil = 0;
     private List<PlaylistManager.Entry> libraryPlaylists = new ArrayList<PlaylistManager.Entry>();
@@ -176,13 +176,19 @@ public class MainActivity extends Activity {
         String artist;
         String album;
         String genre;
+        String albumArtist;
 
         public SongItem(File f, String t, String a, String al, String g) {
+            this(f, t, a, al, g, "");
+        }
+
+        public SongItem(File f, String t, String a, String al, String g, String aa) {
             file = f;
             title = t;
             artist = a;
             album = al;
             genre = g != null && g.trim().length() > 0 ? g.trim() : "Unknown Genre";
+            albumArtist = aa != null ? aa.trim() : "";
         }
     }
     // 💡 [초고속 엔진] 수천 곡을 버티기 위한 재활용 리스트뷰와 기존 스크롤뷰
@@ -263,10 +269,32 @@ public class MainActivity extends Activity {
     private int homeScreenEditorMenuFocusIndex = 11;
     private int homeScreenEditorFocusIndex = 1;
     private int homeScreenOrderFocusIndex = 1;
-    private String homeScreenMoveModeId = null;
-    private String homeMoreMoveModeId = null;
+    private int homeEditorMoveIndex = -1;
+    private int homeEditorMovePickIndex = -1;
+    private java.util.List<String> homeEditorMoveSnapshot = null;
+    private boolean homeEditorMoveDirty = false;
+    private final QueueMoveWheelFilter homeEditorMoveWheelFilter = new QueueMoveWheelFilter();
+    private String homeEditorMoveHoldPreviewKey = null;
+    private ScrollView homeEditorMoveScroll = null;
+    private LinearLayout homeEditorMoveStripHost = null;
+    private MoveStripController homeEditorMoveStrip = null;
+    private int moreEditorMoveIndex = -1;
+    private int moreEditorMovePickIndex = -1;
+    private java.util.List<String> moreEditorMoveSnapshot = null;
+    private boolean moreEditorMoveDirty = false;
+    private final QueueMoveWheelFilter moreEditorMoveWheelFilter = new QueueMoveWheelFilter();
+    private String moreEditorMoveHoldPreviewKey = null;
+    private ScrollView moreEditorMoveScroll = null;
+    private LinearLayout moreEditorMoveStripHost = null;
+    private MoveStripController moreEditorMoveStrip = null;
     private int playlistMoveFrom = -1;
+    private int playlistMovePickIndex = -1;
+    private java.util.List<File> playlistMoveSnapshot = null;
     private boolean playlistMoveDirty = false;
+    private final QueueMoveWheelFilter playlistMoveWheelFilter = new QueueMoveWheelFilter();
+    private FrameLayout playlistMoveOverlay = null;
+    private ScrollView playlistMoveScroll = null;
+    private MoveStripController playlistMoveStrip = null;
     private PlaylistManager.Entry playlistViewEntry = null;
     private static final int PODCAST_UI_SEARCH = 0;
     private static final int PODCAST_UI_SHOWS = 1;
@@ -428,6 +456,7 @@ public class MainActivity extends Activity {
     private boolean podcastRecoveryInFlight = false;
     private boolean soulseekAutoDownloadPending = false;
     private boolean soulseekHideFlac = true;
+    private boolean soulseekSharingEnabled = true;
     private int soulseekListenPort = 0;
     private int keyboardPurpose = KEYBOARD_WIFI;
     private int keyboardReturnState = STATE_WIFI;
@@ -439,6 +468,7 @@ public class MainActivity extends Activity {
     private String pendingSoulseekUser = "";
     private int y1RowWidthPx;
     private int y1RowHeightPx;
+    private int y1LibraryRowHeightPx;
     private int listRowWidthPx;
     private int y1ThemeCoverHeightPx;
     private int y1BatteryIconHeightPx;
@@ -531,6 +561,8 @@ public class MainActivity extends Activity {
             if (themedContextMenu != null && themedContextMenu.isShowing()) {
                 if (contextMenuVolumeOnly) {
                     expandVolumeOverlayToFullContext();
+                } else {
+                    dismissThemedContextMenu();
                 }
                 return;
             }
@@ -1111,6 +1143,7 @@ public class MainActivity extends Activity {
 
         migrateLegacyPrefs();
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        libraryBrowsePrefs = new LibraryBrowsePrefs(this);
         ensurePrivilegedPermissionsAsync();
 
         ThemeManager.ensureBundledDefault(this);
@@ -1169,6 +1202,8 @@ public class MainActivity extends Activity {
         try { isAutoFetchEnabled = prefs.getBoolean("auto_fetch", true); } catch (Exception e) {} // 🚀 [추가]
         try { currentTimeoutIndex = prefs.getInt("timeout_idx", 1); } catch (Exception e) {}
 
+        ArtistSeparatorCatalog.ensureLoaded(this);
+
         try {
             currentSystemBrightness = Settings.System.getInt(getContentResolver(), Settings.System.SCREEN_BRIGHTNESS, 255);
         } catch (Exception e) {}
@@ -1207,6 +1242,7 @@ public class MainActivity extends Activity {
                     libraryScanPaths.clear();
                     libraryScanMetaKeys.clear();
                     buildCustomLibrary(rootFolder);
+                    normalizeLibraryAlbumTitles();
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
@@ -1522,6 +1558,9 @@ public class MainActivity extends Activity {
         try { statusBarMatchFont = prefs.getBoolean("status_bar_match_font", true); } catch (Exception e) {}
         ThemeManager.setStatusBarMatchItemText(statusBarMatchFont);
         try { soulseekHideFlac = prefs.getBoolean(SoulseekAccount.PREF_HIDE_FLAC, true); } catch (Exception e) {}
+        try {
+            soulseekSharingEnabled = prefs.getBoolean(SoulseekAccount.PREF_SHARING_ENABLED, true);
+        } catch (Exception e) {}
         updateStatusBarTitle();
 
         btnScanBt.setOnClickListener(new View.OnClickListener() {
@@ -2052,6 +2091,12 @@ public class MainActivity extends Activity {
     private static final String TAG_REARRANGE_LABEL = "rearrange_label";
     private static final String TAG_REARRANGE_GRIP = "rearrange_grip";
     private static final String TAG_REARRANGE_ARROW = "rearrange_arrow";
+    private static final String TAG_LIB_TITLE = "lib_title";
+    private static final String TAG_LIB_SUB = "lib_sub";
+    private static final String TAG_LIB_GRIP = "lib_grip";
+    private static final String TAG_LIB_PP = "lib_pp";
+    private static final String TAG_LIB_CONFIRM = "lib_confirm";
+    private static final String TAG_LIB_DROP = "lib_drop";
 
     private int rearrangeRightSlotWidthPx() {
         int[] arrowLayout = y1ArrowLayout(ThemeManager.getScaledItemRightArrow(y1RowHeightPx));
@@ -2156,47 +2201,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void refreshHomeArrangeMoveUi(boolean moreMenu) {
-        String moveId = moreMenu ? homeMoreMoveModeId : homeScreenMoveModeId;
-        for (int i = 0; i < containerSettingsItems.getChildCount(); i++) {
-            View v = containerSettingsItems.getChildAt(i);
-            if (!(v instanceof LinearLayout)) continue;
-            Object tag = v.getTag();
-            if (!(tag instanceof String)) continue;
-            String key = (String) tag;
-            if (!key.startsWith("home.shortcut.")) continue;
-            String id = key.substring("home.shortcut.".length());
-            bindRearrangeRowAdornment((LinearLayout) v, id.equals(moveId), v.hasFocus());
-        }
-    }
-
-    private void reorderHomeArrangeRows(boolean moreMenu) {
-        List<String> ids = moreMenu ? HomeMenuConfig.loadMoreOrderIds(prefs)
-                : HomeMenuConfig.loadHomeOrderIds(prefs);
-        java.util.HashMap<String, View> rowByKey = new java.util.HashMap<String, View>();
-        View moreRow = null;
-        for (int i = 1; i < containerSettingsItems.getChildCount(); i++) {
-            View v = containerSettingsItems.getChildAt(i);
-            Object tag = v.getTag();
-            if (!(tag instanceof String)) continue;
-            String key = (String) tag;
-            if (RowKeys.HOME_MORE.equals(key)) {
-                moreRow = v;
-            } else if (key.startsWith("home.shortcut.")) {
-                rowByKey.put(key, v);
-            }
-        }
-        while (containerSettingsItems.getChildCount() > 1) {
-            containerSettingsItems.removeViewAt(1);
-        }
-        for (String id : ids) {
-            HomeMenuConfig.Entry e = HomeMenuConfig.find(id);
-            if (e == null) continue;
-            View row = rowByKey.get(RowKeys.homeShortcut(id));
-            if (row != null) containerSettingsItems.addView(row);
-        }
-        if (!moreMenu && moreRow != null) containerSettingsItems.addView(moreRow);
-    }
 
     private int keyboardRowKind() {
         if (keyboardPurpose == KEYBOARD_WIFI || keyboardReturnState == STATE_SETTINGS) {
@@ -3122,38 +3126,28 @@ public class MainActivity extends Activity {
         if (!SettingsScreens.isHome(settingsSubScreenKey)) {
             return false;
         }
-        if (SettingsScreens.HOME_ARRANGE.equals(settingsSubScreenKey)) {
-            if (homeScreenMoveModeId != null) {
-                homeScreenMoveModeId = null;
-                refreshHomeArrangeMoveUi(false);
+        if (SettingsScreens.HOME.equals(settingsSubScreenKey)) {
+            if (isHomeEditorMoveActive()) {
+                cancelHomeEditorMove(true);
+                return true;
+            }
+            lastSettingsFocusIndex = homeScreenEditorMenuFocusIndex;
+            returnToSettingsParent();
+            return true;
+        }
+        if (SettingsScreens.HOME_MORE.equals(settingsSubScreenKey)) {
+            if (isMoreEditorMoveActive()) {
+                cancelMoreEditorMove(true);
                 return true;
             }
             buildHomeScreenEditorUI();
             return true;
         }
-        if (SettingsScreens.HOME_MORE_ARRANGE.equals(settingsSubScreenKey)) {
-            if (homeMoreMoveModeId != null) {
-                homeMoreMoveModeId = null;
-                refreshHomeArrangeMoveUi(true);
-                return true;
-            }
-            buildHomeScreenArrangeUI();
-            return true;
-        }
-        if (SettingsScreens.HOME.equals(settingsSubScreenKey)) {
-            lastSettingsFocusIndex = homeScreenEditorMenuFocusIndex;
-            returnToSettingsParent();
-            return true;
-        }
         return false;
     }
 
-    private boolean isHomeScreenArrangeScreen() {
-        return SettingsScreens.HOME_ARRANGE.equals(settingsSubScreenKey);
-    }
-
-    private boolean isHomeMoreArrangeScreen() {
-        return SettingsScreens.HOME_MORE_ARRANGE.equals(settingsSubScreenKey);
+    private boolean isHomeMoreEditorScreen() {
+        return SettingsScreens.HOME_MORE.equals(settingsSubScreenKey);
     }
 
     // ponytail: Y1 wheel key→move mapping may change if driver remaps axes
@@ -3227,7 +3221,7 @@ public class MainActivity extends Activity {
                 }
             }
         }
-        return homeScreenMoveModeId;
+        return null;
     }
 
     private void restoreSoulseekSettingsScreen(String subKey) {
@@ -3325,6 +3319,15 @@ public class MainActivity extends Activity {
         }
         if (SettingsScreens.THEME_PICKER.equals(settingsSubScreenKey)) {
             returnToSettingsParent();
+            return true;
+        }
+        return false;
+    }
+
+    private boolean handleLibraryBrowseSettingsBack() {
+        if (SettingsScreens.LIBRARY_BROWSE.equals(settingsSubScreenKey)) {
+            lastSettingsFocusIndex = libraryBrowseSettingsMenuFocusIndex;
+            buildSettingsUI();
             return true;
         }
         return false;
@@ -4016,6 +4019,7 @@ public class MainActivity extends Activity {
         float density = getResources().getDisplayMetrics().density;
         y1RowWidthPx = (int) (getResources().getDimension(R.dimen.y1_menu_width));
         y1RowHeightPx = (int) (getResources().getDimension(R.dimen.y1_menu_item_height));
+        y1LibraryRowHeightPx = (int) (getResources().getDimension(R.dimen.y1_library_row_height));
         listRowWidthPx = (int) (getResources().getDimension(R.dimen.y1_screen_width) - 20 * density);
         y1ThemeCoverHeightPx = (int) (getResources().getDimension(R.dimen.y1_theme_cover_height));
         y1BatteryIconHeightPx = (int) (getResources().getDimension(R.dimen.y1_battery_icon_height));
@@ -4157,7 +4161,7 @@ public class MainActivity extends Activity {
             return ThemeManager.getHomeIcon(this, e.stockIconKey, e.defaultResId);
         }
         if (e.solarAppName != null) {
-            return ThemeManager.getSolarAppIcon(e.solarAppName);
+            return ThemeManager.getSolarAppHomeIcon(this, e.solarAppName, e.defaultResId);
         }
         return ThemeManager.getCustomIcon("icon_default_album.png", this, e.defaultResId);
     }
@@ -4904,39 +4908,21 @@ public class MainActivity extends Activity {
             }
         } else if (currentScreenState != STATE_BRIGHTNESS && currentScreenState != STATE_STORAGE
                 && currentScreenState != STATE_PLAYER) {
-            if (currentScreenState == STATE_SETTINGS && isHomeMoreArrangeScreen()) {
-                clickFeedback();
-                if (homeMoreMoveModeId == null) {
-                    String id = homeScreenOrderFocusedId();
-                    if (id != null) {
-                        View focused = getCurrentFocus();
-                        if (focused != null) {
-                            homeScreenOrderFocusIndex = containerSettingsItems.indexOfChild(focused);
-                        }
-                        homeMoreMoveModeId = id;
-                        refreshHomeArrangeMoveUi(true);
-                    }
-                } else {
-                    homeMoreMoveModeId = null;
-                    refreshHomeArrangeMoveUi(true);
+            if (currentScreenState == STATE_SETTINGS && SettingsScreens.HOME.equals(settingsSubScreenKey)
+                    && !isHomeEditorMoveActive()) {
+                View c = getCurrentFocus();
+                if (c != null) {
+                    if (System.currentTimeMillis() < suppressListClickUntil) return;
+                    c.performClick();
                 }
                 return;
             }
-            if (currentScreenState == STATE_SETTINGS && isHomeScreenArrangeScreen()) {
-                clickFeedback();
-                if (homeScreenMoveModeId == null) {
-                    String id = homeScreenOrderFocusedId();
-                    if (id != null) {
-                        View focused = getCurrentFocus();
-                        if (focused != null) {
-                            homeScreenOrderFocusIndex = containerSettingsItems.indexOfChild(focused);
-                        }
-                        homeScreenMoveModeId = id;
-                        refreshHomeArrangeMoveUi(false);
-                    }
-                } else {
-                    homeScreenMoveModeId = null;
-                    refreshHomeArrangeMoveUi(false);
+            if (currentScreenState == STATE_SETTINGS && isHomeMoreEditorScreen()
+                    && !isMoreEditorMoveActive()) {
+                View c = getCurrentFocus();
+                if (c != null) {
+                    if (System.currentTimeMillis() < suppressListClickUntil) return;
+                    c.performClick();
                 }
                 return;
             }
@@ -6662,25 +6648,31 @@ public class MainActivity extends Activity {
         }
         if (rowKey != null && rowKey.startsWith("home.shortcut.")) {
             String id = rowKey.substring("home.shortcut.".length());
-            if (isHomeScreenArrangeScreen() || isHomeMoreArrangeScreen()) {
-                List<String> orderIds = isHomeMoreArrangeScreen()
-                        ? HomeMenuConfig.loadMoreOrderIds(prefs)
-                        : HomeMenuConfig.loadHomeOrderIds(prefs);
+            if (rowKey.equals(homeEditorMoveHoldPreviewKey) || rowKey.equals(moreEditorMoveHoldPreviewKey)) {
+                return getString(R.string.home_screen_move_grip);
+            }
+            if (isHomeEditorMoveActive() && SettingsScreens.HOME.equals(settingsSubScreenKey)) {
+                java.util.List<String> orderIds = HomeMenuConfig.loadHomeEditorMoveIds(prefs);
                 int idx = orderIds.indexOf(id);
                 if (idx >= 0) {
                     return getString(R.string.common_position_format, idx + 1, orderIds.size());
                 }
-                if (homeScreenMoveModeId != null && id.equals(homeScreenMoveModeId)) {
-                    return getString(R.string.home_screen_move_mode);
+                return getString(R.string.home_screen_move_mode);
+            }
+            if (isMoreEditorMoveActive() && isHomeMoreEditorScreen()) {
+                java.util.List<String> orderIds = HomeMenuConfig.loadMoreOrderIds(prefs);
+                int idx = orderIds.indexOf(id);
+                if (idx >= 0) {
+                    return getString(R.string.common_position_format, idx + 1, orderIds.size());
                 }
-                if (homeMoreMoveModeId != null && id.equals(homeMoreMoveModeId)) {
-                    return getString(R.string.home_screen_move_mode);
-                }
+                return getString(R.string.home_screen_move_mode);
             }
             HomeMenuConfig.Entry e = HomeMenuConfig.find(id);
             if (e == null) return "";
-            if (e.required) return getString(R.string.home_screen_move);
-            if (SettingsScreens.HOME.equals(settingsSubScreenKey) && !isHomeScreenArrangeScreen()) {
+            if (SettingsScreens.HOME.equals(settingsSubScreenKey)) {
+                return stateOnOff(HomeMenuConfig.isShortcutEnabled(prefs, id));
+            }
+            if (isHomeMoreEditorScreen()) {
                 return stateOnOff(HomeMenuConfig.isShortcutEnabled(prefs, id));
             }
             if (HomeMenuConfig.ID_GET_THEMES.equals(id) || HomeMenuConfig.ID_THEMES.equals(id)) {
@@ -6690,14 +6682,16 @@ public class MainActivity extends Activity {
             if (HomeMenuConfig.ID_PHOTOS.equals(id)) return getString(R.string.home_screen_preview_photos);
             return stateOnOff(HomeMenuConfig.isShortcutEnabled(prefs, id));
         }
-        if (RowKeys.HOME_MORE.equals(rowKey)) return stateOnOff(HomeMenuConfig.isMoreEnabled(prefs));
-        if (RowKeys.HOME_ARRANGE.equals(rowKey)) return "";
-        if (SettingsScreens.isHome(settingsSubScreenKey)) {
-            if (isHomeScreenArrangeScreen() && homeScreenMoveModeId != null
-                    && RowKeys.homeShortcut(homeScreenMoveModeId).equals(rowKey)) {
+        if (RowKeys.HOME_MORE.equals(rowKey)) {
+            if (rowKey.equals(homeEditorMoveHoldPreviewKey)) {
+                return getString(R.string.home_screen_move_grip);
+            }
+            if (isHomeEditorMoveActive()) {
                 return getString(R.string.home_screen_move_mode);
             }
+            return stateOnOff(HomeMenuConfig.isMoreEnabled(prefs));
         }
+        if (RowKeys.HOME_MANAGE_MORE.equals(rowKey)) return "";
         if (SettingsScreens.SOULSEEK.equals(settingsSubScreenKey)) {
             if (RowKeys.SOULSEEK_ACCOUNT.equals(rowKey)) {
                 return SoulseekAccount.displayLabel(SoulseekAccount.load(prefs));
@@ -6707,6 +6701,7 @@ public class MainActivity extends Activity {
             if (RowKeys.SOULSEEK_ABOUT.equals(rowKey)) return getString(R.string.soulseek_preview_about);
             if (RowKeys.SOULSEEK_REGENERATE.equals(rowKey)) return getString(R.string.soulseek_preview_regenerate);
             if (RowKeys.SOULSEEK_HIDE_FLAC.equals(rowKey)) return stateOnOff(soulseekHideFlac);
+            if (RowKeys.SOULSEEK_SHARING.equals(rowKey)) return stateOnOff(soulseekSharingEnabled);
         }
         if (RowKeys.SOULSEEK_ACCOUNT.equals(rowKey) && SettingsScreens.isSoulseek(settingsSubScreenKey)) {
             return SoulseekAccount.displayLabel(SoulseekAccount.load(prefs));
@@ -6719,6 +6714,25 @@ public class MainActivity extends Activity {
         if (RowKeys.LANG_SYSTEM.equals(rowKey)) return "";
         if (RowKeys.LANG_EN.equals(rowKey) || RowKeys.LANG_KO.equals(rowKey)) return "";
         if (RowKeys.STATUS_BAR_MATCH_FONT.equals(rowKey)) return stateOnOff(statusBarMatchFont);
+        if (SettingsScreens.LIBRARY_BROWSE.equals(settingsSubScreenKey)) {
+            if (RowKeys.LIB_SPLIT_CREDITS.equals(rowKey)) return stateOnOff(libraryBrowsePrefs.splitCredits());
+            if (RowKeys.LIB_NORM_ALBUM.equals(rowKey)) return stateOnOff(libraryBrowsePrefs.normalizeAlbumCase());
+            if (RowKeys.LIB_NORM_HONOR.equals(rowKey)) return stateOnOff(libraryBrowsePrefs.normalizeHonorifics());
+            if (RowKeys.LIB_GUEST_MODE.equals(rowKey)) {
+                return getString(LibraryBrowsePrefs.guestBrowseModeLabelRes(libraryBrowsePrefs.guestBrowseMode()));
+            }
+            if (RowKeys.LIB_ARTIST_FILTER.equals(rowKey)) {
+                return getString(LibraryBrowsePrefs.artistFilterLabelRes(libraryBrowsePrefs.artistFilter()));
+            }
+            if (RowKeys.LIB_ARTIST_SORT.equals(rowKey)) {
+                return getString(LibraryBrowsePrefs.artistSortLabelRes(libraryBrowsePrefs.artistSort()));
+            }
+            if (RowKeys.LIB_SONG_SORT.equals(rowKey)) {
+                return getString(LibraryBrowsePrefs.songSortLabelRes(libraryBrowsePrefs.songSort()));
+            }
+            if (RowKeys.LIB_ALBUM_SUB.equals(rowKey)) return stateOnOff(libraryBrowsePrefs.albumOwnerSubtitles());
+            if (RowKeys.LIB_GUEST_SUB.equals(rowKey)) return stateOnOff(libraryBrowsePrefs.guestSongSubtitles());
+        }
         // ponytail: Reach blurb only in Reach settings sub-panes — home preview uses appReach icon
         if (RowKeys.SOULSEEK.equals(rowKey)) return "";
         return "";
@@ -6942,7 +6956,7 @@ public class MainActivity extends Activity {
             String hint = homeShortcutConnectivityHint(id);
             if (hint != null) {
                 stateText = hint;
-            } else if (SettingsScreens.HOME.equals(settingsSubScreenKey) && !isHomeScreenArrangeScreen()) {
+            } else if (SettingsScreens.HOME.equals(settingsSubScreenKey) || isHomeMoreEditorScreen()) {
                 if (HomeMenuConfig.ID_THEMES.equals(id) || HomeMenuConfig.ID_GET_THEMES.equals(id)) {
                     stateText = getString(R.string.home_screen_preview_themes);
                 } else if (HomeMenuConfig.ID_VIDEOS.equals(id)) {
@@ -6976,6 +6990,8 @@ public class MainActivity extends Activity {
             return true;
         }
         if (isVirtualPlaylistView()) return true;
+        if (isHomeEditorMoveActive() || isMoreEditorMoveActive()) return true;
+        if (homeEditorMoveHoldPreviewKey != null || moreEditorMoveHoldPreviewKey != null) return true;
         return false;
     }
 
@@ -6991,6 +7007,17 @@ public class MainActivity extends Activity {
             return contextQueueMoveFrom < 0 && isContextQueueListFocused();
         }
         if (isVirtualPlaylistView()) return playlistMoveFrom < 0;
+        if (currentScreenState == STATE_SETTINGS && SettingsScreens.HOME.equals(settingsSubScreenKey)
+                && !isHomeEditorMoveActive()) {
+            String rowKey = focusedSettingsRowKey();
+            return homeEditorMoveIndexForRowKey(rowKey) >= 0 || RowKeys.HOME_MORE.equals(rowKey);
+        }
+        if (currentScreenState == STATE_SETTINGS && isHomeMoreEditorScreen() && !isMoreEditorMoveActive()) {
+            String rowKey = focusedSettingsRowKey();
+            if (!isHomeEditorShortcutRow(rowKey)) return false;
+            String id = rowKey.substring("home.shortcut.".length());
+            return HomeMenuConfig.loadMoreOrderIds(prefs).contains(id);
+        }
         return false;
     }
 
@@ -7002,6 +7029,18 @@ public class MainActivity extends Activity {
         }
         if (isVirtualPlaylistView()) {
             handlePlaylistListCenterActivate(true);
+            return;
+        }
+        if (currentScreenState == STATE_SETTINGS && SettingsScreens.HOME.equals(settingsSubScreenKey)) {
+            clearHomeEditorMoveHoldPreview();
+            handleHomeEditorCenterActivate(true);
+            centerMovePickHandled = true;
+            return;
+        }
+        if (currentScreenState == STATE_SETTINGS && isHomeMoreEditorScreen()) {
+            clearMoreEditorMoveHoldPreview();
+            handleMoreEditorCenterActivate(true);
+            centerMovePickHandled = true;
         }
     }
 
@@ -7019,6 +7058,15 @@ public class MainActivity extends Activity {
             if (isKeyboardDelSelected()) {
                 clockHandler.postDelayed(keyboardDelRepeatRunnable, 80);
             } else if (canScheduleCenterMovePick()) {
+                String rowKey = focusedSettingsRowKey();
+                if (SettingsScreens.HOME.equals(settingsSubScreenKey) && !isHomeEditorMoveActive()) {
+                    if (isHomeEditorShortcutRow(rowKey) || RowKeys.HOME_MORE.equals(rowKey)) {
+                        setHomeEditorMoveHoldPreview(rowKey);
+                    }
+                } else if (isHomeMoreEditorScreen() && !isMoreEditorMoveActive()
+                        && isHomeEditorShortcutRow(rowKey)) {
+                    setMoreEditorMoveHoldPreview(rowKey);
+                }
                 clockHandler.postDelayed(centerMovePickRunnable, CENTER_MOVE_HOLD_MS);
             } else if (fromContextMenu && themedContextMenu != null
                     && themedContextMenu.focusZone() == ThemedContextMenu.FocusZone.QUICK_BAR) {
@@ -7090,6 +7138,28 @@ public class MainActivity extends Activity {
             centerMovePickHandled = false;
             return true;
         }
+        if (currentScreenState == STATE_SETTINGS && SettingsScreens.HOME.equals(settingsSubScreenKey)) {
+            clearHomeEditorMoveHoldPreview();
+            if (isHomeEditorMoveActive()) {
+                if (!centerMovePickHandled) {
+                    confirmHomeEditorMove();
+                    clickFeedback();
+                }
+                centerMovePickHandled = false;
+                return true;
+            }
+        }
+        if (currentScreenState == STATE_SETTINGS && isHomeMoreEditorScreen()) {
+            clearMoreEditorMoveHoldPreview();
+            if (isMoreEditorMoveActive()) {
+                if (!centerMovePickHandled) {
+                    confirmMoreEditorMove();
+                    clickFeedback();
+                }
+                centerMovePickHandled = false;
+                return true;
+            }
+        }
         centerMovePickHandled = false;
         if (heldMs >= CENTER_SLEEP_HOLD_MS) {
             performScreenSleep(false);
@@ -7125,8 +7195,24 @@ public class MainActivity extends Activity {
 
     private boolean isNetworkRescanActive() {
         if (currentScreenState == STATE_WIFI || currentScreenState == STATE_BLUETOOTH) return true;
-        return themedContextMenu != null && themedContextMenu.isShowing()
-                && contextMenuTopTier() != null;
+        boolean ctxWifi = isContextTierActive("wifi");
+        boolean ctxBt = isContextTierActive("bt");
+        boolean active = ctxWifi || ctxBt;
+        // #region agent log
+        if (themedContextMenu != null && themedContextMenu.isShowing()) {
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("ctxWifi", ctxWifi);
+                d.put("ctxBt", ctxBt);
+                d.put("tierTop", contextMenuTopTier());
+                d.put("submenuOpen", themedContextMenu.isSubmenuTierOpen());
+                d.put("volSlider", contextMenuInVolumeSlider);
+                d.put("active", active);
+                DebugAgentLog.log(this, "MainActivity.isNetworkRescanActive", "rescan gate", "H2", d);
+            } catch (Exception ignored) {}
+        }
+        // #endregion
+        return active;
     }
 
     private void updateNetworkRescanLoop() {
@@ -7260,9 +7346,23 @@ public class MainActivity extends Activity {
 
     private ThemedContextMenu.QuickItem[] buildContextQuickBar() {
         boolean hasQueue = contextQuickBarShowsQueue();
-        int endIcon = hasQueue ? R.drawable.ic_queue : R.drawable.ic_music;
-        String endLabel = hasQueue ? getString(R.string.context_quick_queue)
-                : getString(R.string.home_menu_music);
+        int queueSize = hasQueue ? playback.unifiedQueue().size() : 0;
+        boolean singleTrack = hasQueue && queueSize == 1;
+        int endIcon = !hasQueue ? R.drawable.ic_music
+                : (singleTrack ? R.drawable.ic_music : R.drawable.ic_queue);
+        String endLabel = !hasQueue ? getString(R.string.home_menu_music)
+                : (singleTrack ? getString(R.string.home_menu_now_playing)
+                : getString(R.string.context_quick_queue));
+        // #region agent log
+        try {
+            JSONObject d = new JSONObject();
+            d.put("hasQueue", hasQueue);
+            d.put("queueSize", queueSize);
+            d.put("singleTrack", singleTrack);
+            d.put("endLabel", endLabel);
+            QueueDebugLog.log("MainActivity.buildContextQuickBar", "quick bar built", "H6", d);
+        } catch (Exception ignored) {}
+        // #endregion
         int volMax = audioManager != null
                 ? audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC) : 15;
         int volCur = audioManager != null
@@ -7411,6 +7511,7 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {}
         // #endregion
         if (themedContextMenu == null || audioManager == null) return;
+        deactivateContextNetworkTier();
         contextMenuVolumeReturnTier = contextMenuTopTier();
         if (contextMenuVolumeReturnTier == null) contextMenuVolumeReturnTier = CONTEXT_NAV_ROOT;
         contextMenuInVolumeSlider = true;
@@ -7674,15 +7775,31 @@ public class MainActivity extends Activity {
             return;
         }
 
+        if (themedContextMenu.focusZone() == ThemedContextMenu.FocusZone.OPTIONS_TITLE
+                && hasContextActiveTier()) {
+            if (contextMenuQuickOnly) {
+                dismissThemedContextMenu();
+            } else {
+                returnToContextRootFromTier();
+            }
+            return;
+        }
+
         dismissThemedContextMenu();
     }
 
-    /** Browsing rows inside a quick-bar tab (Wi-Fi, BT, queue, …). */
+    /** Browsing rows inside a quick-bar tab (Wi-Fi, BT, queue, …), or Back chip while tier list is open. */
     private boolean isContextSubmenuListFocused() {
         if (themedContextMenu == null) return false;
-        if (themedContextMenu.focusZone() != ThemedContextMenu.FocusZone.TIER_CONTENT) return false;
-        if (contextMenuInQueueTier) return true;
-        return themedContextMenu.isSubmenuTierOpen();
+        ThemedContextMenu.FocusZone zone = themedContextMenu.focusZone();
+        if (contextMenuInQueueTier) {
+            return zone == ThemedContextMenu.FocusZone.TIER_CONTENT
+                    || (zone == ThemedContextMenu.FocusZone.OPTIONS_TITLE
+                    && themedContextMenu.isSubmenuTierOpen());
+        }
+        if (!themedContextMenu.isSubmenuTierOpen()) return false;
+        return zone == ThemedContextMenu.FocusZone.TIER_CONTENT
+                || zone == ThemedContextMenu.FocusZone.OPTIONS_TITLE;
     }
 
     /** A tab tier is open (wifi / bt / queue) — not the root action list. */
@@ -7698,9 +7815,18 @@ public class MainActivity extends Activity {
         if (contextMenuInQueueTier) {
             leaveContextQueueListFocus();
         } else {
+            deactivateContextNetworkTier();
             themedContextMenu.focusQuickBarAtReturn();
         }
         themedContextMenu.requestOverlayFocus();
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("tierTop", contextMenuTopTier());
+            d.put("submenuOpen", themedContextMenu.isSubmenuTierOpen());
+            DebugAgentLog.log(this, "MainActivity.exitContextSubmenuToQuickBar", "left network tier", "H1", d);
+        } catch (Exception ignored) {}
+        // #endregion
     }
 
     /** Back from quick bar to the screen-specific root context list (collapse all tiers). */
@@ -7791,9 +7917,29 @@ public class MainActivity extends Activity {
         return contextMenuTierStack.isEmpty() ? null : contextMenuTierStack.peekLast();
     }
 
-    /** True when {@code tier} is the sole active context sub-menu. */
+    /** True when {@code tier} is the active context sub-menu and its list is on screen. */
     private boolean isContextTierActive(String tier) {
-        return tier != null && tier.equals(contextMenuTopTier());
+        if (tier == null || !tier.equals(contextMenuTopTier())) return false;
+        if (contextMenuInVolumeSlider) return false;
+        if (themedContextMenu == null || !themedContextMenu.isShowing()) return false;
+        if ("wifi".equals(tier) || "bt".equals(tier)) {
+            return themedContextMenu.isSubmenuTierOpen() && !contextMenuInQueueTier;
+        }
+        if ("queue".equals(tier)) return contextMenuInQueueTier;
+        return true;
+    }
+
+    private void deactivateContextNetworkTier() {
+        String top = contextMenuTopTier();
+        if (!"wifi".equals(top) && !"bt".equals(top)) return;
+        cancelPendingContextWifiRefresh();
+        if (contextMenuTierStack.size() > 1) {
+            contextMenuTierStack.removeLast();
+        }
+        if (themedContextMenu != null) {
+            themedContextMenu.setSubmenuTierOpen(false);
+        }
+        updateNetworkRescanLoop();
     }
 
     /** Push a sub-tier onto the navigation stack (root → queue → wifi/bt …). */
@@ -7948,6 +8094,15 @@ public class MainActivity extends Activity {
                 });
             }
         }
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("rowCount", labels.size());
+            d.put("tierTop", contextMenuTopTier());
+            d.put("submenuOpen", themedContextMenu != null && themedContextMenu.isSubmenuTierOpen());
+            DebugAgentLog.log(this, "MainActivity.refreshContextWifiTierImmediate", "show wifi tier", "H3", d);
+        } catch (Exception ignored) {}
+        // #endregion
         showContextMenuTierInPlace(getString(R.string.context_tier_wifi), labels, states, iconKeys, headers, actions,
                 resetFocus);
         try {
@@ -8259,7 +8414,11 @@ public class MainActivity extends Activity {
             d.put("specCount", specs != null ? specs.length : 0);
             d.put("childCount", themedContextMenu.queueListChildCount());
             d.put("scrollH", themedContextMenu.queueListScrollHeight());
-            QueueDebugLog.log("MainActivity.rebuildContextQueueTier", "rebuilt", "H4-H5", d);
+            if (specs != null && specs.length > 0) {
+                d.put("firstTitle", specs[0].title);
+                d.put("firstLine", specs[0].displayLine());
+            }
+            QueueDebugLog.log("MainActivity.rebuildContextQueueTier", "rebuilt", "H2-H4-H5", d);
         } catch (Exception ignored) {}
         // #endregion
         SolarAdbTest.queueOpen(q.size(), true, themedContextMenu.queueListScrollHeight(),
@@ -8614,23 +8773,200 @@ public class MainActivity extends Activity {
 
     private void handlePlaylistListCenterActivate(boolean longPress) {
         int idx = virtualSongListPosition();
-        if (idx < 0) return;
+        if (idx < 0 && playlistMoveFrom < 0) return;
         if (playlistMoveFrom >= 0) {
-            if (playlistMoveFrom == idx) {
-                cancelPlaylistMove();
-            } else {
-                applyPlaylistMove(playlistMoveFrom, idx);
-            }
+            confirmPlaylistMove();
             return;
         }
         if (longPress) {
-            playlistMoveFrom = idx;
-            refreshPlaylistSongList();
+            beginPlaylistMove(idx);
         } else {
             File audio = idx < virtualSongList.size() ? virtualSongList.get(idx) : null;
             if (audio != null) {
                 playTrackList(virtualSongList, idx, virtualQueryValue);
             }
+        }
+    }
+
+    private void beginPlaylistMove(int pickIndex) {
+        if (pickIndex < 0 || pickIndex >= virtualSongList.size()) return;
+        playlistMovePickIndex = pickIndex;
+        playlistMoveFrom = pickIndex;
+        playlistMoveSnapshot = new java.util.ArrayList<File>(virtualSongList);
+        playlistMoveDirty = false;
+        playlistMoveWheelFilter.reset();
+        showPlaylistMoveStripUi();
+    }
+
+    private MoveStripController.Adapter createPlaylistMoveAdapter() {
+        return new MoveStripController.Adapter() {
+            @Override
+            public View createRow() {
+                return MoveRibbonRows.createLibraryMoveRow(
+                        MainActivity.this, y1LibraryRowHeightPx);
+            }
+
+            @Override
+            public void bindRow(View row, int dataIndex, boolean moving, boolean confirming) {
+                SongItem song = songItemAtPlaylistIndex(dataIndex);
+                boolean np = isPlaylistViewNowPlayingSlot(dataIndex);
+                boolean playing = np && !isPausedByHand && playback.isMusicActive();
+                String title = String.format(Locale.US, "%02d · %s", dataIndex + 1,
+                        song != null ? song.title : "");
+                MoveRibbonRows.bindLibraryMoveRow(MainActivity.this, (FrameLayout) row,
+                        title, songSubtitleLine(song), moving, moving || confirming,
+                        np, playing, y1ActiveRowWidthPx(), y1LibraryRowHeightPx);
+            }
+
+            @Override
+            public int itemCount() {
+                return virtualSongList.size();
+            }
+
+            @Override
+            public int rowSlotHeight() {
+                return y1LibraryRowHeightPx + 2;
+            }
+        };
+    }
+
+    private SongItem songItemAtPlaylistIndex(int index) {
+        if (index < 0 || index >= virtualSongList.size()) {
+            File empty = new File("");
+            return new SongItem(empty, "", "", "", "");
+        }
+        return findSongItem(virtualSongList.get(index));
+    }
+
+    private String songSubtitleLine(SongItem song) {
+        if (song == null) return "";
+        if (ArtistBrowsePolicy.isGuestOnlyArtistBrowse(virtualQueryValue, virtualQueryType,
+                policyTracksFromLibrary(), libraryBrowsePrefs)) {
+            String owner = ArtistBrowsePolicy.guestSongSubtitleOwner(song.album, virtualQueryValue,
+                    policyTracksFromLibrary(), libraryBrowsePrefs);
+            if (owner != null && !owner.trim().isEmpty() && song.album != null && !song.album.isEmpty()) {
+                return getString(R.string.library_song_from_album, owner, song.album);
+            }
+        }
+        if (song.artist.isEmpty()) return song.album;
+        if (song.album.isEmpty()) return song.artist;
+        return song.artist + " · " + song.album;
+    }
+
+    private List<ArtistBrowsePolicy.Track> policyTracksFromLibrary() {
+        List<ArtistBrowsePolicy.Track> out = new ArrayList<>();
+        for (SongItem song : customLibrary) {
+            out.add(new ArtistBrowsePolicy.Track(song.artist, song.album, song.albumArtist,
+                    song.file.lastModified()));
+        }
+        return out;
+    }
+
+    private void refreshLibraryBrowseIfVisible() {
+        if (currentScreenState != STATE_BROWSER) return;
+        clearArtistOwnAlbumCache();
+        if (currentBrowserMode == BROWSER_ARTISTS) {
+            buildVirtualCategories("ARTIST");
+        } else if (currentBrowserMode == BROWSER_ARTIST_ALBUMS) {
+            buildArtistAlbums();
+        } else if (currentBrowserMode == BROWSER_VIRTUAL_SONGS && "ARTIST".equals(virtualQueryType)) {
+            buildVirtualSongs();
+        } else if (currentBrowserMode == BROWSER_ALBUMS) {
+            buildVirtualCategories("ALBUM");
+        }
+    }
+
+    private boolean isLibraryArtistBrowseContext() {
+        if (currentScreenState != STATE_BROWSER) return false;
+        if (currentBrowserMode == BROWSER_ARTISTS || currentBrowserMode == BROWSER_ARTIST_ALBUMS) return true;
+        return currentBrowserMode == BROWSER_VIRTUAL_SONGS && "ARTIST".equals(virtualQueryType);
+    }
+
+    private void clearArtistOwnAlbumCache() {
+        artistOwnAlbumCacheKey = "";
+    }
+
+    /** True when the artist is primary on at least one album in the library. */
+    private boolean artistHasOwnAlbum(String artist) {
+        if (artist == null || artist.trim().isEmpty()) return false;
+        String normalized = libraryBrowsePrefs.normalizeHonorifics()
+                ? ArtistNames.normalizeDisplay(artist) : artist.trim();
+        String cacheKey = ArtistNames.matchKey(normalized);
+        if (cacheKey.equals(artistOwnAlbumCacheKey)) return artistOwnAlbumCacheValue;
+        boolean owns = ArtistBrowsePolicy.hasOwnAlbum(normalized, policyTracksFromLibrary(), libraryBrowsePrefs);
+        artistOwnAlbumCacheKey = cacheKey;
+        artistOwnAlbumCacheValue = owns;
+        return owns;
+    }
+
+    private void openArtistBrowse(String artist) {
+        virtualQueryArtist = libraryBrowsePrefs.normalizeHonorifics()
+                ? ArtistNames.normalizeDisplay(artist) : artist.trim();
+        if (ArtistBrowsePolicy.shouldSkipAlbumPicker(virtualQueryArtist, libraryBrowsePrefs,
+                policyTracksFromLibrary())) {
+            currentBrowserMode = BROWSER_VIRTUAL_SONGS;
+            virtualQueryType = "ARTIST";
+            virtualQueryValue = virtualQueryArtist;
+            virtualQueryArtist = "";
+            buildVirtualSongs();
+            return;
+        }
+        currentBrowserMode = BROWSER_ARTIST_ALBUMS;
+        buildArtistAlbums();
+    }
+
+    private void showPlaylistMoveStripUi() {
+        listVirtualSongs.setVisibility(View.GONE);
+        android.view.ViewGroup browserParent = (android.view.ViewGroup) scrollViewBrowser.getParent();
+        if (playlistMoveOverlay == null) {
+            playlistMoveOverlay = new FrameLayout(this);
+            browserParent.addView(playlistMoveOverlay, new android.view.ViewGroup.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT));
+        }
+        playlistMoveOverlay.setVisibility(View.VISIBLE);
+        playlistMoveOverlay.removeAllViews();
+        playlistMoveScroll = new ScrollView(this);
+        playlistMoveScroll.setVerticalScrollBarEnabled(false);
+        playlistMoveScroll.setFillViewport(true);
+        LinearLayout host = new LinearLayout(this);
+        host.setOrientation(LinearLayout.VERTICAL);
+        playlistMoveScroll.addView(host, new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
+        playlistMoveStrip = new MoveStripController(host, createPlaylistMoveAdapter());
+        playlistMoveStrip.setScrollParent(playlistMoveScroll);
+        playlistMoveOverlay.addView(playlistMoveScroll, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        playlistMoveStrip.enter(playlistMoveFrom);
+    }
+
+    private void hidePlaylistMoveStripUi() {
+        if (playlistMoveOverlay != null) playlistMoveOverlay.setVisibility(View.GONE);
+        if (listVirtualSongs != null) listVirtualSongs.setVisibility(View.VISIBLE);
+        if (playlistMoveStrip != null) playlistMoveStrip.teardown();
+        playlistMoveStrip = null;
+        playlistMoveScroll = null;
+    }
+
+    private void confirmPlaylistMove() {
+        if (playlistMoveStrip != null && playlistMoveStrip.isAnimating()) return;
+        final int placed = playlistMoveFrom;
+        Runnable finish = new Runnable() {
+            @Override
+            public void run() {
+                flushPlaylistMoveIfDirty();
+                playlistMoveFrom = -1;
+                playlistMovePickIndex = -1;
+                playlistMoveSnapshot = null;
+                playlistMoveWheelFilter.reset();
+                hidePlaylistMoveStripUi();
+                refreshPlaylistSongList();
+            }
+        };
+        if (playlistMoveStrip != null && placed >= 0) {
+            playlistMoveStrip.flashConfirm(placed, finish);
+        } else {
+            finish.run();
         }
     }
 
@@ -8646,6 +8982,21 @@ public class MainActivity extends Activity {
     private void applyPlaylistMove(int from, int to) {
         if (from == to || from < 0 || to < 0
                 || from >= virtualSongList.size() || to >= virtualSongList.size()) return;
+        if (playlistMoveStrip != null && playlistMoveStrip.isAnimating()) return;
+        if (playlistMoveStrip != null) {
+            playlistMoveStrip.animateStep(from, to, new Runnable() {
+                @Override
+                public void run() {
+                    File moved = virtualSongList.remove(from);
+                    virtualSongList.add(to, moved);
+                    playlistMoveFrom = to;
+                    playlistMoveDirty = true;
+                    playlistMoveStrip.setMoveFrom(to);
+                    playlistMoveStrip.refreshAllRows();
+                }
+            });
+            return;
+        }
         File moved = virtualSongList.remove(from);
         virtualSongList.add(to, moved);
         playlistMoveFrom = to;
@@ -8678,14 +9029,49 @@ public class MainActivity extends Activity {
     }
 
     private void cancelPlaylistMove() {
-        flushPlaylistMoveIfDirty();
+        if (playlistMoveFrom < 0) return;
+        if (playlistMoveStrip != null && playlistMoveStrip.isAnimating()) return;
+        final int home = playlistMovePickIndex >= 0 ? playlistMovePickIndex : playlistMoveFrom;
+        final int current = playlistMoveFrom;
+        if (playlistMoveStrip != null && current != home) {
+            final int next = current + (current > home ? -1 : 1);
+            playlistMoveStrip.animateStep(current, next, new Runnable() {
+                @Override
+                public void run() {
+                    File moved = virtualSongList.remove(current);
+                    virtualSongList.add(next, moved);
+                    playlistMoveFrom = next;
+                    playlistMoveStrip.setMoveFrom(next);
+                    playlistMoveStrip.refreshAllRows();
+                    cancelPlaylistMove();
+                }
+            });
+            return;
+        }
+        if (playlistMoveSnapshot != null) {
+            virtualSongList.clear();
+            virtualSongList.addAll(playlistMoveSnapshot);
+        }
+        playlistMoveDirty = false;
         playlistMoveFrom = -1;
+        playlistMovePickIndex = -1;
+        playlistMoveSnapshot = null;
+        playlistMoveWheelFilter.reset();
+        hidePlaylistMoveStripUi();
         refreshPlaylistSongList();
     }
 
     private void resetPlaylistMoveState() {
-        flushPlaylistMoveIfDirty();
+        if (playlistMoveFrom >= 0 && playlistMoveSnapshot != null) {
+            virtualSongList.clear();
+            virtualSongList.addAll(playlistMoveSnapshot);
+        }
         playlistMoveFrom = -1;
+        playlistMovePickIndex = -1;
+        playlistMoveSnapshot = null;
+        playlistMoveDirty = false;
+        playlistMoveWheelFilter.reset();
+        hidePlaylistMoveStripUi();
         playlistViewEntry = null;
     }
 
@@ -9118,7 +9504,10 @@ public class MainActivity extends Activity {
             d.put("screen", currentScreenState);
             d.put("actionCount", contextMenuLabels.size());
             d.put("quickOnly", contextMenuQuickOnly);
-            DebugAgentLog.log(this, "MainActivity.showThemedContextMenu", "opened", "H5", d);
+            d.put("hasQueue", playback.hasAnyQueue());
+            d.put("queueSize", playback.unifiedQueue().size());
+            d.put("singleTrackChip", playback.hasAnyQueue() && playback.unifiedQueue().size() == 1);
+            QueueDebugLog.log("MainActivity.showThemedContextMenu", "opened", "H6", d);
         } catch (Exception ignored) {}
         // #endregion
         clickFeedback();
@@ -9323,6 +9712,41 @@ public class MainActivity extends Activity {
         }
         if (currentScreenState == STATE_BROWSER && currentBrowserMode == BROWSER_VIRTUAL_SONGS) {
             final File audio = virtualFocusedAudioFile();
+            if ("PLAYLIST".equals(virtualQueryType)) {
+                if (audio != null) {
+                    addContextAction(getString(R.string.context_action_move), new Runnable() {
+                        @Override
+                        public void run() {
+                            int idx = virtualSongList.indexOf(audio);
+                            if (idx >= 0) beginPlaylistMove(idx);
+                        }
+                    });
+                    addContextAction(getString(R.string.context_action_remove_from_playlist), new Runnable() {
+                        @Override
+                        public void run() {
+                            int idx = virtualSongList.indexOf(audio);
+                            if (idx >= 0) {
+                                virtualSongList.remove(idx);
+                                flushPlaylistMoveIfDirty();
+                                if (playlistViewEntry != null && playlistViewEntry.sourceFile != null) {
+                                    try {
+                                        PlaylistManager.saveM3u(
+                                                PlaylistManager.fromTracks(playlistViewEntry.name, virtualSongList),
+                                                playlistViewEntry.sourceFile);
+                                        playlistViewEntry.tracks.clear();
+                                        playlistViewEntry.tracks.addAll(virtualSongList);
+                                    } catch (Exception e) {
+                                        Toast.makeText(MainActivity.this,
+                                                getString(R.string.library_playlist_save_failed),
+                                                Toast.LENGTH_SHORT).show();
+                                    }
+                                }
+                                refreshPlaylistSongList();
+                            }
+                        }
+                    });
+                }
+            }
             if (audio != null) {
                 addContextAction(getString(R.string.context_action_play_now), new Runnable() {
                     @Override
@@ -9338,6 +9762,17 @@ public class MainActivity extends Activity {
                     }
                 });
             }
+            if (!"PLAYLIST".equals(virtualQueryType)) {
+                addContextAction(getString(R.string.library_sort_label, librarySortLabel()), new Runnable() {
+                    @Override
+                    public void run() {
+                        cycleLibrarySort();
+                    }
+                });
+            }
+        }
+        if (currentScreenState == STATE_BROWSER && (currentBrowserMode == BROWSER_ALBUMS
+                || currentBrowserMode == BROWSER_GENRES)) {
             addContextAction(getString(R.string.library_sort_label, librarySortLabel()), new Runnable() {
                 @Override
                 public void run() {
@@ -9345,17 +9780,60 @@ public class MainActivity extends Activity {
                 }
             });
         }
-        if (currentScreenState == STATE_BROWSER && (currentBrowserMode == BROWSER_ARTISTS
-                || currentBrowserMode == BROWSER_ALBUMS || currentBrowserMode == BROWSER_GENRES
-                || currentBrowserMode == BROWSER_ARTIST_ALBUMS)) {
+        if (isLibraryArtistBrowseContext()) {
+            addContextAction(getString(R.string.lib_context_sort_artists,
+                    getString(LibraryBrowsePrefs.artistSortLabelRes(libraryBrowsePrefs.artistSort()))),
+                    new Runnable() {
+                @Override
+                public void run() {
+                    libraryBrowsePrefs.cycleArtistSort();
+                    clearArtistOwnAlbumCache();
+                    Toast.makeText(MainActivity.this, getString(R.string.lib_context_sort_artists,
+                            getString(LibraryBrowsePrefs.artistSortLabelRes(libraryBrowsePrefs.artistSort()))),
+                            Toast.LENGTH_SHORT).show();
+                    if (currentBrowserMode == BROWSER_ARTISTS) buildVirtualCategories("ARTIST");
+                }
+            });
+            addContextAction(getString(R.string.lib_context_filter_artists,
+                    getString(LibraryBrowsePrefs.artistFilterLabelRes(libraryBrowsePrefs.artistFilter()))),
+                    new Runnable() {
+                @Override
+                public void run() {
+                    libraryBrowsePrefs.cycleArtistFilter();
+                    clearArtistOwnAlbumCache();
+                    Toast.makeText(MainActivity.this, getString(R.string.lib_context_filter_artists,
+                            getString(LibraryBrowsePrefs.artistFilterLabelRes(libraryBrowsePrefs.artistFilter()))),
+                            Toast.LENGTH_SHORT).show();
+                    if (currentBrowserMode == BROWSER_ARTISTS) buildVirtualCategories("ARTIST");
+                }
+            });
+            addContextAction(getString(R.string.lib_context_guest_browse,
+                    getString(LibraryBrowsePrefs.guestBrowseModeLabelRes(libraryBrowsePrefs.guestBrowseMode()))),
+                    new Runnable() {
+                @Override
+                public void run() {
+                    libraryBrowsePrefs.cycleGuestBrowseMode();
+                    clearArtistOwnAlbumCache();
+                    Toast.makeText(MainActivity.this, getString(R.string.lib_context_guest_browse,
+                            getString(LibraryBrowsePrefs.guestBrowseModeLabelRes(
+                                    libraryBrowsePrefs.guestBrowseMode()))),
+                            Toast.LENGTH_SHORT).show();
+                    refreshLibraryBrowseIfVisible();
+                }
+            });
             addContextAction(getString(R.string.library_sort_label, librarySortLabel()), new Runnable() {
                 @Override
                 public void run() {
                     cycleLibrarySort();
                     if (currentBrowserMode == BROWSER_ARTIST_ALBUMS) buildArtistAlbums();
-                    else if (currentBrowserMode == BROWSER_ARTISTS) buildVirtualCategories("ARTIST");
-                    else if (currentBrowserMode == BROWSER_GENRES) buildVirtualCategories("GENRE");
-                    else buildVirtualCategories("ALBUM");
+                    else if (currentBrowserMode == BROWSER_VIRTUAL_SONGS) buildVirtualSongs();
+                }
+            });
+            addContextAction(getString(R.string.lib_context_browse_settings), new Runnable() {
+                @Override
+                public void run() {
+                    changeScreen(STATE_SETTINGS);
+                    buildLibraryBrowseSettingsUI();
                 }
             });
         }
@@ -10045,6 +10523,7 @@ public class MainActivity extends Activity {
             if (handleHomeScreenEditorBack()) return;
             if (handleLanguageSettingsBack()) return;
             if (handleSoulseekSettingsBack()) return;
+            if (handleLibraryBrowseSettingsBack()) return;
             if (handleAboutSettingsBack()) return;
             if (handleThemeGalleryBack()) return;
             changeScreen(STATE_MENU);
@@ -10419,6 +10898,17 @@ public class MainActivity extends Activity {
             containerSettingsItems.addView(btnSoulseekMenu);
         }
 
+        LinearLayout btnLibraryBrowse = createSettingsRow(RowKeys.LIBRARY_BROWSE, R.string.settings_library_browse, true);
+        libraryBrowseSettingsMenuFocusIndex = containerSettingsItems.getChildCount();
+        btnLibraryBrowse.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildLibraryBrowseSettingsUI();
+            }
+        });
+        containerSettingsItems.addView(btnLibraryBrowse);
+
 // 🚀 [추가 1] 인터넷에서 앨범 아트 및 곡 정보 자동 검색 켜기/끄기
         final LinearLayout btnAutoFetch = createSettingsRow(RowKeys.AUTO_FETCH, R.string.settings_auto_fetch, false);
         btnAutoFetch.setOnClickListener(new View.OnClickListener() {
@@ -10561,6 +11051,147 @@ public class MainActivity extends Activity {
             }
         }, 50);
     } // buildSettingsUI 함수 끝/ buildSettingsUI 함수 끝
+
+    private void buildLibraryBrowseSettingsUI() {
+        setSettingsSubScreen(SettingsScreens.LIBRARY_BROWSE);
+        updateStatusBarTitle();
+        containerSettingsItems.removeAllViews();
+
+        Button btnBack = createListButton(getString(R.string.common_cancel_back));
+        styleSecondaryLabel(btnBack);
+        btnBack.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                lastSettingsFocusIndex = libraryBrowseSettingsMenuFocusIndex;
+                buildSettingsUI();
+            }
+        });
+        containerSettingsItems.addView(btnBack);
+
+        LinearLayout btnSplit = createSettingsRow(RowKeys.LIB_SPLIT_CREDITS, R.string.lib_split_credits, false);
+        btnSplit.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                libraryBrowsePrefs.setSplitCredits(!libraryBrowsePrefs.splitCredits());
+                clearArtistOwnAlbumCache();
+                refreshLibraryBrowseIfVisible();
+                refreshSettingsPreview(RowKeys.LIB_SPLIT_CREDITS);
+            }
+        });
+        containerSettingsItems.addView(btnSplit);
+
+        LinearLayout btnNormAlbum = createSettingsRow(RowKeys.LIB_NORM_ALBUM, R.string.lib_norm_album_case, false);
+        btnNormAlbum.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                libraryBrowsePrefs.setNormalizeAlbumCase(!libraryBrowsePrefs.normalizeAlbumCase());
+                clearArtistOwnAlbumCache();
+                refreshLibraryBrowseIfVisible();
+                refreshSettingsPreview(RowKeys.LIB_NORM_ALBUM);
+            }
+        });
+        containerSettingsItems.addView(btnNormAlbum);
+
+        LinearLayout btnNormHonor = createSettingsRow(RowKeys.LIB_NORM_HONOR, R.string.lib_norm_honorifics, false);
+        btnNormHonor.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                libraryBrowsePrefs.setNormalizeHonorifics(!libraryBrowsePrefs.normalizeHonorifics());
+                clearArtistOwnAlbumCache();
+                refreshLibraryBrowseIfVisible();
+                refreshSettingsPreview(RowKeys.LIB_NORM_HONOR);
+            }
+        });
+        containerSettingsItems.addView(btnNormHonor);
+
+        LinearLayout btnGuest = createSettingsRow(RowKeys.LIB_GUEST_MODE, R.string.lib_guest_browse, false);
+        btnGuest.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                libraryBrowsePrefs.cycleGuestBrowseMode();
+                clearArtistOwnAlbumCache();
+                refreshLibraryBrowseIfVisible();
+                refreshSettingsPreview(RowKeys.LIB_GUEST_MODE);
+            }
+        });
+        containerSettingsItems.addView(btnGuest);
+
+        LinearLayout btnFilter = createSettingsRow(RowKeys.LIB_ARTIST_FILTER, R.string.lib_artist_filter, false);
+        btnFilter.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                libraryBrowsePrefs.cycleArtistFilter();
+                clearArtistOwnAlbumCache();
+                refreshLibraryBrowseIfVisible();
+                refreshSettingsPreview(RowKeys.LIB_ARTIST_FILTER);
+            }
+        });
+        containerSettingsItems.addView(btnFilter);
+
+        LinearLayout btnArtistSort = createSettingsRow(RowKeys.LIB_ARTIST_SORT, R.string.lib_artist_sort, false);
+        btnArtistSort.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                libraryBrowsePrefs.cycleArtistSort();
+                clearArtistOwnAlbumCache();
+                refreshLibraryBrowseIfVisible();
+                refreshSettingsPreview(RowKeys.LIB_ARTIST_SORT);
+            }
+        });
+        containerSettingsItems.addView(btnArtistSort);
+
+        LinearLayout btnSongSort = createSettingsRow(RowKeys.LIB_SONG_SORT, R.string.lib_song_sort, false);
+        btnSongSort.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                libraryBrowsePrefs.cycleSongSort();
+                refreshLibraryBrowseIfVisible();
+                refreshSettingsPreview(RowKeys.LIB_SONG_SORT);
+            }
+        });
+        containerSettingsItems.addView(btnSongSort);
+
+        LinearLayout btnAlbumSub = createSettingsRow(RowKeys.LIB_ALBUM_SUB, R.string.lib_album_owner_sub, false);
+        btnAlbumSub.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                libraryBrowsePrefs.setAlbumOwnerSubtitles(!libraryBrowsePrefs.albumOwnerSubtitles());
+                refreshLibraryBrowseIfVisible();
+                refreshSettingsPreview(RowKeys.LIB_ALBUM_SUB);
+            }
+        });
+        containerSettingsItems.addView(btnAlbumSub);
+
+        LinearLayout btnGuestSub = createSettingsRow(RowKeys.LIB_GUEST_SUB, R.string.lib_guest_song_sub, false);
+        btnGuestSub.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                libraryBrowsePrefs.setGuestSongSubtitles(!libraryBrowsePrefs.guestSongSubtitles());
+                refreshLibraryBrowseIfVisible();
+                refreshSettingsPreview(RowKeys.LIB_GUEST_SUB);
+            }
+        });
+        containerSettingsItems.addView(btnGuestSub);
+
+        containerSettingsItems.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (containerSettingsItems.getChildCount() > 1) {
+                    containerSettingsItems.getChildAt(1).requestFocus();
+                }
+            }
+        }, 50);
+    }
 
     private void buildAppearanceSettingsUI() {
         settingsParentKey = null;
@@ -10809,6 +11440,23 @@ public class MainActivity extends Activity {
             }
         });
         containerSettingsItems.addView(btnAbout);
+
+        LinearLayout btnSharing = createSettingsRow(RowKeys.SOULSEEK_SHARING,
+                R.string.soulseek_share_library, false);
+        btnSharing.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                soulseekSharingEnabled = !soulseekSharingEnabled;
+                prefs.edit().putBoolean(SoulseekAccount.PREF_SHARING_ENABLED, soulseekSharingEnabled).commit();
+                updateSoulseekSharePolicy();
+                if (soulseekClient != null) {
+                    soulseekClient.refreshShareAnnouncement();
+                }
+                refreshSettingsPreview(RowKeys.SOULSEEK_SHARING);
+            }
+        });
+        containerSettingsItems.addView(btnSharing);
 
         LinearLayout btnHideFlac = createSettingsRow(RowKeys.SOULSEEK_HIDE_FLAC,
                 R.string.soulseek_hide_flac, false);
@@ -11311,40 +11959,467 @@ public class MainActivity extends Activity {
         }).start();
     }
 
-    private LinearLayout createHomeOrderRow(final HomeMenuConfig.Entry entry, boolean moving) {
-        final String rowKey = RowKeys.homeShortcut(entry.id);
-        final LinearLayout layout = createRearrangeListRow(rowKey, getString(entry.labelResId),
-                new View.OnFocusChangeListener() {
-                    @Override
-                    public void onFocusChange(View v, boolean hasFocus) {
-                        if (!(v instanceof LinearLayout)) return;
-                        LinearLayout row = (LinearLayout) v;
-                        bindRearrangeRowAdornment(row, entry.id.equals(
-                                isHomeMoreArrangeScreen() ? homeMoreMoveModeId : homeScreenMoveModeId),
-                                hasFocus);
-                        if (hasFocus && currentScreenState == STATE_SETTINGS) {
-                            int idx = containerSettingsItems.indexOfChild(row);
-                            if (idx != -1) homeScreenOrderFocusIndex = idx;
-                            updateSettingsPreview(rowKey);
-                            applyHomeShortcutConnectivityHint(row, rowKey, true);
-                        } else if (!hasFocus) {
-                            applyHomeShortcutConnectivityHint(row, rowKey, false);
-                        }
-                    }
-                });
-        bindRearrangeRowAdornment(layout, moving, false);
-        return layout;
+    private boolean isHomeEditorMoveActive() {
+        return homeEditorMoveIndex >= 0;
     }
 
-    private void openHomeArrangeForRequiredShortcut(String id, int editorRowIndex) {
-        clickFeedback();
-        homeScreenEditorFocusIndex = editorRowIndex;
-        List<String> ids = HomeMenuConfig.loadHomeOrderIds(prefs);
+    private boolean isMoreEditorMoveActive() {
+        return moreEditorMoveIndex >= 0;
+    }
+
+    private String focusedSettingsRowKey() {
+        View focused = getCurrentFocus();
+        if (focused == null) return null;
+        Object tag = focused.getTag();
+        return tag instanceof String ? (String) tag : null;
+    }
+
+    private boolean isHomeEditorShortcutRow(String rowKey) {
+        return rowKey != null && rowKey.startsWith("home.shortcut.");
+    }
+
+    private String homeEditorMoveIdAt(int index) {
+        java.util.List<String> ids = HomeMenuConfig.loadHomeEditorMoveIds(prefs);
+        if (index < 0 || index >= ids.size()) return null;
+        return ids.get(index);
+    }
+
+    private int homeEditorMoveIndexForRowKey(String rowKey) {
+        if (RowKeys.HOME_MORE.equals(rowKey)) {
+            java.util.List<String> ids = HomeMenuConfig.loadHomeEditorMoveIds(prefs);
+            return ids.indexOf(HomeMenuConfig.ID_MORE);
+        }
+        if (!isHomeEditorShortcutRow(rowKey)) return -1;
+        String id = rowKey.substring("home.shortcut.".length());
+        java.util.List<String> ids = HomeMenuConfig.loadHomeEditorMoveIds(prefs);
+        return ids.indexOf(id);
+    }
+
+    private String homeEditorMoveLabel(String id) {
+        if (HomeMenuConfig.ID_MORE.equals(id)) return getString(R.string.home_screen_more);
+        HomeMenuConfig.Entry e = HomeMenuConfig.find(id);
+        return e != null ? getString(e.labelResId) : id;
+    }
+
+    private String moreEditorMoveLabel(String id) {
+        HomeMenuConfig.Entry e = HomeMenuConfig.find(id);
+        return e != null ? getString(e.labelResId) : id;
+    }
+
+    private int homeEditorMoveRowSlotHeight() {
+        return y1RowHeightPx + 2;
+    }
+
+    private void clearHomeEditorMoveHoldPreview() {
+        if (homeEditorMoveHoldPreviewKey == null) return;
+        homeEditorMoveHoldPreviewKey = null;
+        refreshHomeEditorHoldPreviewUi(false);
+    }
+
+    private void setHomeEditorMoveHoldPreview(String rowKey) {
+        homeEditorMoveHoldPreviewKey = rowKey;
+        refreshHomeEditorHoldPreviewUi(true);
+    }
+
+    private void clearMoreEditorMoveHoldPreview() {
+        if (moreEditorMoveHoldPreviewKey == null) return;
+        moreEditorMoveHoldPreviewKey = null;
+        refreshMoreEditorHoldPreviewUi(false);
+    }
+
+    private void setMoreEditorMoveHoldPreview(String rowKey) {
+        moreEditorMoveHoldPreviewKey = rowKey;
+        refreshMoreEditorHoldPreviewUi(true);
+    }
+
+    private void refreshHomeEditorHoldPreviewUi(boolean grip) {
+        if (containerSettingsItems == null) return;
+        for (int i = 0; i < containerSettingsItems.getChildCount(); i++) {
+            View row = containerSettingsItems.getChildAt(i);
+            Object tag = row.getTag();
+            if (!(tag instanceof String)) continue;
+            String key = (String) tag;
+            if (!grip && !key.equals(homeEditorMoveHoldPreviewKey)) continue;
+            if (grip && !key.equals(homeEditorMoveHoldPreviewKey)) continue;
+            refreshSettingsRowInline(key);
+            if (!isFullWidthMenus) updateSettingsPreview(key);
+        }
+    }
+
+    private void refreshMoreEditorHoldPreviewUi(boolean grip) {
+        if (containerSettingsItems == null) return;
+        for (int i = 0; i < containerSettingsItems.getChildCount(); i++) {
+            View row = containerSettingsItems.getChildAt(i);
+            Object tag = row.getTag();
+            if (!(tag instanceof String)) continue;
+            String key = (String) tag;
+            if (!grip && !key.equals(moreEditorMoveHoldPreviewKey)) continue;
+            if (grip && !key.equals(moreEditorMoveHoldPreviewKey)) continue;
+            refreshSettingsRowInline(key);
+            if (!isFullWidthMenus) updateSettingsPreview(key);
+        }
+    }
+
+    private MoveStripController.Adapter createHomeEditorMoveAdapter(final boolean moreMenu) {
+        return new MoveStripController.Adapter() {
+            @Override
+            public View createRow() {
+                return MoveRibbonRows.createMenuMoveRow(
+                        MainActivity.this, y1RowHeightPx, y1ActiveRowWidthPx());
+            }
+
+            @Override
+            public void bindRow(View row, int dataIndex, boolean moving, boolean confirming) {
+                java.util.List<String> ids = moreMenu
+                        ? HomeMenuConfig.loadMoreOrderIds(prefs)
+                        : HomeMenuConfig.loadHomeEditorMoveIds(prefs);
+                String id = ids.get(dataIndex);
+                String label = moreMenu ? moreEditorMoveLabel(id) : homeEditorMoveLabel(id);
+                MoveRibbonRows.bindMenuMoveRow(MainActivity.this, (FrameLayout) row, label, moving,
+                        moving || confirming, y1ActiveRowWidthPx(), y1RowHeightPx);
+            }
+
+            @Override
+            public int itemCount() {
+                return moreMenu
+                        ? HomeMenuConfig.loadMoreOrderIds(prefs).size()
+                        : HomeMenuConfig.loadHomeEditorMoveIds(prefs).size();
+            }
+
+            @Override
+            public int rowSlotHeight() {
+                return homeEditorMoveRowSlotHeight();
+            }
+        };
+    }
+
+    private void beginHomeEditorMove(int pickIndex) {
+        java.util.List<String> ids = HomeMenuConfig.loadHomeEditorMoveIds(prefs);
+        if (pickIndex < 0 || pickIndex >= ids.size()) return;
+        homeEditorMovePickIndex = pickIndex;
+        homeEditorMoveIndex = pickIndex;
+        homeEditorMoveSnapshot = new java.util.ArrayList<String>(ids);
+        homeEditorMoveDirty = false;
+        homeEditorMoveWheelFilter.reset();
+        showHomeEditorMoveStripUi();
+    }
+
+    private void beginMoreEditorMove(int pickIndex) {
+        java.util.List<String> ids = HomeMenuConfig.loadMoreOrderIds(prefs);
+        if (pickIndex < 0 || pickIndex >= ids.size()) return;
+        moreEditorMovePickIndex = pickIndex;
+        moreEditorMoveIndex = pickIndex;
+        moreEditorMoveSnapshot = new java.util.ArrayList<String>(ids);
+        moreEditorMoveDirty = false;
+        moreEditorMoveWheelFilter.reset();
+        showMoreEditorMoveStripUi();
+    }
+
+    private void showHomeEditorMoveStripUi() {
+        containerSettingsItems.removeAllViews();
+        Button btnBack = createListButton(getString(R.string.common_back_short));
+        styleSecondaryLabel(btnBack);
+        btnBack.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                cancelHomeEditorMove(true);
+            }
+        });
+        containerSettingsItems.addView(btnBack);
+        TextView movingHeader = new TextView(this);
+        movingHeader.setText(getString(R.string.home_screen_move_mode));
+        movingHeader.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
+        movingHeader.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                getResources().getDimension(R.dimen.y1_menu_text_size) * 0.85f);
+        ThemeManager.applyThemedTextStyle(movingHeader, ThemeManager.getSectionHeaderTextColor());
+        int hPad = (int) (10 * getResources().getDisplayMetrics().density);
+        movingHeader.setPadding(hPad, hPad, hPad, hPad / 2);
+        containerSettingsItems.addView(movingHeader);
+        homeEditorMoveScroll = new ScrollView(this);
+        homeEditorMoveScroll.setVerticalScrollBarEnabled(false);
+        homeEditorMoveScroll.setFillViewport(true);
+        homeEditorMoveStripHost = new LinearLayout(this);
+        homeEditorMoveStripHost.setOrientation(LinearLayout.VERTICAL);
+        homeEditorMoveScroll.addView(homeEditorMoveStripHost, new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
+        homeEditorMoveStrip = new MoveStripController(homeEditorMoveStripHost,
+                createHomeEditorMoveAdapter(false));
+        homeEditorMoveStrip.setScrollParent(homeEditorMoveScroll);
+        LinearLayout.LayoutParams scrollLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
+        containerSettingsItems.addView(homeEditorMoveScroll, scrollLp);
+        homeEditorMoveStrip.enter(homeEditorMoveIndex);
+        updateSettingsPreviewForHomeMove();
+    }
+
+    private void showMoreEditorMoveStripUi() {
+        containerSettingsItems.removeAllViews();
+        Button btnBack = createListButton(getString(R.string.common_back_short));
+        styleSecondaryLabel(btnBack);
+        btnBack.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                cancelMoreEditorMove(true);
+            }
+        });
+        containerSettingsItems.addView(btnBack);
+        TextView movingHeader = new TextView(this);
+        movingHeader.setText(getString(R.string.home_screen_move_mode));
+        movingHeader.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
+        movingHeader.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                getResources().getDimension(R.dimen.y1_menu_text_size) * 0.85f);
+        ThemeManager.applyThemedTextStyle(movingHeader, ThemeManager.getSectionHeaderTextColor());
+        int hPad = (int) (10 * getResources().getDisplayMetrics().density);
+        movingHeader.setPadding(hPad, hPad, hPad, hPad / 2);
+        containerSettingsItems.addView(movingHeader);
+        moreEditorMoveScroll = new ScrollView(this);
+        moreEditorMoveScroll.setVerticalScrollBarEnabled(false);
+        moreEditorMoveScroll.setFillViewport(true);
+        moreEditorMoveStripHost = new LinearLayout(this);
+        moreEditorMoveStripHost.setOrientation(LinearLayout.VERTICAL);
+        moreEditorMoveScroll.addView(moreEditorMoveStripHost, new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
+        moreEditorMoveStrip = new MoveStripController(moreEditorMoveStripHost,
+                createHomeEditorMoveAdapter(true));
+        moreEditorMoveStrip.setScrollParent(moreEditorMoveScroll);
+        LinearLayout.LayoutParams scrollLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
+        containerSettingsItems.addView(moreEditorMoveScroll, scrollLp);
+        moreEditorMoveStrip.enter(moreEditorMoveIndex);
+        updateSettingsPreviewForMoreMove();
+    }
+
+    private void updateSettingsPreviewForHomeMove() {
+        if (isFullWidthMenus || homeEditorMoveIndex < 0) return;
+        String id = homeEditorMoveIdAt(homeEditorMoveIndex);
+        if (HomeMenuConfig.ID_MORE.equals(id)) {
+            updateSettingsPreview(RowKeys.HOME_MORE);
+        } else if (id != null) {
+            updateSettingsPreview(RowKeys.homeShortcut(id));
+        }
+    }
+
+    private void updateSettingsPreviewForMoreMove() {
+        if (isFullWidthMenus || moreEditorMoveIndex < 0) return;
+        String id = HomeMenuConfig.loadMoreOrderIds(prefs).get(moreEditorMoveIndex);
+        updateSettingsPreview(RowKeys.homeShortcut(id));
+    }
+
+    private void applyHomeEditorMove(int from, int to) {
+        java.util.List<String> ids = HomeMenuConfig.loadHomeEditorMoveIds(prefs);
+        if (from == to || from < 0 || to < 0 || from >= ids.size() || to >= ids.size()) return;
+        if (homeEditorMoveStrip != null && homeEditorMoveStrip.isAnimating()) return;
+        if (homeEditorMoveStrip != null) {
+            homeEditorMoveStrip.animateStep(from, to, new Runnable() {
+                @Override
+                public void run() {
+                    HomeMenuConfig.moveEditorHome(prefs, from, to);
+                    homeEditorMoveIndex = to;
+                    homeEditorMoveDirty = true;
+                    buildHomeMenu();
+                    homeEditorMoveStrip.setMoveFrom(to);
+                    homeEditorMoveStrip.refreshAllRows();
+                    updateSettingsPreviewForHomeMove();
+                }
+            });
+            return;
+        }
+        HomeMenuConfig.moveEditorHome(prefs, from, to);
+        homeEditorMoveIndex = to;
+        homeEditorMoveDirty = true;
+        buildHomeMenu();
+        updateSettingsPreviewForHomeMove();
+    }
+
+    private void applyMoreEditorMove(int from, int to) {
+        java.util.List<String> ids = HomeMenuConfig.loadMoreOrderIds(prefs);
+        if (from == to || from < 0 || to < 0 || from >= ids.size() || to >= ids.size()) return;
+        if (moreEditorMoveStrip != null && moreEditorMoveStrip.isAnimating()) return;
+        if (moreEditorMoveStrip != null) {
+            moreEditorMoveStrip.animateStep(from, to, new Runnable() {
+                @Override
+                public void run() {
+                    HomeMenuConfig.moveMore(prefs, from, to);
+                    moreEditorMoveIndex = to;
+                    moreEditorMoveDirty = true;
+                    buildHomeMenu();
+                    moreEditorMoveStrip.setMoveFrom(to);
+                    moreEditorMoveStrip.refreshAllRows();
+                    updateSettingsPreviewForMoreMove();
+                }
+            });
+            return;
+        }
+        HomeMenuConfig.moveMore(prefs, from, to);
+        moreEditorMoveIndex = to;
+        moreEditorMoveDirty = true;
+        buildHomeMenu();
+        updateSettingsPreviewForMoreMove();
+    }
+
+    private void flushHomeEditorMoveIfDirty() {
+        if (!homeEditorMoveDirty) return;
+        homeEditorMoveDirty = false;
+    }
+
+    private void flushMoreEditorMoveIfDirty() {
+        if (!moreEditorMoveDirty) return;
+        moreEditorMoveDirty = false;
+    }
+
+    private void clearHomeEditorMoveSession() {
+        if (homeEditorMoveStrip != null) homeEditorMoveStrip.teardown();
+        homeEditorMoveIndex = -1;
+        homeEditorMovePickIndex = -1;
+        homeEditorMoveSnapshot = null;
+        homeEditorMoveDirty = false;
+        homeEditorMoveWheelFilter.reset();
+        homeEditorMoveStrip = null;
+        homeEditorMoveStripHost = null;
+        homeEditorMoveScroll = null;
+    }
+
+    private void clearMoreEditorMoveSession() {
+        if (moreEditorMoveStrip != null) moreEditorMoveStrip.teardown();
+        moreEditorMoveIndex = -1;
+        moreEditorMovePickIndex = -1;
+        moreEditorMoveSnapshot = null;
+        moreEditorMoveDirty = false;
+        moreEditorMoveWheelFilter.reset();
+        moreEditorMoveStrip = null;
+        moreEditorMoveStripHost = null;
+        moreEditorMoveScroll = null;
+    }
+
+    private void confirmHomeEditorMove() {
+        if (homeEditorMoveStrip != null && homeEditorMoveStrip.isAnimating()) return;
+        final int placed = homeEditorMoveIndex;
+        Runnable finish = new Runnable() {
+            @Override
+            public void run() {
+                flushHomeEditorMoveIfDirty();
+                clearHomeEditorMoveSession();
+                buildHomeScreenEditorUI();
+            }
+        };
+        if (homeEditorMoveStrip != null && placed >= 0) {
+            homeEditorMoveStrip.flashConfirm(placed, finish);
+        } else {
+            finish.run();
+        }
+    }
+
+    private void confirmMoreEditorMove() {
+        if (moreEditorMoveStrip != null && moreEditorMoveStrip.isAnimating()) return;
+        final int placed = moreEditorMoveIndex;
+        Runnable finish = new Runnable() {
+            @Override
+            public void run() {
+                flushMoreEditorMoveIfDirty();
+                clearMoreEditorMoveSession();
+                buildHomeMoreEditorUI();
+            }
+        };
+        if (moreEditorMoveStrip != null && placed >= 0) {
+            moreEditorMoveStrip.flashConfirm(placed, finish);
+        } else {
+            finish.run();
+        }
+    }
+
+    private void finishCancelHomeEditorMove() {
+        if (homeEditorMoveSnapshot != null) {
+            HomeMenuConfig.saveHomeEditorMoveOrder(prefs, homeEditorMoveSnapshot);
+            buildHomeMenu();
+        }
+        homeEditorMoveDirty = false;
+        clearHomeEditorMoveSession();
+        buildHomeScreenEditorUI();
+    }
+
+    private void finishCancelMoreEditorMove() {
+        if (moreEditorMoveSnapshot != null) {
+            HomeMenuConfig.saveMoreOrder(prefs, moreEditorMoveSnapshot);
+            buildHomeMenu();
+        }
+        moreEditorMoveDirty = false;
+        clearMoreEditorMoveSession();
+        buildHomeMoreEditorUI();
+    }
+
+    private void cancelHomeEditorMove(boolean animated) {
+        if (homeEditorMoveIndex < 0) return;
+        if (homeEditorMoveStrip != null && homeEditorMoveStrip.isAnimating()) return;
+        final int home = homeEditorMovePickIndex >= 0 ? homeEditorMovePickIndex : homeEditorMoveIndex;
+        final int current = homeEditorMoveIndex;
+        if (animated && homeEditorMoveStrip != null && current != home) {
+            final int next = current + (current > home ? -1 : 1);
+            homeEditorMoveStrip.animateStep(current, next, new Runnable() {
+                @Override
+                public void run() {
+                    HomeMenuConfig.moveEditorHome(prefs, current, next);
+                    homeEditorMoveIndex = next;
+                    buildHomeMenu();
+                    homeEditorMoveStrip.setMoveFrom(next);
+                    homeEditorMoveStrip.refreshAllRows();
+                    cancelHomeEditorMove(true);
+                }
+            });
+            return;
+        }
+        finishCancelHomeEditorMove();
+    }
+
+    private void cancelMoreEditorMove(boolean animated) {
+        if (moreEditorMoveIndex < 0) return;
+        if (moreEditorMoveStrip != null && moreEditorMoveStrip.isAnimating()) return;
+        final int home = moreEditorMovePickIndex >= 0 ? moreEditorMovePickIndex : moreEditorMoveIndex;
+        final int current = moreEditorMoveIndex;
+        if (animated && moreEditorMoveStrip != null && current != home) {
+            final int next = current + (current > home ? -1 : 1);
+            moreEditorMoveStrip.animateStep(current, next, new Runnable() {
+                @Override
+                public void run() {
+                    HomeMenuConfig.moveMore(prefs, current, next);
+                    moreEditorMoveIndex = next;
+                    buildHomeMenu();
+                    moreEditorMoveStrip.setMoveFrom(next);
+                    moreEditorMoveStrip.refreshAllRows();
+                    cancelMoreEditorMove(true);
+                }
+            });
+            return;
+        }
+        finishCancelMoreEditorMove();
+    }
+
+    private void handleHomeEditorCenterActivate(boolean longPress) {
+        if (isHomeEditorMoveActive()) {
+            confirmHomeEditorMove();
+            return;
+        }
+        String rowKey = focusedSettingsRowKey();
+        int idx = homeEditorMoveIndexForRowKey(rowKey);
+        if (longPress && idx >= 0) {
+            beginHomeEditorMove(idx);
+        }
+    }
+
+    private void handleMoreEditorCenterActivate(boolean longPress) {
+        if (isMoreEditorMoveActive()) {
+            confirmMoreEditorMove();
+            return;
+        }
+        String rowKey = focusedSettingsRowKey();
+        if (!isHomeEditorShortcutRow(rowKey)) return;
+        String id = rowKey.substring("home.shortcut.".length());
+        java.util.List<String> ids = HomeMenuConfig.loadMoreOrderIds(prefs);
         int idx = ids.indexOf(id);
-        homeScreenMoveModeId = id;
-        homeScreenOrderFocusIndex = idx >= 0 ? idx + 1 : 1;
-        Toast.makeText(this, getString(R.string.home_screen_settings_move_only), Toast.LENGTH_SHORT).show();
-        buildHomeScreenArrangeUI();
+        if (longPress && idx >= 0) {
+            beginMoreEditorMove(idx);
+        }
     }
 
     private void buildHomeScreenEditorUI() {
@@ -11368,18 +12443,9 @@ public class MainActivity extends Activity {
         createCategoryHeader(getString(R.string.home_screen_shortcuts));
 
         for (final HomeMenuConfig.Entry entry : HomeMenuConfig.catalog()) {
-            String state = entry.required ? getString(R.string.home_screen_move)
-                    : stateOnOff(HomeMenuConfig.isShortcutEnabled(prefs, entry.id));
+            String state = stateOnOff(HomeMenuConfig.isShortcutEnabled(prefs, entry.id));
             final LinearLayout row = createSettingRow(RowKeys.homeShortcut(entry.id), entry.labelResId, state);
-            if (entry.required) {
-                row.setOnClickListener(new View.OnClickListener() {
-                    @Override
-                    public void onClick(View v) {
-                        openHomeArrangeForRequiredShortcut(entry.id,
-                                containerSettingsItems.indexOfChild(v));
-                    }
-                });
-            } else {
+            if (!entry.required) {
                 row.setOnClickListener(new View.OnClickListener() {
                     @Override
                     public void onClick(View v) {
@@ -11409,17 +12475,20 @@ public class MainActivity extends Activity {
         });
         containerSettingsItems.addView(btnMoreTile);
 
-        LinearLayout btnArrange = createSettingsRow(RowKeys.HOME_ARRANGE, R.string.home_screen_arrange, true);
-        btnArrange.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                clickFeedback();
-                homeScreenOrderFocusIndex = 1;
-                homeScreenMoveModeId = null;
-                buildHomeScreenArrangeUI();
-            }
-        });
-        containerSettingsItems.addView(btnArrange);
+        if (HomeMenuConfig.isMoreEnabled(prefs)) {
+            LinearLayout btnManageMore = createSettingsRow(RowKeys.HOME_MANAGE_MORE,
+                    R.string.home_screen_manage_more, true);
+            btnManageMore.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    if (isHomeEditorMoveActive()) return;
+                    clickFeedback();
+                    homeScreenEditorFocusIndex = containerSettingsItems.indexOfChild(v);
+                    buildHomeMoreEditorUI();
+                }
+            });
+            containerSettingsItems.addView(btnManageMore);
+        }
 
         createCategoryHeader(getString(R.string.settings_widgets_section));
 
@@ -11468,17 +12537,11 @@ public class MainActivity extends Activity {
         restoreHomeScreenEditorFocus(targetFocusIndex);
     }
 
-    private void buildHomeScreenArrangeUI() {
-        setSettingsSubScreen(SettingsScreens.HOME_ARRANGE);
+    private void buildHomeMoreEditorUI() {
+        setSettingsSubScreen(SettingsScreens.HOME_MORE);
         updateStatusBarTitle();
         containerSettingsItems.removeAllViews();
-
-        int targetFocusIndex = homeScreenOrderFocusIndex;
-        if (homeScreenMoveModeId != null) {
-            List<String> ids = HomeMenuConfig.loadHomeOrderIds(prefs);
-            int rowIdx = ids.indexOf(homeScreenMoveModeId);
-            if (rowIdx >= 0) targetFocusIndex = rowIdx + 1;
-        }
+        final int targetFocusIndex = homeScreenEditorFocusIndex;
 
         Button btnBack = createListButton(getString(R.string.common_back_short));
         styleSecondaryLabel(btnBack);
@@ -11486,9 +12549,8 @@ public class MainActivity extends Activity {
             @Override
             public void onClick(View v) {
                 clickFeedback();
-                if (homeScreenMoveModeId != null) {
-                    homeScreenMoveModeId = null;
-                    refreshHomeArrangeMoveUi(false);
+                if (isMoreEditorMoveActive()) {
+                    cancelMoreEditorMove(true);
                 } else {
                     buildHomeScreenEditorUI();
                 }
@@ -11496,66 +12558,24 @@ public class MainActivity extends Activity {
         });
         containerSettingsItems.addView(btnBack);
 
-        final List<String> orderIds = HomeMenuConfig.loadHomeOrderIds(prefs);
-        for (int i = 0; i < orderIds.size(); i++) {
-            String id = orderIds.get(i);
-            HomeMenuConfig.Entry entry = HomeMenuConfig.find(id);
-            if (entry == null) continue;
-            boolean moving = id.equals(homeScreenMoveModeId);
-            containerSettingsItems.addView(createHomeOrderRow(entry, moving));
-        }
+        createCategoryHeader(getString(R.string.home_menu_more));
 
-        if (HomeMenuConfig.isMoreEnabled(prefs)) {
-            LinearLayout moreRow = createSettingsRow(RowKeys.HOME_MORE, R.string.home_menu_more, true);
-            moreRow.setOnClickListener(new View.OnClickListener() {
+        for (final HomeMenuConfig.Entry entry : HomeMenuConfig.catalog()) {
+            if (HomeMenuConfig.ID_SETTINGS.equals(entry.id)) continue;
+            String state = stateOnOff(HomeMenuConfig.isShortcutEnabled(prefs, entry.id));
+            final LinearLayout row = createSettingRow(RowKeys.homeShortcut(entry.id), entry.labelResId, state);
+            row.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
                     clickFeedback();
-                    homeMoreMoveModeId = null;
-                    buildHomeMoreArrangeUI();
+                    homeScreenEditorFocusIndex = containerSettingsItems.indexOfChild(v);
+                    boolean nowOn = !HomeMenuConfig.isShortcutEnabled(prefs, entry.id);
+                    HomeMenuConfig.setShortcutEnabled(prefs, entry.id, nowOn);
+                    buildHomeMenu();
+                    buildHomeMoreEditorUI();
                 }
             });
-            containerSettingsItems.addView(moreRow);
-        }
-
-        restoreHomeScreenEditorFocus(targetFocusIndex);
-    }
-
-    private void buildHomeMoreArrangeUI() {
-        setSettingsSubScreen(SettingsScreens.HOME_MORE_ARRANGE);
-        updateStatusBarTitle();
-        containerSettingsItems.removeAllViews();
-
-        int targetFocusIndex = homeScreenOrderFocusIndex;
-        if (homeMoreMoveModeId != null) {
-            List<String> ids = HomeMenuConfig.loadMoreOrderIds(prefs);
-            int rowIdx = ids.indexOf(homeMoreMoveModeId);
-            if (rowIdx >= 0) targetFocusIndex = rowIdx + 1;
-        }
-
-        Button btnBack = createListButton(getString(R.string.common_back_short));
-        styleSecondaryLabel(btnBack);
-        btnBack.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                clickFeedback();
-                if (homeMoreMoveModeId != null) {
-                    homeMoreMoveModeId = null;
-                    refreshHomeArrangeMoveUi(true);
-                } else {
-                    buildHomeScreenArrangeUI();
-                }
-            }
-        });
-        containerSettingsItems.addView(btnBack);
-
-        final List<String> orderIds = HomeMenuConfig.loadMoreOrderIds(prefs);
-        for (int i = 0; i < orderIds.size(); i++) {
-            String id = orderIds.get(i);
-            HomeMenuConfig.Entry entry = HomeMenuConfig.find(id);
-            if (entry == null) continue;
-            boolean moving = id.equals(homeMoreMoveModeId);
-            containerSettingsItems.addView(createHomeOrderRow(entry, moving));
+            containerSettingsItems.addView(row);
         }
 
         restoreHomeScreenEditorFocus(targetFocusIndex);
@@ -11738,10 +12758,16 @@ public class MainActivity extends Activity {
                         String album = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM);
                         String genre = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE);
                         String duration = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+                        String albumArtist = "";
+                        if (android.os.Build.VERSION.SDK_INT >= 19) {
+                            albumArtist = mmr.extractMetadata(
+                                    MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST);
+                        }
 
                         if (title == null || title.isEmpty()) title = f.getName();
                         if (artist == null || artist.isEmpty()) artist = "Unknown Artist";
                         if (album == null || album.isEmpty()) album = "Unknown Album";
+                        if (albumArtist == null) albumArtist = "";
 
                         String metaKey = (title + "\0" + artist + "\0" + duration).toLowerCase(java.util.Locale.US);
                         if (!libraryScanMetaKeys.add(metaKey)) {
@@ -11750,7 +12776,7 @@ public class MainActivity extends Activity {
                             continue;
                         }
 
-                        customLibrary.add(new SongItem(f, title, artist, album, genre));
+                        customLibrary.add(new SongItem(f, title, artist, album, genre, albumArtist));
 
                         fis.close();
                         mmr.release();
@@ -11759,6 +12785,21 @@ public class MainActivity extends Activity {
                 }
             }
         }
+    }
+
+    /** Merge album tags that differ only by letter case (majority spelling wins). */
+    private void normalizeLibraryAlbumTitles() {
+        if (libraryBrowsePrefs == null || !libraryBrowsePrefs.normalizeAlbumCase()) return;
+        java.util.ArrayList<String> rawAlbums = new java.util.ArrayList<>();
+        for (SongItem song : customLibrary) {
+            if (song.album != null && !song.album.trim().isEmpty()) rawAlbums.add(song.album);
+        }
+        java.util.Map<String, String> canonicalByKey = AlbumNames.canonicalTitles(rawAlbums);
+        if (canonicalByKey.isEmpty()) return;
+        for (SongItem song : customLibrary) {
+            song.album = AlbumNames.normalizeDisplay(song.album, canonicalByKey);
+        }
+        clearArtistOwnAlbumCache();
     }
 
     // 💡 2. 라이브러리 메인 라우터 (자체 스캔 버튼 적용)
@@ -11820,16 +12861,11 @@ public class MainActivity extends Activity {
     }
 
     private String librarySortLabel() {
-        switch (librarySortMode) {
-            case LIB_SORT_ARTIST: return getString(R.string.library_sort_artist);
-            case LIB_SORT_ALBUM: return getString(R.string.library_sort_album);
-            case LIB_SORT_DATE: return getString(R.string.library_sort_date);
-            default: return getString(R.string.library_sort_title);
-        }
+        return getString(LibraryBrowsePrefs.songSortLabelRes(libraryBrowsePrefs.songSort()));
     }
 
     private void cycleLibrarySort() {
-        librarySortMode = (librarySortMode + 1) % 4;
+        libraryBrowsePrefs.cycleSongSort();
         Toast.makeText(this, getString(R.string.library_sort_now, librarySortLabel()), Toast.LENGTH_SHORT).show();
         if (currentBrowserMode == BROWSER_VIRTUAL_SONGS) buildVirtualSongs();
     }
@@ -11838,14 +12874,14 @@ public class MainActivity extends Activity {
         java.util.Collections.sort(list, new java.util.Comparator<SongItem>() {
             @Override
             public int compare(SongItem a, SongItem b) {
-                switch (librarySortMode) {
-                    case LIB_SORT_ARTIST:
+                switch (libraryBrowsePrefs.songSort()) {
+                    case LibraryBrowsePrefs.SONG_SORT_ARTIST:
                         int c = a.artist.compareToIgnoreCase(b.artist);
                         return c != 0 ? c : a.title.compareToIgnoreCase(b.title);
-                    case LIB_SORT_ALBUM:
+                    case LibraryBrowsePrefs.SONG_SORT_ALBUM:
                         c = a.album.compareToIgnoreCase(b.album);
                         return c != 0 ? c : a.title.compareToIgnoreCase(b.title);
-                    case LIB_SORT_DATE:
+                    case LibraryBrowsePrefs.SONG_SORT_DATE:
                         long da = a.file.lastModified();
                         long db = b.file.lastModified();
                         return da == db ? a.title.compareToIgnoreCase(b.title) : Long.compare(db, da);
@@ -12065,6 +13101,7 @@ public class MainActivity extends Activity {
                         customLibrary.clear();
                         invalidateSongPathIndex();
                         buildCustomLibrary(rootFolder);
+                        normalizeLibraryAlbumTitles();
 
                         runOnUiThread(new Runnable() {
                             @Override
@@ -12130,26 +13167,43 @@ public class MainActivity extends Activity {
         updateStatusBarTitle();
         updateLibraryBreadcrumb();
 
+        java.util.HashMap<String, String> albumByKey = new java.util.HashMap<>();
         java.util.HashSet<String> uniqueCategories = new java.util.HashSet<>();
-        for (SongItem song : customLibrary) {
-            if ("ARTIST".equals(type)) {
-                java.util.List<String> artists = ArtistParser.splitArtists(song.artist);
-                if (artists.isEmpty()) uniqueCategories.add(song.artist);
-                else uniqueCategories.addAll(artists);
-            } else if ("GENRE".equals(type)) {
-                uniqueCategories.add(song.genre);
-            } else {
-                uniqueCategories.add(song.album);
+        if (!"ARTIST".equals(type)) {
+            for (SongItem song : customLibrary) {
+                if ("GENRE".equals(type)) {
+                    uniqueCategories.add(song.genre);
+                } else if ("ALBUM".equals(type)) {
+                    if (libraryBrowsePrefs.normalizeAlbumCase()) {
+                        registerAlbumCategory(albumByKey, song.album);
+                    } else if (song.album != null && !song.album.trim().isEmpty()
+                            && !"Unknown Album".equalsIgnoreCase(song.album.trim())) {
+                        uniqueCategories.add(song.album.trim());
+                    }
+                } else {
+                    uniqueCategories.add(song.album);
+                }
             }
         }
 
-        List<String> categories = new ArrayList<>(uniqueCategories);
-        java.util.Collections.sort(categories);
+        List<String> categories;
+        if ("ARTIST".equals(type)) {
+            categories = new ArrayList<>(ArtistBrowsePolicy.collectArtists(
+                    policyTracksFromLibrary(), libraryBrowsePrefs));
+        } else if ("ALBUM".equals(type)) {
+            categories = libraryBrowsePrefs.normalizeAlbumCase()
+                    ? new ArrayList<>(albumByKey.values())
+                    : new ArrayList<>(uniqueCategories);
+            java.util.Collections.sort(categories);
+        } else {
+            categories = new ArrayList<>(uniqueCategories);
+            java.util.Collections.sort(categories);
+        }
 // 🚀 [추가] 점프를 위해 아티스트/앨범 이름 기억
         currentScrollIndexList.clear();
         currentScrollIndexList.addAll(categories);
         // 🚀 수백 개의 아티스트/앨범 데이터도 재활용 엔진(어댑터)에 밀어넣습니다.
-        CategoryListAdapter adapter = new CategoryListAdapter(categories, type);
+        CategoryListAdapter adapter = new CategoryListAdapter(categories, type, null);
         listVirtualSongs.setAdapter(adapter);
 
         listVirtualSongs.post(new Runnable() {
@@ -12161,7 +13215,50 @@ public class MainActivity extends Activity {
             }
         });
     }
-    // 💡 [추가] 이름에서 앞의 특수문자를 무시하고 순수 '첫 글자(알파벳)'만 뽑아내는 함수
+    private void registerArtistCategory(java.util.HashMap<String, String> artistByKey, String raw) {
+        if (raw == null) return;
+        String trimmed = raw.trim();
+        if (trimmed.isEmpty() || "Unknown Artist".equalsIgnoreCase(trimmed)) return;
+        String display = libraryBrowsePrefs.normalizeHonorifics()
+                ? ArtistNames.normalizeDisplay(trimmed) : trimmed;
+        String key = ArtistNames.matchKey(display);
+        String existing = artistByKey.get(key);
+        if (existing == null) {
+            artistByKey.put(key, display);
+        } else {
+            artistByKey.put(key, ArtistNames.preferCanonical(existing, display));
+        }
+    }
+
+    private void registerAlbumCategory(java.util.HashMap<String, String> albumByKey, String raw) {
+        if (raw == null) return;
+        String trimmed = raw.trim();
+        if (trimmed.isEmpty() || "Unknown Album".equalsIgnoreCase(trimmed)) return;
+        String key = AlbumNames.matchKey(trimmed);
+        String existing = albumByKey.get(key);
+        if (existing == null) {
+            albumByKey.put(key, trimmed);
+        } else if (!existing.equals(trimmed)) {
+            java.util.HashMap<String, Integer> counts = new java.util.HashMap<String, Integer>();
+            counts.put(existing, 1);
+            counts.put(trimmed, 1);
+            albumByKey.put(key, AlbumNames.chooseCanonical(counts));
+        }
+    }
+
+    /** Primary artist for album when browsed via a guest/feature credit. */
+    private String albumOwnerArtistForBrowse(String album, String browsedArtist) {
+        return ArtistBrowsePolicy.albumOwnerForBrowse(album, browsedArtist,
+                policyTracksFromLibrary(), libraryBrowsePrefs);
+    }
+
+    private String albumBrowseSubtitle(String album) {
+        String owner = ArtistBrowsePolicy.albumBrowseSubtitle(album, virtualQueryArtist,
+                policyTracksFromLibrary(), libraryBrowsePrefs);
+        if (owner == null || owner.trim().isEmpty()) return "";
+        if (ArtistNames.equals(owner, virtualQueryArtist)) return "";
+        return getString(R.string.library_album_by_artist, owner);
+    }
     private char getInitialChar(String text) {
         if (text == null || text.isEmpty()) return '#';
         String clean = text.replace("📁 ", "").replace("👤 ", "")
@@ -12173,10 +13270,12 @@ public class MainActivity extends Activity {
     private class CategoryListAdapter extends android.widget.BaseAdapter {
         private List<String> items;
         private String type;
+        private String browseArtist;
 
-        public CategoryListAdapter(List<String> items, String type) {
+        public CategoryListAdapter(List<String> items, String type, String browseArtist) {
             this.items = items;
             this.type = type;
+            this.browseArtist = browseArtist;
         }
 
         @Override public int getCount() { return items.size(); }
@@ -12185,19 +13284,60 @@ public class MainActivity extends Activity {
 
         @Override
         public View getView(final int position, View convertView, android.view.ViewGroup parent) {
+            final String name = items.get(position);
+            final boolean artistAlbumBrowse = "ARTIST_ALBUM".equals(type) && browseArtist != null;
+
+            if (artistAlbumBrowse) {
+                final String subtitle = albumBrowseSubtitle(name);
+                final int rowKind = Y1_ROW_ITEM;
+                final int rowW = y1ActiveRowWidthPx();
+                FrameLayout row;
+                if (convertView instanceof FrameLayout && "artist_album_row".equals(convertView.getTag())) {
+                    row = (FrameLayout) convertView;
+                } else {
+                    row = MoveRibbonRows.createLibraryMoveRow(MainActivity.this, y1LibraryRowHeightPx);
+                    row.setTag("artist_album_row");
+                    row.setFocusable(true);
+                    row.setSoundEffectsEnabled(false);
+                    row.setLayoutParams(new android.widget.AbsListView.LayoutParams(
+                            android.widget.AbsListView.LayoutParams.MATCH_PARENT, y1LibraryRowHeightPx + 2));
+                }
+                final String titleText = "💿 " + name;
+                row.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+                    @Override
+                    public void onFocusChange(View v, boolean hasFocus) {
+                        MoveRibbonRows.bindLibraryMoveRow(MainActivity.this, row, titleText, subtitle,
+                                false, hasFocus, false, false, rowW, y1LibraryRowHeightPx);
+                        if (hasFocus) showFastScrollLetter(name);
+                    }
+                });
+                row.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        clickFeedback();
+                        virtualQueryType = "ARTIST_ALBUM";
+                        virtualQueryValue = name;
+                        currentBrowserMode = BROWSER_VIRTUAL_SONGS;
+                        buildVirtualSongs();
+                    }
+                });
+                MoveRibbonRows.bindLibraryMoveRow(MainActivity.this, row, titleText, subtitle,
+                        false, row.hasFocus(), false, false, rowW, y1LibraryRowHeightPx);
+                return row;
+            }
+
             final Button btn;
 
-            if (convertView == null) {
+            if (convertView != null && convertView instanceof Button) {
+                btn = (Button) convertView;
+            } else {
                 btn = createListButton("");
                 btn.setLayoutParams(new android.widget.AbsListView.LayoutParams(
                         android.widget.AbsListView.LayoutParams.MATCH_PARENT,
                         android.widget.AbsListView.LayoutParams.WRAP_CONTENT
                 ));
-            } else {
-                btn = (Button) convertView;
             }
 
-            final String name = items.get(position);
             String prefix = "👤 ";
             if ("ALBUM".equals(type) || "ARTIST_ALBUM".equals(type)) prefix = "💿 ";
             else if ("GENRE".equals(type)) prefix = "🎸 ";
@@ -12224,9 +13364,7 @@ public class MainActivity extends Activity {
                 public void onClick(View v) {
                     clickFeedback();
                     if ("ARTIST".equals(type)) {
-                        virtualQueryArtist = name;
-                        currentBrowserMode = BROWSER_ARTIST_ALBUMS;
-                        buildArtistAlbums();
+                        openArtistBrowse(name);
                     } else if ("ARTIST_ALBUM".equals(type)) {
                         virtualQueryType = "ARTIST_ALBUM";
                         virtualQueryValue = name;
@@ -12258,15 +13396,27 @@ public class MainActivity extends Activity {
         updateStatusBarTitle();
         updateLibraryBreadcrumb();
 
-        java.util.HashSet<String> albums = new java.util.HashSet<String>();
-        for (SongItem song : customLibrary) {
-            if (ArtistParser.containsArtist(song.artist, virtualQueryArtist)) albums.add(song.album);
+        if (ArtistBrowsePolicy.shouldSkipAlbumPicker(virtualQueryArtist, libraryBrowsePrefs,
+                policyTracksFromLibrary())) {
+            virtualQueryType = "ARTIST";
+            virtualQueryValue = virtualQueryArtist;
+            virtualQueryArtist = "";
+            currentBrowserMode = BROWSER_VIRTUAL_SONGS;
+            buildVirtualSongs();
+            return;
         }
-        List<String> categories = new ArrayList<>(albums);
+        java.util.LinkedHashMap<String, String> albumsByKey = new java.util.LinkedHashMap<>();
+        for (SongItem song : customLibrary) {
+            if (!ArtistParser.containsArtist(song.artist, virtualQueryArtist)) continue;
+            if (song.album == null || song.album.trim().isEmpty()) continue;
+            String key = AlbumNames.matchKey(song.album);
+            if (!albumsByKey.containsKey(key)) albumsByKey.put(key, song.album);
+        }
+        List<String> categories = new ArrayList<>(albumsByKey.values());
         java.util.Collections.sort(categories);
         currentScrollIndexList.clear();
         currentScrollIndexList.addAll(categories);
-        CategoryListAdapter adapter = new CategoryListAdapter(categories, "ARTIST_ALBUM");
+        CategoryListAdapter adapter = new CategoryListAdapter(categories, "ARTIST_ALBUM", virtualQueryArtist);
         listVirtualSongs.setAdapter(adapter);
         listVirtualSongs.post(new Runnable() {
             @Override
@@ -12329,6 +13479,7 @@ public class MainActivity extends Activity {
 
     private void buildVirtualSongsFromPlaylist(final PlaylistManager.Entry pl) {
         resetPlaylistMoveState();
+        currentBrowserMode = BROWSER_VIRTUAL_SONGS;
         scrollViewBrowser.setVisibility(View.GONE);
         listVirtualSongs.setVisibility(View.VISIBLE);
         virtualQueryType = "PLAYLIST";
@@ -12436,7 +13587,7 @@ public class MainActivity extends Activity {
         changeScreen(STATE_BROWSER);
         currentBrowserMode = BROWSER_VIRTUAL_SONGS;
         virtualQueryType = "ARTIST";
-        virtualQueryValue = artist;
+        virtualQueryValue = ArtistNames.normalizeDisplay(artist);
         virtualQueryArtist = "";
         buildVirtualSongs();
     }
@@ -12686,11 +13837,11 @@ public class MainActivity extends Activity {
             if (virtualQueryType.equals("ALL")) match = true;
             else if (virtualQueryType.equals("ARTIST")
                     && ArtistParser.containsArtist(song.artist, virtualQueryValue)) match = true;
-            else if (virtualQueryType.equals("ALBUM") && song.album.equals(virtualQueryValue)) match = true;
+            else if (virtualQueryType.equals("ALBUM") && AlbumNames.equals(song.album, virtualQueryValue)) match = true;
             else if (virtualQueryType.equals("GENRE") && song.genre.equals(virtualQueryValue)) match = true;
             else if (virtualQueryType.equals("ARTIST_ALBUM")
                     && ArtistParser.containsArtist(song.artist, virtualQueryArtist)
-                    && song.album.equals(virtualQueryValue)) match = true;
+                    && AlbumNames.equals(song.album, virtualQueryValue)) match = true;
             if (match) {
                 targetSongs.add(song);
                 virtualSongList.add(song.file);
@@ -13642,13 +14793,36 @@ public class MainActivity extends Activity {
     private void updateSoulseekSharePolicy() {
         boolean reachUi = currentScreenState == STATE_SOULSEEK || hasActiveReachDownload();
         boolean wifi = hasInternetConnection();
+        soulseekSharePolicy.setUserEnabled(soulseekSharingEnabled);
         soulseekSharePolicy.update(soulseekCharging, wifi, reachUi);
-        if (!soulseekSharePolicy.announceShares() && soulseekClient == null) return;
-        SoulseekClient client = soulseekSharePolicy.announceShares()
-                ? ensureSoulseekClient() : soulseekClient;
+        if (!wifi) {
+            if (soulseekClient != null && !hasActiveReachDownload() && !soulseekSearchInProgress) {
+                soulseekClient.pauseWhenIdle();
+            }
+            return;
+        }
+        if (!soulseekSharePolicy.announceShares()) {
+            if (soulseekClient == null) return;
+            if (!reachUi && !soulseekSearchInProgress
+                    && (soulseekClient == null || !soulseekClient.isTransferActive())) {
+                soulseekClient.pauseWhenIdle();
+                return;
+            }
+            soulseekClient.setSharePolicy(soulseekSharePolicy);
+            soulseekClient.setShareIndex(soulseekShareIndex);
+            return;
+        }
+        if (soulseekSearchInProgress || (soulseekClient != null && soulseekClient.isSearchActive())) {
+            SoulseekClient c = soulseekClient;
+            if (c == null) c = ensureSoulseekClient();
+            c.setSharePolicy(soulseekSharePolicy);
+            c.setShareIndex(soulseekShareIndex);
+            return;
+        }
+        SoulseekClient client = ensureSoulseekClient();
         if (client == null) return;
         client.setSharePolicy(soulseekSharePolicy);
-        if (soulseekSharePolicy.announceShares() && !soulseekShareScanRunning) {
+        if (!soulseekShareScanRunning) {
             soulseekShareScanRunning = true;
             final SoulseekAccount account = SoulseekAccount.load(prefs);
             new Thread(new Runnable() {
@@ -13673,6 +14847,9 @@ public class MainActivity extends Activity {
     }
 
     private String soulseekSharingStatusLabel() {
+        if (!soulseekSharingEnabled) {
+            return getString(R.string.soulseek_sharing_disabled);
+        }
         switch (soulseekSharePolicy.state()) {
             case ACTIVE:
                 return getString(R.string.soulseek_sharing_on, soulseekShareIndex.fileCount());
@@ -13815,6 +14992,7 @@ public class MainActivity extends Activity {
                                     }
                                     buildSoulseekResultsUI();
                                     finalizeSoulseekSearch(toSort.size());
+                                    updateSoulseekSharePolicy();
                                     if (toSort.isEmpty()) {
                                         Toast.makeText(MainActivity.this,
                                                 getString(R.string.soulseek_no_results),
@@ -14195,7 +15373,9 @@ public class MainActivity extends Activity {
                     @Override
                     public void onClick(View v) {
                         clickFeedback();
-                        openSoulseekSearchKeyboard(q);
+                        if (requireInternet(R.string.soulseek_wifi_required)) {
+                            fetchSoulseekResults(q);
+                        }
                     }
                 });
                 containerBrowserItems.addView(b);
@@ -17619,11 +18799,15 @@ public class MainActivity extends Activity {
                 }
 
                 if (isVirtualPlaylistView() && playlistMoveFrom >= 0) {
+                    if (playlistMoveStrip != null && playlistMoveStrip.isAnimating()) return true;
                     int delta = mapWheelToMenuMove(keyCode);
                     if (delta != 0) {
-                        int newIdx = playlistMoveFrom + delta;
-                        if (newIdx >= 0 && newIdx < virtualSongList.size() && newIdx != playlistMoveFrom) {
+                        if (!playlistMoveWheelFilter.accept()) return true;
+                        int newIdx = QueueMoveWindow.nextMoveIndex(
+                                playlistMoveFrom, delta, virtualSongList.size());
+                        if (newIdx != playlistMoveFrom) {
                             applyPlaylistMove(playlistMoveFrom, newIdx);
+                            clickFeedback();
                         }
                         return true;
                     }
@@ -17694,43 +18878,39 @@ public class MainActivity extends Activity {
                 }
             }
             // 🚀 [여기까지 덮어쓰기 완료!]
-            if (currentScreenState == STATE_SETTINGS && isHomeScreenArrangeScreen()
-                    && homeScreenMoveModeId != null) {
+            if (currentScreenState == STATE_SETTINGS && SettingsScreens.HOME.equals(settingsSubScreenKey)
+                    && isHomeEditorMoveActive()) {
+                if (homeEditorMoveStrip != null && homeEditorMoveStrip.isAnimating()) return true;
                 int delta = mapWheelToMenuMove(keyCode);
                 if (delta != 0) {
-                    List<String> ids = HomeMenuConfig.loadHomeOrderIds(prefs);
-                    int idx = ids.indexOf(homeScreenMoveModeId);
-                    int newIdx = idx + delta;
-                    if (idx >= 0 && newIdx >= 0 && newIdx < ids.size()) {
-                        HomeMenuConfig.move(prefs, idx, newIdx);
-                        buildHomeMenu();
-                        homeScreenOrderFocusIndex = newIdx + 1;
-                        reorderHomeArrangeRows(false);
-                        refreshHomeArrangeMoveUi(false);
-                        restoreHomeScreenEditorFocus(homeScreenOrderFocusIndex);
+                    if (!homeEditorMoveWheelFilter.accept()) return true;
+                    java.util.List<String> ids = HomeMenuConfig.loadHomeEditorMoveIds(prefs);
+                    int newIdx = QueueMoveWindow.nextMoveIndex(homeEditorMoveIndex, delta, ids.size());
+                    if (newIdx != homeEditorMoveIndex) {
+                        applyHomeEditorMove(homeEditorMoveIndex, newIdx);
                         clickFeedback();
                     }
                     return true;
                 }
             }
-            if (currentScreenState == STATE_SETTINGS && isHomeMoreArrangeScreen()
-                    && homeMoreMoveModeId != null) {
+            if (currentScreenState == STATE_SETTINGS && isHomeMoreEditorScreen()
+                    && isMoreEditorMoveActive()) {
+                if (moreEditorMoveStrip != null && moreEditorMoveStrip.isAnimating()) return true;
                 int delta = mapWheelToMenuMove(keyCode);
                 if (delta != 0) {
-                    List<String> ids = HomeMenuConfig.loadMoreOrderIds(prefs);
-                    int idx = ids.indexOf(homeMoreMoveModeId);
-                    int newIdx = idx + delta;
-                    if (idx >= 0 && newIdx >= 0 && newIdx < ids.size()) {
-                        HomeMenuConfig.moveMore(prefs, idx, newIdx);
-                        buildHomeMenu();
-                        homeScreenOrderFocusIndex = newIdx + 1;
-                        reorderHomeArrangeRows(true);
-                        refreshHomeArrangeMoveUi(true);
-                        restoreHomeScreenEditorFocus(homeScreenOrderFocusIndex);
+                    if (!moreEditorMoveWheelFilter.accept()) return true;
+                    java.util.List<String> ids = HomeMenuConfig.loadMoreOrderIds(prefs);
+                    int newIdx = QueueMoveWindow.nextMoveIndex(moreEditorMoveIndex, delta, ids.size());
+                    if (newIdx != moreEditorMoveIndex) {
+                        applyMoreEditorMove(moreEditorMoveIndex, newIdx);
                         clickFeedback();
                     }
                     return true;
                 }
+            }
+            if (currentScreenState == STATE_SETTINGS && SettingsScreens.HOME.equals(settingsSubScreenKey)
+                    && isHomeEditorMoveActive()) {
+                return true;
             }
             if (currentScreenState == STATE_SETTINGS && isThemeListActive()
                     && (keyCode == 21 || keyCode == 22)) {
@@ -18459,6 +19639,7 @@ public class MainActivity extends Activity {
         new Thread(new Runnable() {
             @Override
             public void run() {
+                ArtistSeparatorCatalog.maybeRefreshAsync(MainActivity.this);
                 try {
                     String query = java.net.URLEncoder.encode(cleanQuery, "UTF-8");
                     String urlString = "http://api.deezer.com/search?q=" + query;
@@ -19167,155 +20348,60 @@ public class MainActivity extends Activity {
 
         @Override
         public View getView(final int position, View convertView, android.view.ViewGroup parent) {
-            if (reorderable) {
-                return buildPlaylistSongRowView(position, convertView);
-            }
-            return buildSimpleSongRowView(position, convertView);
+            return buildTwoLineSongRowView(position, convertView, reorderable);
         }
 
-        private View buildSimpleSongRowView(final int position, View convertView) {
-            final Button btn;
-
-            if (convertView == null) {
-                btn = createListButton("");
-                btn.setLayoutParams(new android.widget.AbsListView.LayoutParams(
-                        android.widget.AbsListView.LayoutParams.MATCH_PARENT,
-                        android.widget.AbsListView.LayoutParams.WRAP_CONTENT
-                ));
-            } else {
-                btn = (Button) convertView;
-            }
-
+        private View buildTwoLineSongRowView(final int position, View convertView, final boolean numbered) {
             final SongItem song = songAt(position);
-            btn.setText("🎵 " + song.title);
-
-            final int rowKind = Y1_ROW_ITEM;
-            final int rowW = y1ActiveRowWidthPx();
-            btn.setBackground(getY1RowBackground(false, rowW, rowKind));
-            ThemeManager.applyThemedTextStyle(btn, y1RowTextColorNormal(rowKind));
-            btn.setSelected(false);
-            btn.setOnFocusChangeListener(new View.OnFocusChangeListener() {
-                @Override
-                public void onFocusChange(View v, boolean hasFocus) {
-                    btn.setBackground(getY1RowBackground(hasFocus, rowW, rowKind));
-                    ThemeManager.applyThemedTextStyle(btn, hasFocus
-                            ? y1RowTextColorSelected(rowKind) : y1RowTextColorNormal(rowKind));
-                    btn.setSelected(hasFocus);
-                    if (hasFocus) showFastScrollLetter(song.title);
-                }
-            });
-
-            btn.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    if (System.currentTimeMillis() < suppressListClickUntil) return;
-                    clickFeedback();
-                    playTrackList(virtualSongList, position,
-                            "PLAYLIST".equals(virtualQueryType) ? virtualQueryValue : null);
-                }
-            });
-
-            return btn;
-        }
-
-        private View buildPlaylistSongRowView(final int position, View convertView) {
-            final SongItem song = songAt(position);
-            LinearLayout layout;
-            if (convertView instanceof LinearLayout && "playlist_row".equals(convertView.getTag())) {
-                layout = (LinearLayout) convertView;
+            FrameLayout row;
+            if (convertView instanceof FrameLayout && "two_line_song_row".equals(convertView.getTag())) {
+                row = (FrameLayout) convertView;
             } else {
-                layout = createRearrangeListRow(null, "", null);
-                layout.setTag("playlist_row");
+                row = MoveRibbonRows.createLibraryMoveRow(MainActivity.this, y1LibraryRowHeightPx);
+                row.setTag("two_line_song_row");
+                row.setFocusable(true);
+                row.setSoundEffectsEnabled(false);
+                row.setLayoutParams(new android.widget.AbsListView.LayoutParams(
+                        android.widget.AbsListView.LayoutParams.MATCH_PARENT, y1LibraryRowHeightPx + 2));
             }
-            layout.setLayoutParams(new android.widget.AbsListView.LayoutParams(
-                    android.widget.AbsListView.LayoutParams.MATCH_PARENT, y1RowHeightPx * 2));
-            final boolean moving = playlistMoveFrom == position;
             final boolean nowPlaying = isPlaylistViewNowPlayingSlot(position);
-            layout.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            final boolean playing = nowPlaying && !isPausedByHand && playback.isMusicActive();
+            row.setOnFocusChangeListener(new View.OnFocusChangeListener() {
                 @Override
                 public void onFocusChange(View v, boolean hasFocus) {
-                    if (!(v instanceof LinearLayout)) return;
-                    LinearLayout row = (LinearLayout) v;
-                    boolean showFocus = (hasFocus && !nowPlaying) || moving;
-                    bindRearrangeRowAdornment(row, moving, hasFocus && !nowPlaying);
-                    int rowW = y1ActiveRowWidthPx();
-                    row.setBackground(getY1RowBackground(showFocus, rowW, Y1_ROW_MENU));
-                    TextView tvLeft = (TextView) row.findViewWithTag(TAG_REARRANGE_LABEL);
-                    if (tvLeft != null) {
-                        ThemeManager.applyThemedTextStyle(tvLeft, showFocus
-                                ? y1RowTextColorSelected(Y1_ROW_MENU) : y1RowTextColorNormal(Y1_ROW_MENU));
-                        tvLeft.setSelected(hasFocus);
-                        if (hasFocus) enableMarquee(tvLeft);
-                    }
+                    MoveRibbonRows.bindLibraryMoveRow(MainActivity.this, row,
+                            numbered ? String.format(Locale.US, "%02d · %s", position + 1, song.title)
+                                    : song.title,
+                            songSubtitleLine(song), false, hasFocus, nowPlaying, playing,
+                            y1ActiveRowWidthPx(), y1LibraryRowHeightPx);
                     if (hasFocus) showFastScrollLetter(song.title);
                 }
             });
-            layout.setOnClickListener(new View.OnClickListener() {
+            row.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
                     if (System.currentTimeMillis() < suppressListClickUntil) return;
                     clickFeedback();
                     if (playlistMoveFrom >= 0) return;
-                    playTrackList(virtualSongList, position, virtualQueryValue);
+                    playTrackList(virtualSongList, position,
+                            "PLAYLIST".equals(virtualQueryType) ? virtualQueryValue : null);
                 }
             });
-
-            TextView tvLeft = (TextView) layout.findViewWithTag(TAG_REARRANGE_LABEL);
-            if (tvLeft != null) {
-                String num = String.format(Locale.US, "%02d · ", position + 1);
-                tvLeft.setText(num + song.title);
-                tvLeft.setMaxLines(1);
-                if (nowPlaying) {
-                    tvLeft.setTypeface(null, android.graphics.Typeface.BOLD);
-                    tvLeft.setTextColor(0xFF00FF00);
-                } else {
-                    tvLeft.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
-                }
-            }
-            TextView tvSub = (TextView) layout.findViewWithTag("playlist_sub");
-            if (tvSub == null) {
-                tvSub = new TextView(MainActivity.this);
-                tvSub.setTag("playlist_sub");
-                tvSub.setTypeface(ThemeManager.getCustomFont());
-                tvSub.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
-                        getResources().getDimension(R.dimen.y1_menu_text_size) * 0.78f);
-                tvSub.setSingleLine(true);
-                tvSub.setEllipsize(TextUtils.TruncateAt.END);
-                LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-                subLp.leftMargin = (int) getResources().getDimension(R.dimen.y1_menu_text_pad_left);
-                layout.addView(tvSub, 1, subLp);
-                layout.setOrientation(LinearLayout.VERTICAL);
-            }
-            String sub = song.artist.isEmpty() ? song.album : (song.artist + " · " + song.album);
-            tvSub.setText(sub);
-            ThemeManager.applyThemedTextStyle(tvSub, ThemeManager.getHintTextColor());
-            ImageView pp = (ImageView) layout.findViewWithTag("playlist_pp");
-            if (nowPlaying) {
-                if (pp == null) {
-                    pp = new ImageView(MainActivity.this);
-                    pp.setTag("playlist_pp");
-                    int sz = (int) (y1RowHeightPx * 0.45f);
-                    LinearLayout.LayoutParams ppLp = new LinearLayout.LayoutParams(sz, sz);
-                    ppLp.gravity = Gravity.CENTER_VERTICAL;
-                    layout.addView(pp, ppLp);
-                }
-                boolean playing = false;
-                try { playing = mediaPlayer != null && mediaPlayer.isPlaying(); } catch (Exception ignored) {}
-                pp.setImageResource(playing ? R.drawable.ic_play : R.drawable.ic_pause);
-                pp.setColorFilter(ThemeManager.getItemTextColorSelected());
-                pp.setVisibility(View.VISIBLE);
-            } else if (pp != null) {
-                pp.setVisibility(View.GONE);
-            }
-            bindRearrangeRowAdornment(layout, moving, layout.hasFocus() && !nowPlaying);
-            boolean showFocus = (layout.hasFocus() && !nowPlaying) || moving;
-            layout.setBackground(getY1RowBackground(showFocus, y1ActiveRowWidthPx(), Y1_ROW_MENU));
-            if (!nowPlaying && tvLeft != null) {
-                ThemeManager.applyThemedTextStyle(tvLeft, showFocus
-                        ? y1RowTextColorSelected(Y1_ROW_MENU) : y1RowTextColorNormal(Y1_ROW_MENU));
-            }
-            return layout;
+            MoveRibbonRows.bindLibraryMoveRow(MainActivity.this, row,
+                    numbered ? String.format(Locale.US, "%02d · %s", position + 1, song.title)
+                            : song.title,
+                    songSubtitleLine(song), false, row.hasFocus(), nowPlaying, playing,
+                    y1ActiveRowWidthPx(), y1LibraryRowHeightPx);
+            return row;
         }
+
+        private View buildSimpleSongRowView(final int position, View convertView) {
+            return buildTwoLineSongRowView(position, convertView, false);
+        }
+
+        private View buildPlaylistSongRowView(final int position, View convertView) {
+            return buildTwoLineSongRowView(position, convertView, true);
+        }
+
     }
 }
