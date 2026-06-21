@@ -2109,8 +2109,16 @@ public final class ThemedContextMenu {
         }
         if (sliderRow != null) sliderRow.setVisibility(View.VISIBLE);
         syncMediaSliderBlockVisibility();
-        optionsListVisible = false;
-        collapseOptionsListPanel();
+        if (queueMode) {
+            optionsListVisible = true;
+            if (itemsScroll != null) {
+                itemsScroll.setVisibility(View.VISIBLE);
+                updateListHeightToContent();
+            }
+        } else {
+            optionsListVisible = false;
+            collapseOptionsListPanel();
+        }
         quickFocusIndex = quickIndex;
         quickReturnIndex = quickIndex;
         focusZone = FocusZone.QUICK_BAR;

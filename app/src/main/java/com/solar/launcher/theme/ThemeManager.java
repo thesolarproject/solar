@@ -95,6 +95,8 @@ public class ThemeManager {
                 copyAssetTree(ctx.getAssets(), BUNDLED_ASSET_DIR, dest);
             } else {
                 syncBundledSolarAssets(ctx, dest);
+                syncBundledThemeBlocks(ctx, dest);
+                copyMissingBundledAssets(ctx, dest);
             }
         } catch (Exception ignored) {}
         ensureBundledFallback(ctx);
@@ -144,6 +146,66 @@ public class ThemeManager {
                 fos.close();
             }
         } catch (Exception ignored) {}
+    }
+
+    /** Merge missing Y1 config blocks from bundled Aura into an existing Default folder. */
+    private static void syncBundledThemeBlocks(Context ctx, File destDir) {
+        try {
+            byte[] raw = readAllFromAsset(ctx.getAssets(), BUNDLED_ASSET_DIR + "/config.json");
+            JSONObject bundled = new JSONObject(new String(raw, "UTF-8"));
+            File config = new File(destDir, "config.json");
+            JSONObject destRoot = new JSONObject(new String(readAll(config), "UTF-8"));
+            boolean changed = false;
+            for (String block : new String[]{"itemConfig", "menuConfig", "homePageConfig", "statusConfig"}) {
+                JSONObject src = bundled.optJSONObject(block);
+                if (src == null) continue;
+                JSONObject dst = destRoot.optJSONObject(block);
+                if (dst == null) {
+                    destRoot.put(block, new JSONObject(src.toString()));
+                    changed = true;
+                    continue;
+                }
+                java.util.Iterator<String> keys = src.keys();
+                while (keys.hasNext()) {
+                    String k = keys.next();
+                    String v = src.optString(k, "").trim();
+                    if (v.isEmpty()) continue;
+                    if (!dst.has(k) || dst.optString(k, "").trim().isEmpty()) {
+                        dst.put(k, src.opt(k));
+                        changed = true;
+                    }
+                }
+            }
+            if (changed) {
+                OutputStream fos = new FileOutputStream(config);
+                fos.write(destRoot.toString(2).getBytes("UTF-8"));
+                fos.close();
+            }
+        } catch (Exception ignored) {}
+    }
+
+    /** Copy bundled theme files that are missing or empty on disk (post-OTA / partial SD). */
+    private static void copyMissingBundledAssets(Context ctx, File destDir) {
+        try {
+            copyMissingAssetTree(ctx.getAssets(), BUNDLED_ASSET_DIR, destDir);
+        } catch (Exception ignored) {}
+    }
+
+    private static void copyMissingAssetTree(AssetManager am, String assetDir, File destDir)
+            throws Exception {
+        String[] names = am.list(assetDir);
+        if (names == null) return;
+        for (String name : names) {
+            String childAsset = assetDir + "/" + name;
+            File out = new File(destDir, name);
+            String[] sub = am.list(childAsset);
+            if (sub != null && sub.length > 0) {
+                if (!out.exists()) out.mkdirs();
+                copyMissingAssetTree(am, childAsset, out);
+            } else if (!out.isFile() || out.length() == 0) {
+                copyAsset(am, childAsset, out);
+            }
+        }
     }
 
     private static void ensureBundledFallback(Context ctx) {
@@ -327,7 +389,6 @@ public class ThemeManager {
         }
     }
 
-    /** When saved or selected theme folder is missing, fall back to bundled Aura. */
     public static void ensureActiveThemeOrFallback(Context ctx) {
         if (ctx != null) themesRootPath = resolveThemesRoot(ctx);
         ThemeEntry cur = getCurrentTheme();
@@ -1047,7 +1108,9 @@ public class ThemeManager {
             in = null;
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null;
             int sample = 1;
-            while (Math.max(bounds.outWidth, bounds.outHeight) / sample > maxSide) sample *= 2;
+            if (maxSide > 0) {
+                while (Math.max(bounds.outWidth, bounds.outHeight) / sample > maxSide) sample *= 2;
+            }
             BitmapFactory.Options opts = new BitmapFactory.Options();
             opts.inSampleSize = sample;
             in = am.open(assetPath);
@@ -1061,30 +1124,56 @@ public class ThemeManager {
         }
     }
 
-    public static Bitmap getThemeBitmap(String relativePath) {
-        if (relativePath == null || relativePath.isEmpty()) return null;
-        ThemeEntry t = getCurrentTheme();
-        String cacheKey = t.folderPath + ":" + relativePath;
-        if (bitmapCache.containsKey(cacheKey)) return bitmapCache.get(cacheKey);
-        File f = resolveThemeAssetFile(t.folderPath, relativePath);
-        if (f == null) return null;
+    private static Bitmap decodeBitmapFile(String path) {
         try {
-            Bitmap bmp = BitmapFactory.decodeFile(f.getAbsolutePath());
-            if (bmp != null) bitmapCache.put(cacheKey, bmp);
-            return bmp;
+            return BitmapFactory.decodeFile(path);
         } catch (Exception e) {
             return null;
         }
     }
 
+    /** Disk path, asset:// theme folder, or bundled Aura fallback for built-in Default. */
+    private static Bitmap decodeThemeBitmapForEntry(ThemeEntry entry, String relativePath, int maxSide) {
+        if (entry == null || relativePath == null || relativePath.isEmpty()) return null;
+        Bitmap bmp = null;
+        String folderPath = entry.folderPath;
+        if (folderPath != null && folderPath.startsWith("asset://")) {
+            bmp = decodeBundledThemeAsset(relativePath, maxSide);
+        } else {
+            File f = resolveThemeAssetFile(folderPath, relativePath);
+            if (f != null && f.isFile()) {
+                bmp = maxSide > 0
+                        ? decodeBitmapFileMaxSide(f.getAbsolutePath(), maxSide)
+                        : decodeBitmapFile(f.getAbsolutePath());
+            }
+        }
+        if (bmp == null && isBuiltInDefault(entry)) {
+            bmp = decodeBundledThemeAsset(relativePath, maxSide);
+        }
+        return bmp;
+    }
+
+    public static Bitmap getThemeBitmap(String relativePath) {
+        if (relativePath == null || relativePath.isEmpty()) return null;
+        ThemeEntry t = getCurrentTheme();
+        String cacheKey = t.folderPath + ":" + relativePath;
+        if (bitmapCache.containsKey(cacheKey)) return bitmapCache.get(cacheKey);
+        Bitmap bmp = decodeThemeBitmapForEntry(t, relativePath, 0);
+        if (bmp != null) bitmapCache.put(cacheKey, bmp);
+        return bmp;
+    }
+
     public static Bitmap getCustomIcon(String iconFileName, Context context, int defaultResId) {
         Bitmap themed = getThemeBitmap(iconFileName);
         if (themed != null) return themed;
-        File iconFile = new File(getCurrentTheme().folderPath, iconFileName);
-        if (iconFile.isFile()) {
-            try {
-                return BitmapFactory.decodeFile(iconFile.getAbsolutePath());
-            } catch (Exception ignored) {}
+        ThemeEntry t = getCurrentTheme();
+        if (t.folderPath != null && !t.folderPath.startsWith("asset://")) {
+            File iconFile = new File(t.folderPath, iconFileName);
+            if (iconFile.isFile()) {
+                try {
+                    return BitmapFactory.decodeFile(iconFile.getAbsolutePath());
+                } catch (Exception ignored) {}
+            }
         }
         return BitmapFactory.decodeResource(context.getResources(), defaultResId);
     }
@@ -1186,13 +1275,7 @@ public class ThemeManager {
 
     public static Bitmap getThemeEntryBitmap(ThemeEntry entry, String relativePath) {
         if (entry == null || relativePath == null || relativePath.isEmpty()) return null;
-        File f = resolveThemeAssetFile(entry.folderPath, relativePath);
-        if (f == null || !f.isFile()) return null;
-        try {
-            return BitmapFactory.decodeFile(f.getAbsolutePath());
-        } catch (Exception e) {
-            return null;
-        }
+        return decodeThemeBitmapForEntry(entry, relativePath, 0);
     }
 
     /** Installed-theme wallpaper candidates (480×360 Y1 assets). */
