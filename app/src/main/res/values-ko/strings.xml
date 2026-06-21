@@ -257,7 +257,7 @@
     <string name="keyboard_target_wifi">대상: %1$s</string>
     <string name="keyboard_soulseek_username">Soulseek 사용자 이름</string>
     <string name="keyboard_soulseek_password">Soulseek 비밀번호</string>
-    <string name="keyboard_hint">이전: 삭제 · 다음: 공백 · 재생: 확인 · 재생 길게: Aa / # · 휠: 선택 · 가운데: 입력</string>
+    <string name="keyboard_hint">이전 길게: 삭제 · 재생: 확인\n재생 길게: Aa / # · 휠: 선택 · 가운데: 입력</string>
     <string name="browser_folders">📁 폴더</string>
     <string name="browser_artists">👤 아티스트</string>
     <string name="browser_albums">💿 앨범</string>
@@ -443,6 +443,9 @@
     <string name="context_menu_title">옵션</string>
     <string name="context_back">뒤로</string>
     <string name="context_tier_wifi">Wi-Fi</string>
+    <string name="context_wifi_on">Wi-Fi 켜짐</string>
+    <string name="context_wifi_off">Wi-Fi 꺼짐</string>
+    <string name="context_wifi_busy">Wi-Fi…</string>
     <string name="context_wifi_connected">연결됨</string>
     <string name="context_tier_bluetooth">블루투스</string>
     <string name="context_browse_artist">아티스트: %1$s</string>

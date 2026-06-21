@@ -288,7 +288,7 @@
     <string name="keyboard_target_wifi">Target: %1$s</string>
     <string name="keyboard_soulseek_username">Reach Username</string>
     <string name="keyboard_soulseek_password">Reach Password</string>
-    <string name="keyboard_hint">Prev: Delete · Next: Space · Play: OK · Hold Play: Aa / # · Wheel: pick · Center: type</string>
+    <string name="keyboard_hint">Hold Prev: delete · Play: OK\nHold Play: Aa / # · Wheel: pick · Center: type</string>
 
     <!-- Browser -->
     <string name="browser_folders">📁 Folders</string>
@@ -535,6 +535,9 @@
     <string name="context_quick_power">Power</string>
     <string name="context_quick_queue">Queue</string>
     <string name="context_tier_wifi">Wi-Fi</string>
+    <string name="context_wifi_on">Wi-Fi On</string>
+    <string name="context_wifi_off">Wi-Fi Off</string>
+    <string name="context_wifi_busy">Wi-Fi…</string>
     <string name="context_wifi_connected">Connected</string>
     <string name="context_tier_bluetooth">Bluetooth</string>
     <string name="context_shutdown_title">Shut down?</string>

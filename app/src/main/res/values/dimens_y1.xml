@@ -9,6 +9,7 @@
     <dimen name="y1_menu_item_height">45dp</dimen>
     <dimen name="y1_menu_text_size">22sp</dimen>
     <dimen name="y1_menu_text_pad_left">5dp</dimen>
+    <dimen name="y1_context_back_pad_right">2dp</dimen>
     <dimen name="y1_arrow_margin_end">10dp</dimen>
     <!-- Home menu panel clips at the right edge; library/context rows have outer padding. -->
     <dimen name="y1_home_arrow_extra_inset">6dp</dimen>

@@ -238,6 +238,7 @@ public final class ThemedContextMenu {
     public void focusBackChip() {
         if (titleView == null) return;
         focusZone = FocusZone.OPTIONS_TITLE;
+        scrollQuickBarToStart();
         refreshAll();
         requestOverlayFocus();
     }
@@ -291,7 +292,7 @@ public final class ThemedContextMenu {
         if (openEndQuickTierInsteadOfList()) return;
         if (labels == null || labels.length == 0) return;
         if (!optionsListVisible && !submenuTierOpen && !queueMode) {
-            focusOptionsTitle();
+            enterOptionsListFromTitle();
             return;
         }
         int idx = focusIndex >= 0 ? clampFocusableIndex(focusIndex) : firstFocusableIndex(0);
@@ -359,7 +360,7 @@ public final class ThemedContextMenu {
         }
         if (titleChip != null) {
             int w = titleChip.getWidth() > 0 ? titleChip.getWidth()
-                    : (int) (rowHeightPx * 2.4f);
+                    : (int) (rowHeightPx * 2.05f);
             titleChip.setBackground(rowBackground(titleFocused, w, rowHeightPx));
         }
         if (titleBackIcon != null) {
@@ -402,7 +403,7 @@ public final class ThemedContextMenu {
         quickBarHost = null;
         if (showBackChip) {
             int textPadLeft = (int) activity.getResources().getDimension(R.dimen.y1_menu_text_pad_left);
-            int textPadRight = textPadLeft;
+            int textPadRight = (int) activity.getResources().getDimension(R.dimen.y1_context_back_pad_right);
             titleChip = new FrameLayout(activity);
             LinearLayout titleInner = new LinearLayout(activity);
             titleInner.setOrientation(LinearLayout.HORIZONTAL);
@@ -413,7 +414,7 @@ public final class ThemedContextMenu {
             titleBackIcon.setScaleType(ImageView.ScaleType.FIT_CENTER);
             titleBackIcon.setVisibility(View.VISIBLE);
             LinearLayout.LayoutParams iconLp = new LinearLayout.LayoutParams(iconSize, iconSize);
-            iconLp.rightMargin = (int) (3 * density);
+            iconLp.rightMargin = (int) (2 * density);
             titleInner.addView(titleBackIcon, iconLp);
             titleView = new TextView(activity);
             titleView.setText(activity.getString(R.string.context_back));
@@ -433,11 +434,11 @@ public final class ThemedContextMenu {
             innerLp.leftMargin = textPadLeft;
             innerLp.gravity = Gravity.CENTER_VERTICAL | Gravity.START;
             titleChip.addView(titleInner, innerLp);
-            titleChip.setMinimumWidth((int) (rowHeightPx * 2.4f));
+            titleChip.setMinimumWidth((int) (rowHeightPx * 2.05f));
             LinearLayout.LayoutParams chipLp = new LinearLayout.LayoutParams(
                     hasQuick ? LinearLayout.LayoutParams.WRAP_CONTENT : LinearLayout.LayoutParams.MATCH_PARENT,
                     rowHeightPx, 0f);
-            if (hasQuick) chipLp.rightMargin = (int) (4 * density);
+            if (hasQuick) chipLp.rightMargin = (int) (2 * density);
             titleRow.addView(titleChip, chipLp);
         }
         if (hasQuick) {
@@ -455,8 +456,8 @@ public final class ThemedContextMenu {
             quickBarScroll.addView(quickBarHost, new HorizontalScrollView.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, rowHeightPx));
             LinearLayout.LayoutParams qLp = new LinearLayout.LayoutParams(
-                    showBackChip ? LinearLayout.LayoutParams.WRAP_CONTENT : LinearLayout.LayoutParams.MATCH_PARENT,
-                    rowHeightPx);
+                    showBackChip ? 0 : LinearLayout.LayoutParams.MATCH_PARENT,
+                    rowHeightPx, showBackChip ? 1f : 0f);
             titleRow.addView(quickBarScroll, qLp);
         }
     }
@@ -561,9 +562,18 @@ public final class ThemedContextMenu {
         return lastVisibleQuickIndex();
     }
 
-    /** Move highlight to the quick toggle that opened this tier — list stays visible. */
-    private void focusQuickBarFromListExit() {
-        if (quickBarHost == null || quickBarHost.getChildCount() == 0) return;
+    /** Move highlight to the last quick-bar icon (Volume) when leaving the top of the list. */
+    private void focusQuickBarFromListTopExit() {
+        if (quickBarHost == null || quickBarHost.getChildCount() == 0) {
+            ensureContextTitleBar(quickItems.length > 0);
+            if ((quickBarHost == null || quickBarHost.getChildCount() == 0) && quickItems.length > 0) {
+                replaceQuickBar(quickItems);
+            }
+        }
+        if (quickBarHost == null || quickBarHost.getChildCount() == 0) {
+            if (hasBackChip()) focusBackChip();
+            return;
+        }
         if (queueMode) {
             focusQuickBarLeavingQueueList(quickBarReturnIndex());
             return;
@@ -574,10 +584,20 @@ public final class ThemedContextMenu {
             updateListHeightToContent();
         }
         focusZone = FocusZone.QUICK_BAR;
-        quickFocusIndex = quickBarReturnIndex();
+        quickFocusIndex = lastVisibleQuickIndex();
         refreshAll();
         scrollQuickFocusIntoView();
         requestOverlayFocus();
+    }
+
+    /** Move highlight to the quick toggle that opened this tier — list stays visible. */
+    private void focusQuickBarFromListExit() {
+        if (quickBarHost == null || quickBarHost.getChildCount() == 0) return;
+        if (queueMode) {
+            focusQuickBarLeavingQueueList(quickBarReturnIndex());
+            return;
+        }
+        focusQuickBarFromListTopExit();
     }
 
     private int queueRowSlotHeight() {
@@ -605,24 +625,49 @@ public final class ThemedContextMenu {
         return 1;
     }
 
+    /** Browse mode: keep the focused row in the center viewport line; edges clamp via scroll. */
+    private int queueBrowseViewportSlot(int index, int count) {
+        return 1;
+    }
+
+    private int queueScrollViewportSlot(int index, int count) {
+        if (queueMode && !isQueueMoveActive()) return queueBrowseViewportSlot(index, count);
+        return queueViewportSlotForIndex(index, count);
+    }
+
+    /** Scroll offset from absolute queue index — stable before row layout completes. */
+    private int queueScrollTargetY(int index, int count, int viewport) {
+        if (index < 0 || count <= 0 || viewport <= 0) return 0;
+        int slotH = queueRowSlotHeight();
+        if (slotH <= 0) return 0;
+        int slot = queueScrollViewportSlot(index, count);
+        int contentH = count * slotH;
+        int maxScroll = Math.max(0, contentH - viewport);
+        return Math.min(Math.max(0, index * slotH - slot * slotH), maxScroll);
+    }
+
     private void scrollQueueRowToViewportSlotNow(int index) {
         if (itemsScroll == null || itemsHost == null) return;
         if (index < 0) return;
         if (queueMode && useQueueBrowseVirtual()) {
             ensureQueueBrowseWindowForFocus();
         }
+        int count = queueMode ? queueRows.length : itemsHost.getChildCount();
+        if (index >= count) return;
+        int viewport = itemsScroll.getHeight();
+        if (viewport <= 0) return;
+        if (queueMode && !isQueueMoveActive()) {
+            itemsScroll.scrollTo(0, queueScrollTargetY(index, count, viewport));
+            return;
+        }
         View row = queueMode ? findQueueRowByIndex(index) : null;
         if (row == null && index < itemsHost.getChildCount()) {
             row = itemsHost.getChildAt(index);
         }
         if (row == null) return;
-        int count = queueMode ? queueRows.length : itemsHost.getChildCount();
-        if (index >= count) return;
         int rowTop = row.getTop();
-        int viewport = itemsScroll.getHeight();
-        if (viewport <= 0) return;
         int maxScroll = Math.max(0, itemsHost.getHeight() - viewport);
-        int slot = queueViewportSlotForIndex(index, count);
+        int slot = queueScrollViewportSlot(index, count);
         int slotH = queueRowSlotHeight();
         int target = rowTop - slot * slotH;
         itemsScroll.scrollTo(0, Math.min(Math.max(0, target), maxScroll));
@@ -631,6 +676,17 @@ public final class ThemedContextMenu {
     private void scrollQueueRowToViewportSlotImmediate(final int index) {
         scrollQueueRowToViewportSlotNow(index);
         if (itemsScroll == null || itemsHost == null) return;
+        if (queueMode && !isQueueMoveActive()) {
+            if (itemsScroll.getHeight() <= 0) {
+                itemsHost.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        scrollQueueRowToViewportSlotNow(index);
+                    }
+                });
+            }
+            return;
+        }
         itemsHost.post(new Runnable() {
             @Override
             public void run() {
@@ -1157,7 +1213,7 @@ public final class ThemedContextMenu {
             if (row == null) continue;
             TextView title = (TextView) row.findViewWithTag(TAG_QUEUE_TITLE);
             TextView sub = (TextView) row.findViewWithTag(TAG_QUEUE_SUB);
-            if (title != null) title.setText(rows[i].title);
+            if (title != null) title.setText(rows[i].displayLine());
             if (sub != null) {
                 if (rows[i].subtitle.isEmpty()) {
                     sub.setVisibility(View.GONE);
@@ -1558,10 +1614,117 @@ public final class ThemedContextMenu {
 
     private void ensureQueueBrowseWindowForFocus() {
         if (!useQueueBrowseVirtual()) return;
-        int end = queueBrowseWindowEnd();
+        int count = queueRows.length;
+        int visible = queueBrowseVisibleRows();
+        int buffer = QueueBrowseWindow.ROW_BUFFER;
+        int windowSize = QueueBrowseWindow.windowSize(visible, buffer);
+        if (count <= windowSize) {
+            if (queueBrowseWindowStart != 0 || itemsHost.getChildCount() == 0) {
+                rebuildQueueBrowseWindow();
+            }
+            return;
+        }
+        int end = queueBrowseWindowStart + windowSize;
+        int maxStart = count - windowSize;
         if (focusIndex < queueBrowseWindowStart || focusIndex >= end) {
             rebuildQueueBrowseWindow();
+            return;
         }
+        int newStart = queueBrowseWindowStart;
+        if (focusIndex >= end - buffer && newStart < maxStart) {
+            newStart++;
+        } else if (focusIndex < queueBrowseWindowStart + buffer && newStart > 0) {
+            newStart--;
+        }
+        if (newStart != queueBrowseWindowStart) {
+            slideQueueBrowseWindow(newStart);
+        }
+    }
+
+    private void slideQueueBrowseWindow(int newStart) {
+        if (itemsHost == null || !useQueueBrowseVirtual()) return;
+        int oldStart = queueBrowseWindowStart;
+        if (newStart == oldStart) return;
+        int count = queueRows.length;
+        int visible = queueBrowseVisibleRows();
+        int buffer = QueueBrowseWindow.ROW_BUFFER;
+        int windowSize = QueueBrowseWindow.windowSize(visible, buffer);
+        newStart = Math.max(0, Math.min(newStart, count - windowSize));
+        if (newStart == oldStart) return;
+
+        int slotH = queueRowSlotHeight();
+        float density = activity.getResources().getDisplayMetrics().density;
+        int rowH = queueRowHeightPx > 0 ? queueRowHeightPx : rowHeightPx;
+        int oldEnd = oldStart + windowSize;
+        int newEnd = newStart + windowSize;
+
+        if (newStart > oldStart) {
+            int drop = newStart - oldStart;
+            int child = 0;
+            if (oldStart > 0) {
+                View topSpacer = itemsHost.getChildAt(0);
+                if (topSpacer != null) {
+                    ViewGroup.LayoutParams lp = topSpacer.getLayoutParams();
+                    lp.height = newStart * slotH;
+                    topSpacer.setLayoutParams(lp);
+                }
+                child = 1;
+            }
+            for (int i = 0; i < drop && child < itemsHost.getChildCount(); i++) {
+                itemsHost.removeViewAt(child);
+            }
+            int insertBefore = itemsHost.getChildCount();
+            if (newEnd < count) insertBefore--;
+            for (int i = oldEnd; i < newEnd && i < count; i++) {
+                itemsHost.addView(createQueueRow(queueRows[i], i, rowH, density), insertBefore++);
+            }
+            if (newEnd < count) {
+                View bottomSpacer = itemsHost.getChildAt(itemsHost.getChildCount() - 1);
+                if (bottomSpacer != null && bottomSpacer.getTag() == null) {
+                    ViewGroup.LayoutParams lp = bottomSpacer.getLayoutParams();
+                    lp.height = (count - newEnd) * slotH;
+                    bottomSpacer.setLayoutParams(lp);
+                }
+            }
+        } else {
+            int drop = oldStart - newStart;
+            int child = 0;
+            if (newStart > 0) {
+                if (oldStart > 0) {
+                    View topSpacer = itemsHost.getChildAt(0);
+                    if (topSpacer != null) {
+                        ViewGroup.LayoutParams lp = topSpacer.getLayoutParams();
+                        lp.height = newStart * slotH;
+                        topSpacer.setLayoutParams(lp);
+                    }
+                } else {
+                    View topSpacer = new View(activity);
+                    topSpacer.setFocusable(false);
+                    itemsHost.addView(topSpacer, 0, new LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT, newStart * slotH));
+                }
+                child = 1;
+            } else if (oldStart > 0) {
+                itemsHost.removeViewAt(0);
+            }
+            for (int i = 0; i < drop; i++) {
+                int idx = itemsHost.getChildCount() - 1;
+                if (newEnd < count) idx--;
+                if (idx >= child) itemsHost.removeViewAt(idx);
+            }
+            for (int i = newStart; i < oldStart; i++) {
+                itemsHost.addView(createQueueRow(queueRows[i], i, rowH, density), child + (i - newStart));
+            }
+            if (newEnd < count) {
+                View bottomSpacer = itemsHost.getChildAt(itemsHost.getChildCount() - 1);
+                if (bottomSpacer != null && bottomSpacer.getTag() == null) {
+                    ViewGroup.LayoutParams lp = bottomSpacer.getLayoutParams();
+                    lp.height = (count - newEnd) * slotH;
+                    bottomSpacer.setLayoutParams(lp);
+                }
+            }
+        }
+        queueBrowseWindowStart = newStart;
     }
 
     private void rebuildQueueBrowseWindow() {
@@ -2117,7 +2280,7 @@ public final class ThemedContextMenu {
         if (focusZone == FocusZone.OPTIONS_TITLE) {
             if (keyCode == 22 && quickBarHost != null && quickBarHost.getChildCount() > 0) {
                 focusZone = FocusZone.QUICK_BAR;
-                quickFocusIndex = quickBarReturnIndex();
+                quickFocusIndex = firstVisibleQuickIndex();
                 refreshAll();
                 scrollQuickFocusIntoView();
                 return true;
@@ -2127,7 +2290,7 @@ public final class ThemedContextMenu {
         }
         if (keyCode == 21) {
             if (isMenuListZone() && !isQueueMoveActive() && focusIndex == firstFocusableIndex(0)) {
-                focusQuickBarFromListExit();
+                focusQuickBarFromListTopExit();
                 return true;
             }
             if (focusZone == FocusZone.QUICK_BAR) {
@@ -2164,23 +2327,9 @@ public final class ThemedContextMenu {
         }
         if (focusZone == FocusZone.OPTIONS_TITLE) {
             if (delta > 0) {
-                if (hasBackChip() && isMediaSliderStripVisible() && !optionsListVisible && !queueMode) {
-                    if (quickBarHost != null && quickBarHost.getChildCount() > 0) {
-                        focusZone = FocusZone.QUICK_BAR;
-                        quickFocusIndex = quickBarReturnIndex();
-                        refreshAll();
-                        scrollQuickFocusIntoView();
-                    }
-                    return;
-                }
                 if (labels != null && labels.length > 0) {
                     enterOptionsListFromTitle();
                 }
-            } else if (delta < 0 && quickBarHost != null && quickBarHost.getChildCount() > 0) {
-                focusZone = FocusZone.QUICK_BAR;
-                quickFocusIndex = quickBarReturnIndex();
-                refreshAll();
-                scrollQuickFocusIntoView();
             }
             return;
         }
@@ -2201,23 +2350,22 @@ public final class ThemedContextMenu {
                 return;
             }
             if (labels == null || labels.length == 0) return;
-            if (delta < 0 && focusIndex == firstFocusableIndex(0)
-                    && quickBarHost != null && quickBarHost.getChildCount() > 0) {
-                focusQuickBarFromListExit();
-                return;
-            }
-            if (delta > 0 && focusIndex == lastFocusableIndex()
-                    && quickBarHost != null && quickBarHost.getChildCount() > 0
-                    && !submenuTierOpen) {
-                focusQuickBarFromListExit();
+            if (delta < 0 && focusIndex == firstFocusableIndex(0)) {
+                focusQuickBarFromListTopExit();
                 return;
             }
             focusZone = FocusZone.TIER_CONTENT;
+            int prev = focusIndex;
             int next = nextFocusableIndex(focusIndex, delta);
             if (next < 0 || next == focusIndex) return;
             focusIndex = next;
-            if (queueMode) ensureQueueBrowseWindowForFocus();
-            refreshAll();
+            if (queueMode) {
+                ensureQueueBrowseWindowForFocus();
+                if (prev >= 0 && prev != focusIndex) refreshQueueRowAt(prev);
+                refreshQueueRowAt(focusIndex);
+            } else {
+                refreshAll();
+            }
             scrollFocusIntoView();
         }
     }
@@ -2230,8 +2378,8 @@ public final class ThemedContextMenu {
             if (vis[i] == quickFocusIndex) { pos = i; break; }
         }
         if (delta < 0 && pos == 0) {
-            if (hasBackChip() && quickListener != null) {
-                quickListener.onFocusBackChip();
+            if (hasBackChip()) {
+                focusBackChip();
                 return;
             }
             if (titleView != null && labels != null && labels.length > 0) {
@@ -2364,11 +2512,15 @@ public final class ThemedContextMenu {
                     @Override
                     public void run() {
                         if (quickBarScroll == null || quickBarHost == null) return;
+                        int viewW = quickBarScroll.getWidth();
+                        int maxScroll = Math.max(0, quickBarHost.getWidth() - viewW);
+                        if (maxScroll <= 0) {
+                            scrollQuickBarToStart();
+                            return;
+                        }
                         int chipLeft = target.getLeft();
                         int chipRight = target.getRight();
                         int scrollX = quickBarScroll.getScrollX();
-                        int viewW = quickBarScroll.getWidth();
-                        int maxScroll = Math.max(0, quickBarHost.getWidth() - viewW);
                         int targetScroll = scrollX;
                         if (chipLeft < scrollX) {
                             targetScroll = chipLeft;

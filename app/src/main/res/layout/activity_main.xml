@@ -406,7 +406,7 @@
             <TextView android:id="@+id/tv_key_next" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="center" android:text="d" android:textSize="@dimen/y1_menu_text_size"/>
             <TextView android:id="@+id/tv_key_nnext" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="center" android:text="e" android:textSize="@dimen/y1_menu_text_size"/>
         </LinearLayout>
-        <TextView android:id="@+id/tv_keyboard_hint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/keyboard_hint" android:textSize="@dimen/y1_menu_text_size" android:layout_marginTop="15dp"/>
+        <TextView android:id="@+id/tv_keyboard_hint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:gravity="center" android:text="@string/keyboard_hint" android:textSize="@dimen/y1_menu_text_size" android:layout_marginTop="15dp"/>
     </LinearLayout>
 
     <FrameLayout
