@@ -127,6 +127,8 @@ public final class ThemedContextMenu {
     private QueueRowSpec[] queueRows = new QueueRowSpec[0];
     private int queueMoveFrom = -1;
     private boolean volumeOnlyMode;
+    /** Volume/brightness tab — quick bar + one slider only; list hidden until user leaves. */
+    private boolean mediaSliderExclusive = false;
     private boolean optionsListVisible = true;
     private boolean submenuTierOpen = false;
     private int queueRowHeightPx;
@@ -192,7 +194,7 @@ public final class ThemedContextMenu {
     }
 
     private void collapseOptionsListPanel() {
-        if (itemsScroll == null) return;
+        if (itemsScroll == null || queueMode) return;
         itemsScroll.setVisibility(View.GONE);
         ViewGroup.LayoutParams lp = itemsScroll.getLayoutParams();
         if (lp != null && lp.height != 0) {
@@ -248,6 +250,10 @@ public final class ThemedContextMenu {
     /** Collapse contextual action rows and highlight Back. */
     public void focusOptionsTitle() {
         if (titleView == null) return;
+        if (queueMode) {
+            focusBackChip();
+            return;
+        }
         if (labels == null || labels.length == 0) {
             focusBackChip();
             return;
@@ -261,6 +267,48 @@ public final class ThemedContextMenu {
 
     public void setSubmenuTierOpen(boolean open) {
         submenuTierOpen = open;
+    }
+
+    public boolean isSubmenuTierOpen() {
+        return submenuTierOpen;
+    }
+
+    /** Expand list panel after quick-bar tab open (may have been collapsed to height 0). */
+    public void ensureSubmenuListVisible() {
+        if (labels == null || labels.length == 0) return;
+        optionsListVisible = true;
+        if (itemsScroll != null) {
+            itemsScroll.setVisibility(View.VISIBLE);
+            ViewGroup.LayoutParams lp = itemsScroll.getLayoutParams();
+            if (lp != null && lp.height == 0) {
+                lp.height = ViewGroup.LayoutParams.WRAP_CONTENT;
+                itemsScroll.setLayoutParams(lp);
+            }
+        }
+        updateListHeightToContent();
+    }
+
+    /** Enter a quick-bar tab's list — wheel scrolls rows, not the tab row (iPod / STB style). */
+    public void focusSubmenuList() {
+        if (labels == null || labels.length == 0) return;
+        submenuTierOpen = true;
+        optionsListVisible = true;
+        focusIndex = firstFocusableIndex(0);
+        focusZone = FocusZone.TIER_CONTENT;
+        ensureSubmenuListVisible();
+        refreshAll();
+        scrollFocusIntoView();
+        requestOverlayFocus();
+        if (overlay != null) {
+            overlay.post(new Runnable() {
+                @Override
+                public void run() {
+                    ensureSubmenuListVisible();
+                    scrollFocusIntoView();
+                    requestOverlayFocus();
+                }
+            });
+        }
     }
 
     /** Reload root action rows but keep the list collapsed on the Options title. */
@@ -514,9 +562,16 @@ public final class ThemedContextMenu {
 
     private void syncMediaSliderBlockVisibility() {
         if (sliderRow == null || sliderRow.getVisibility() != View.VISIBLE) return;
-        boolean volActive = focusZone == FocusZone.SLIDER
-                || (focusZone == FocusZone.QUICK_BAR && quickFocusIndex == volumeQuickIndex);
-        boolean brightActive = focusZone == FocusZone.QUICK_BAR && quickFocusIndex == brightnessQuickIndex;
+        boolean volActive;
+        boolean brightActive;
+        if (mediaSliderExclusive) {
+            volActive = quickFocusIndex == volumeQuickIndex;
+            brightActive = quickFocusIndex == brightnessQuickIndex;
+        } else {
+            volActive = focusZone == FocusZone.SLIDER
+                    || (focusZone == FocusZone.QUICK_BAR && quickFocusIndex == volumeQuickIndex);
+            brightActive = focusZone == FocusZone.QUICK_BAR && quickFocusIndex == brightnessQuickIndex;
+        }
         if (volumeSliderBlock != null) {
             volumeSliderBlock.setVisibility(volActive ? View.VISIBLE : View.GONE);
         }
@@ -684,7 +739,7 @@ public final class ThemedContextMenu {
             itemsScroll.scrollTo(0, scrollY);
             SolarAdbTest.queueScroll(focusIndex, count,
                     itemsHost.getPaddingTop(), itemsScroll.getScrollY(), queueScrollMaxY(),
-                    queueScrollViewportSlot(index, count));
+                    queueScrollViewportSlot(index, count), queueNowPlayingIndex());
             return;
         }
         View row = queueMode ? findQueueRowByIndex(index) : null;
@@ -1006,6 +1061,108 @@ public final class ThemedContextMenu {
         queueMoveRibbonAnimating = false;
     }
 
+    public boolean isQueueMoveRibbonAnimating() {
+        return queueMoveRibbonAnimating;
+    }
+
+    /**
+     * Cancel move: slide the ribbon back toward the pick index (reverse of enter), then finish.
+     */
+    public void animateQueueMoveCancelReturn(int currentIdx, int homeIdx, final Runnable onComplete) {
+        if (!queueMode || itemsHost == null || !isQueueMoveActive()) {
+            if (onComplete != null) onComplete.run();
+            return;
+        }
+        if (currentIdx == homeIdx) {
+            exitQueueMoveRibbon();
+            if (onComplete != null) onComplete.run();
+            return;
+        }
+        if (!queueMoveRibbonActive) {
+            enterQueueMoveRibbon();
+            populateQueueMoveRibbon();
+        }
+        final int count = queueRows.length;
+        int browseSlot = queueViewportSlotForIndex(homeIdx, count);
+        int slotH = queueRowSlotHeight();
+        float targetTy = (browseSlot - QueueMoveWindow.RIBBON_CENTER) * (float) slotH;
+        int steps = Math.abs(currentIdx - homeIdx);
+        final int duration = Math.min(200, QUEUE_MOVE_RIBBON_ENTER_MS + steps * 14);
+        if (Math.abs(targetTy) < 0.5f) {
+            animateQueueMoveCancelFade(onComplete);
+            return;
+        }
+        queueMoveRibbonAnimating = true;
+        android.view.animation.DecelerateInterpolator ease =
+                new android.view.animation.DecelerateInterpolator(1.35f);
+        final int[] remaining = new int[] { 0 };
+        for (int slot = QueueMoveWindow.RIBBON_ABOVE; slot <= QueueMoveWindow.RIBBON_BELOW; slot++) {
+            final View row = findRibbonSlotRow(slot);
+            if (row == null || row.getVisibility() != View.VISIBLE) continue;
+            remaining[0]++;
+            Object slotTag = row.getTag(TAG_RIBBON_SLOT);
+            int ribbonSlot = slotTag instanceof Integer ? ((Integer) slotTag).intValue()
+                    : QueueMoveWindow.RIBBON_CENTER;
+            final float endAlpha = ribbonSlot == QueueMoveWindow.RIBBON_CENTER ? 0.5f : 0.3f;
+            row.animate().cancel();
+            row.setTranslationY(0f);
+            row.animate()
+                    .translationY(targetTy)
+                    .alpha(endAlpha)
+                    .setDuration(duration)
+                    .setInterpolator(ease)
+                    .setListener(new android.animation.AnimatorListenerAdapter() {
+                        @Override
+                        public void onAnimationEnd(android.animation.Animator animation) {
+                            row.animate().setListener(null);
+                            remaining[0]--;
+                            if (remaining[0] <= 0) {
+                                queueMoveRibbonAnimating = false;
+                                exitQueueMoveRibbon();
+                                if (onComplete != null) onComplete.run();
+                            }
+                        }
+                    });
+        }
+        if (remaining[0] <= 0) {
+            queueMoveRibbonAnimating = false;
+            exitQueueMoveRibbon();
+            if (onComplete != null) onComplete.run();
+        }
+    }
+
+    private void animateQueueMoveCancelFade(final Runnable onComplete) {
+        queueMoveRibbonAnimating = true;
+        final int[] remaining = new int[] { 0 };
+        for (int slot = QueueMoveWindow.RIBBON_ABOVE; slot <= QueueMoveWindow.RIBBON_BELOW; slot++) {
+            final View row = findRibbonSlotRow(slot);
+            if (row == null || row.getVisibility() != View.VISIBLE) continue;
+            remaining[0]++;
+            row.animate().cancel();
+            row.setTranslationY(0f);
+            row.animate()
+                    .alpha(0.35f)
+                    .setDuration(QUEUE_MOVE_RIBBON_ANIM_MS)
+                    .setListener(new android.animation.AnimatorListenerAdapter() {
+                        @Override
+                        public void onAnimationEnd(android.animation.Animator animation) {
+                            row.animate().setListener(null);
+                            remaining[0]--;
+                            if (remaining[0] <= 0) {
+                                queueMoveRibbonAnimating = false;
+                                exitQueueMoveRibbon();
+                                if (onComplete != null) onComplete.run();
+                            }
+                        }
+                    });
+        }
+        if (remaining[0] <= 0) {
+            queueMoveRibbonAnimating = false;
+            exitQueueMoveRibbon();
+            if (onComplete != null) onComplete.run();
+        }
+    }
+
     public void show(ViewGroup root, String title, String[] itemLabels, String[] itemIconKeys,
                      String[] itemStateTexts, boolean[] itemHeaders, Listener listener,
                      int rowHeightPx, int panelWidthPx, boolean menuStyleRows) {
@@ -1135,6 +1292,7 @@ public final class ThemedContextMenu {
 
     public void replaceListContent(String title, String[] itemLabels, String[] itemIconKeys,
             String[] itemStateTexts, boolean[] itemHeaders, Listener listener, boolean resetFocus) {
+        mediaSliderExclusive = false;
         queueMode = false;
         queueRows = new QueueRowSpec[0];
         queueMoveFrom = -1;
@@ -1230,9 +1388,55 @@ public final class ThemedContextMenu {
         invalidateQueueRowBgCache();
         rebuildQueueList();
         refreshAll();
-        updateListHeightToContent();
+        ensureQueueListVisible();
         scrollFocusIntoView();
         requestOverlayFocus();
+        final int rowCount = queueRows.length;
+        int scrollH = itemsScroll != null ? itemsScroll.getHeight() : 0;
+        int childCount = itemsHost != null ? itemsHost.getChildCount() : 0;
+        SolarAdbTest.queueOpen(queueRows.length, optionsListVisible, scrollH, childCount);
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("rowCount", rowCount);
+            d.put("childCount", childCount);
+            d.put("scrollH", scrollH);
+            d.put("listVisible", optionsListVisible);
+            d.put("virtual", useQueueBrowseVirtual());
+            QueueDebugLog.log("ThemedContextMenu.replaceQueueContent", "content replaced", "H4-H5", d);
+        } catch (Exception ignored) {}
+        // #endregion
+        if (rowCount > 0 && itemsHost != null && childCount == 0) {
+            itemsHost.post(new Runnable() {
+                @Override
+                public void run() {
+                    if (!queueMode || queueRows.length == 0) return;
+                    if (itemsHost.getChildCount() > 0) return;
+                    rebuildQueueList();
+                    ensureQueueListVisible();
+                    refreshAll();
+                    scrollFocusIntoView();
+                    // #region agent log
+                    try {
+                        org.json.JSONObject d = new org.json.JSONObject();
+                        d.put("rowCount", queueRows.length);
+                        d.put("childCount", itemsHost.getChildCount());
+                        d.put("scrollH", itemsScroll != null ? itemsScroll.getHeight() : 0);
+                        QueueDebugLog.log("ThemedContextMenu.replaceQueueContent", "post-layout repair", "H5", d);
+                    } catch (Exception ignored) {}
+                    // #endregion
+                }
+            });
+        } else if (rowCount > 0 && itemsScroll != null && scrollH <= 0) {
+            itemsScroll.post(new Runnable() {
+                @Override
+                public void run() {
+                    if (!queueMode) return;
+                    ensureQueueListVisible();
+                    scrollFocusIntoView();
+                }
+            });
+        }
     }
 
     private int queueNowPlayingIndex() {
@@ -1248,6 +1452,26 @@ public final class ThemedContextMenu {
 
     public boolean isQueueMode() {
         return queueMode;
+    }
+
+    public int queueRowCount() {
+        return queueRows != null ? queueRows.length : 0;
+    }
+
+    public int queueListChildCount() {
+        return itemsHost != null ? itemsHost.getChildCount() : 0;
+    }
+
+    public int queueListScrollHeight() {
+        return itemsScroll != null ? itemsScroll.getHeight() : 0;
+    }
+
+    /** Keep the queue list panel visible — never collapse while in queue tier. */
+    public void ensureQueueListVisible() {
+        if (!queueMode) return;
+        optionsListVisible = true;
+        if (itemsScroll != null) itemsScroll.setVisibility(View.VISIBLE);
+        updateListHeightToContent();
     }
 
     /** Update title/subtitle text on visible queue rows without a full rebuild. */
@@ -1828,6 +2052,7 @@ public final class ThemedContextMenu {
             itemsHost.addView(bottomSpacer, new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, (count - end) * slotH));
         }
+        refreshQueueRows();
     }
 
     private void rebuildQueueRows() {
@@ -1838,6 +2063,7 @@ public final class ThemedContextMenu {
         for (int i = 0; i < queueRows.length; i++) {
             itemsHost.addView(createQueueRow(queueRows[i], i, rowH, density));
         }
+        refreshQueueRows();
     }
 
     private FrameLayout createQueueRow(QueueRowSpec spec, int index, int rowH, float density) {
@@ -1913,20 +2139,25 @@ public final class ThemedContextMenu {
         int contentH = itemsHost.getMeasuredHeight();
         int target;
         if (queueMode) {
+            optionsListVisible = true;
             target = queueViewportHeight();
         } else {
             target = maxListHeightPx > 0 ? Math.min(contentH, maxListHeightPx) : contentH;
         }
         if (target <= 0) {
-            itemsScroll.setVisibility(View.GONE);
-            ViewGroup.LayoutParams lp = itemsScroll.getLayoutParams();
-            if (lp != null && lp.height != 0) {
-                lp.height = 0;
-                itemsScroll.setLayoutParams(lp);
+            if (queueMode) {
+                target = queueRowSlotHeight() * Math.max(1, QUEUE_MOVE_VISIBLE_ROWS);
+            } else {
+                itemsScroll.setVisibility(View.GONE);
+                ViewGroup.LayoutParams lp = itemsScroll.getLayoutParams();
+                if (lp != null && lp.height != 0) {
+                    lp.height = 0;
+                    itemsScroll.setLayoutParams(lp);
+                }
+                return;
             }
-            return;
         }
-        if (!optionsListVisible && quickBarHost != null) {
+        if (!optionsListVisible && !queueMode && quickBarHost != null) {
             collapseOptionsListPanel();
             return;
         }
@@ -2174,6 +2405,7 @@ public final class ThemedContextMenu {
     public void showMediaSlidersWithQuickBarFocus(int quickIndex, String volumeLabel, int volumeMax,
             int volumeValue, String brightnessLabelText, int brightnessMaxVal, int brightnessValueVal) {
         volumeOnlyMode = false;
+        mediaSliderExclusive = true;
         updateVolumeSlider(volumeValue, volumeMax);
         updateBrightnessSlider(brightnessValueVal, brightnessMaxVal);
         if (sliderLabel != null) {
@@ -2184,16 +2416,8 @@ public final class ThemedContextMenu {
         }
         if (sliderRow != null) sliderRow.setVisibility(View.VISIBLE);
         syncMediaSliderBlockVisibility();
-        if (queueMode) {
-            optionsListVisible = true;
-            if (itemsScroll != null) {
-                itemsScroll.setVisibility(View.VISIBLE);
-                updateListHeightToContent();
-            }
-        } else {
-            optionsListVisible = false;
-            collapseOptionsListPanel();
-        }
+        optionsListVisible = false;
+        collapseOptionsListPanel();
         quickFocusIndex = quickIndex;
         quickReturnIndex = quickIndex;
         focusZone = FocusZone.QUICK_BAR;
@@ -2209,8 +2433,18 @@ public final class ThemedContextMenu {
     }
 
     public void hideSlider() {
+        exitMediaSliderTab();
+    }
+
+    /** Leave volume/brightness tab — hide sliders and restore list when appropriate. */
+    public void exitMediaSliderTab() {
         hideMediaSliderStripViews();
         if (quickBarScroll != null) quickBarScroll.setAlpha(1f);
+        boolean wasExclusive = mediaSliderExclusive;
+        mediaSliderExclusive = false;
+        if (wasExclusive) {
+            restorePanelAfterMediaSlider();
+        }
         if (focusZone == FocusZone.SLIDER) {
             focusZone = (optionsListVisible || queueMode)
                     ? FocusZone.TIER_CONTENT : FocusZone.QUICK_BAR;
@@ -2220,6 +2454,22 @@ public final class ThemedContextMenu {
             scrollFocusIntoView();
         }
         requestOverlayFocus();
+    }
+
+    private void restorePanelAfterMediaSlider() {
+        if (queueMode) {
+            optionsListVisible = true;
+            if (itemsScroll != null) {
+                itemsScroll.setVisibility(View.VISIBLE);
+                updateListHeightToContent();
+            }
+            return;
+        }
+        if (labels != null && labels.length > 0) {
+            optionsListVisible = true;
+            prepareListPanelVisible();
+            updateListHeightToContent();
+        }
     }
 
     public int brightnessSliderValue() {
@@ -2343,12 +2593,18 @@ public final class ThemedContextMenu {
         exitQueueMoveRibbon();
         clearQueueConfirm();
         volumeOnlyMode = false;
+        mediaSliderExclusive = false;
         optionsListVisible = true;
         submenuTierOpen = false;
         quickReturnIndex = -1;
     }
 
     private void recoverFocusFromCollapsedList() {
+        if (queueMode) {
+            ensureQueueListVisible();
+            enterMenuListFocus(clampFocusableIndex(focusIndex));
+            return;
+        }
         if (quickBarHost != null && quickBarHost.getChildCount() > 0) {
             focusQuickBarFromListExit();
         } else if (titleView != null && labels != null && labels.length > 0) {
@@ -2438,6 +2694,9 @@ public final class ThemedContextMenu {
             return;
         }
         if (isMenuListZone()) {
+            if (queueMode && !optionsListVisible) {
+                ensureQueueListVisible();
+            }
             if (!optionsListVisible && !queueMode) {
                 rerouteWhenListCollapsed(delta);
                 return;
@@ -2506,6 +2765,18 @@ public final class ThemedContextMenu {
             return;
         }
         if (focusZone == FocusZone.QUICK_BAR) {
+            // #region agent log
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("quickIdx", quickFocusIndex);
+                d.put("hasListener", quickListener != null);
+                d.put("submenuOpen", submenuTierOpen);
+                d.put("queueMode", queueMode);
+                d.put("labelCount", labels != null ? labels.length : 0);
+                DebugAgentLog.log(activity, "ThemedContextMenu.activateFocused",
+                        "quick bar activate", "H1", d);
+            } catch (Exception ignored) {}
+            // #endregion
             if (quickListener != null) quickListener.onQuickSelected(quickFocusIndex);
             return;
         }
@@ -2943,6 +3214,9 @@ public final class ThemedContextMenu {
                 pp.setImageResource(queuePlaybackStateIcon(queueRows[queueIndex].playing));
                 pp.setColorFilter(textNormal(), PorterDuff.Mode.SRC_ATOP);
                 pp.setVisibility(View.VISIBLE);
+                if (queueIndex == focusIndex) {
+                    SolarAdbTest.queuePlaybackState(queueRows[queueIndex].playing);
+                }
             } else {
                 pp.setVisibility(View.GONE);
             }

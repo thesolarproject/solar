@@ -104,6 +104,25 @@ public final class PlayQueueStore {
         }
     }
 
+    /** Items in on-disk JSON (including paths not yet mounted). */
+    public static int persistedItemCount(Context ctx) {
+        if (ctx == null) return 0;
+        File f = new File(ctx.getFilesDir(), FILE);
+        if (!f.isFile()) return 0;
+        try {
+            StringBuilder sb = new StringBuilder();
+            BufferedReader r = new BufferedReader(new FileReader(f));
+            String line;
+            while ((line = r.readLine()) != null) sb.append(line);
+            r.close();
+            JSONObject root = new JSONObject(sb.toString());
+            JSONArray arr = root.optJSONArray("items");
+            return arr != null ? arr.length() : 0;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
     public static int countMissingPaths(Context ctx) {
         if (ctx == null) return 0;
         File f = new File(ctx.getFilesDir(), FILE);

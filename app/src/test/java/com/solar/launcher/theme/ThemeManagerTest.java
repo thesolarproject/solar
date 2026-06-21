@@ -1,8 +1,53 @@
 package com.solar.launcher.theme;
 
+import org.json.JSONObject;
 import org.junit.Test;
 
 public class ThemeManagerTest {
+    @Test
+    public void setThemeByFolderPath_resolvesAssetAliasToDefault() throws Exception {
+        ThemeManager.availableThemes.clear();
+        ThemeManager.availableThemes.add(new ThemeManager.ThemeEntry(
+                "/storage/sdcard0/Themes/Default", "Default", "Aura", new JSONObject()));
+        ThemeManager.availableThemes.add(new ThemeManager.ThemeEntry(
+                "/storage/sdcard0/Themes/Other", "Other", "Other", new JSONObject()));
+        ThemeManager.setThemeByFolderPath("asset://themes/default");
+        if (ThemeManager.getCurrentThemeIndex() != 0) {
+            throw new AssertionError("asset alias should select Default");
+        }
+    }
+
+    @Test
+    public void setThemeByFolderPath_resolvesFolderNameWhenPathMoved() throws Exception {
+        ThemeManager.availableThemes.clear();
+        ThemeManager.availableThemes.add(new ThemeManager.ThemeEntry(
+                "/mnt/new/Themes/Default", "Default", "Aura", new JSONObject()));
+        ThemeManager.setThemeByFolderPath("/storage/sdcard0/Themes/Default");
+        if (ThemeManager.getCurrentThemeIndex() != 0) {
+            throw new AssertionError("folder name should match Default");
+        }
+    }
+
+    @Test
+    public void legacyStockDefaultTitle_detectsCircular() {
+        if (!ThemeManager.isLegacyStockDefaultTitle("Circular")) {
+            throw new AssertionError("Circular is legacy stock Default");
+        }
+        if (ThemeManager.isLegacyStockDefaultTitle("Aura")) {
+            throw new AssertionError("Aura is not legacy");
+        }
+    }
+
+    @Test
+    public void persistPathForTheme_builtinUsesThemesDefaultDir() {
+        ThemeManager.ThemeEntry builtIn = new ThemeManager.ThemeEntry(
+                "asset://themes/default", "Default", "Aura", new JSONObject());
+        String path = ThemeManager.persistPathForTheme(builtIn);
+        if (path.isEmpty() || path.indexOf("Default") < 0) {
+            throw new AssertionError("persist path: " + path);
+        }
+    }
+
     @Test
     public void getCurrentTheme_neverEmpty() {
         ThemeManager.availableThemes.clear();

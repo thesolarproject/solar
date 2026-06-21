@@ -93,6 +93,8 @@ public class ThemeManager {
             if (!config.isFile() || config.length() == 0) {
                 if (!dest.exists()) dest.mkdirs();
                 copyAssetTree(ctx.getAssets(), BUNDLED_ASSET_DIR, dest);
+            } else if (isLegacyStockDefaultTheme(readConfigJson(config))) {
+                copyAssetTree(ctx.getAssets(), BUNDLED_ASSET_DIR, dest);
             } else {
                 syncBundledSolarAssets(ctx, dest);
                 syncBundledThemeBlocks(ctx, dest);
@@ -341,6 +343,42 @@ public class ThemeManager {
         }
     }
 
+    private static JSONObject readConfigJson(File config) {
+        try {
+            if (config == null || !config.isFile()) return new JSONObject();
+            return new JSONObject(new String(readAll(config), "UTF-8"));
+        } catch (Exception e) {
+            return new JSONObject();
+        }
+    }
+
+    /** Stock Y1 ROM shipped Circular as Themes/Default before Solar Aura. */
+    static boolean isLegacyStockDefaultTheme(JSONObject json) {
+        if (json == null) return true;
+        JSONObject info = json.optJSONObject("theme_info");
+        String title = info != null ? info.optString("title", "").trim() : "";
+        return isLegacyStockDefaultTitle(title);
+    }
+
+    static boolean isLegacyStockDefaultTitle(String title) {
+        if (title == null || title.isEmpty()) return true;
+        return "Circular".equalsIgnoreCase(title) || "Default".equalsIgnoreCase(title);
+    }
+
+    private static String displayNameForBuiltinDefault(JSONObject json, String parsedDisplay) {
+        JSONObject info = json != null ? json.optJSONObject("theme_info") : null;
+        String title = info != null ? info.optString("title", "").trim() : "";
+        if (title.isEmpty() && parsedDisplay != null) title = parsedDisplay.trim();
+        if (!isLegacyStockDefaultTitle(title)) {
+            return !title.isEmpty() ? title : BUILTIN_DEFAULT_FOLDER;
+        }
+        if (bundledFallback != null && bundledFallback.displayName != null
+                && !bundledFallback.displayName.isEmpty()) {
+            return bundledFallback.displayName;
+        }
+        return "Aura";
+    }
+
     private static ThemeEntry parseFolder(File folder) {
         try {
             byte[] data = readAll(new File(folder, "config.json"));
@@ -353,6 +391,9 @@ public class ThemeManager {
                 if (info != null) display = info.optString("title", "");
             }
             if (display.isEmpty()) display = folder.getName();
+            if (BUILTIN_DEFAULT_FOLDER.equalsIgnoreCase(folder.getName())) {
+                display = displayNameForBuiltinDefault(json, display);
+            }
             return new ThemeEntry(folder.getAbsolutePath(), folder.getName(), display, json);
         } catch (Exception e) {
             return null;
@@ -377,16 +418,43 @@ public class ThemeManager {
     }
 
     public static void setThemeByFolderPath(String path) {
-        if (path == null) return;
-        if ("default".equalsIgnoreCase(path)) {
-            path = new File(themesRootPath, BUILTIN_DEFAULT_FOLDER).getAbsolutePath();
+        int idx = findThemeIndexForPath(path);
+        if (idx >= 0) setThemeIndex(idx);
+    }
+
+    /** Resolve saved path, asset alias, or folder name to a theme list index. */
+    public static int findThemeIndexForPath(String path) {
+        if (path == null || path.isEmpty()) return -1;
+        String normalized = path.trim();
+        if ("default".equalsIgnoreCase(normalized) || normalized.startsWith("asset://")) {
+            return findBuiltInDefaultIndex();
         }
         for (int i = 0; i < availableThemes.size(); i++) {
-            if (path.equals(availableThemes.get(i).folderPath)) {
-                setThemeIndex(i);
-                return;
+            if (normalized.equals(availableThemes.get(i).folderPath)) return i;
+        }
+        String folder = new File(normalized).getName();
+        if (!folder.isEmpty()) {
+            for (int i = 0; i < availableThemes.size(); i++) {
+                if (folder.equalsIgnoreCase(availableThemes.get(i).folderName)) return i;
             }
         }
+        return -1;
+    }
+
+    public static int findBuiltInDefaultIndex() {
+        for (int i = 0; i < availableThemes.size(); i++) {
+            if (isBuiltInDefault(availableThemes.get(i))) return i;
+        }
+        return availableThemes.isEmpty() ? -1 : 0;
+    }
+
+    /** Disk path to persist when applying a theme (Default always uses Themes/Default). */
+    public static String persistPathForTheme(ThemeEntry theme) {
+        if (theme == null) return "";
+        if (isBuiltInDefault(theme)) {
+            return new File(themesRootPath, BUILTIN_DEFAULT_FOLDER).getAbsolutePath();
+        }
+        return theme.folderPath != null ? theme.folderPath : "";
     }
 
     public static void ensureActiveThemeOrFallback(Context ctx) {
