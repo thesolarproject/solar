@@ -61,6 +61,14 @@ def sort_key(item):
 
 entries.sort(key=sort_key, reverse=True)
 
+max_nightlies = int(os.environ.get("SOLAR_OTA_MAX_NIGHTLIES", "12"))
+stable = [e for e in entries if not e[3]]
+nightly = [e for e in entries if e[3]]
+if len(nightly) > max_nightlies:
+    nightly = nightly[:max_nightlies]
+entries = nightly + stable
+entries.sort(key=sort_key, reverse=True)
+
 lines = [
     '<?xml version="1.0" encoding="utf-8"?>',
     f'<solar-updates base="{base}">',

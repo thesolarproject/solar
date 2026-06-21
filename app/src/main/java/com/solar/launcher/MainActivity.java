@@ -10484,7 +10484,8 @@ public class MainActivity extends Activity {
         tvVersion.setFocusable(false);
         tvVersion.setGravity(Gravity.CENTER);
         tvVersion.setSingleLine(true);
-        tvVersion.setText(getString(R.string.about_version, installedVersionName()));
+        tvVersion.setText(getString(R.string.about_version,
+                SolarUpdateClient.formatVersionLabel(installedVersionName())));
         tvVersion.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
         tvVersion.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
                 getResources().getDimension(R.dimen.y1_menu_text_size) * 1.1f);
@@ -10531,9 +10532,12 @@ public class MainActivity extends Activity {
             @Override
             public void run() {
                 boolean ok = false;
+                int releaseCount = 0;
                 try {
-                    SolarUpdateClient.fetchUpdates(updatesUrl);
-                    ok = true;
+                    List<SolarUpdateClient.ReleaseInfo> fetched =
+                            SolarUpdateClient.fetchUpdates(updatesUrl);
+                    releaseCount = fetched.size();
+                    ok = releaseCount > 0;
                 } catch (Exception ignored) {}
                 final boolean reachable = ok;
                 runOnUiThread(new Runnable() {
@@ -10632,7 +10636,7 @@ public class MainActivity extends Activity {
         final int localCode = myVersionCode;
         final String localName = myVersionName;
         containerSettingsItems.addView(createSettingRow(RowKeys.UPDATE_CURRENT, R.string.update_current_version,
-                "v" + localName));
+                SolarUpdateClient.formatVersionLabel(localName)));
 
         final Button loadingRow = createListButton(getString(R.string.update_checking));
         loadingRow.setEnabled(false);
@@ -10653,21 +10657,30 @@ public class MainActivity extends Activity {
                 try {
                     final List<SolarUpdateClient.ReleaseInfo> releases =
                             SolarUpdateClient.fetchUpdates(updatesUrl);
+                    final List<SolarUpdateClient.ReleaseInfo> picker =
+                            SolarUpdateClient.releasesForPicker(releases, localCode, localName,
+                                    SolarUpdateClient.MAX_PICKER_RELEASES);
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
+                            if (!SettingsScreens.SYSTEM_UPDATE.equals(settingsSubScreenKey)) {
+                                if (loadingView.getParent() != null) {
+                                    containerSettingsItems.removeView(loadingView);
+                                }
+                                return;
+                            }
                             if (loadingView.getParent() != null) {
                                 containerSettingsItems.removeView(loadingView);
                             }
-                            if (releases.isEmpty()) {
+                            if (picker.isEmpty()) {
                                 Button empty = createListButton(getString(R.string.update_none_found));
                                 empty.setEnabled(false);
                                 containerSettingsItems.addView(empty);
                                 return;
                             }
                             int insertAt = containerSettingsItems.getChildCount();
-                            for (int i = 0; i < releases.size(); i++) {
-                                final SolarUpdateClient.ReleaseInfo release = releases.get(i);
+                            for (int i = 0; i < picker.size(); i++) {
+                                final SolarUpdateClient.ReleaseInfo release = picker.get(i);
                                 String label = release.listLabel();
                                 if (release.matchesInstalled(localCode, localName)) {
                                     label += getString(R.string.update_installed_marker);
@@ -10686,6 +10699,18 @@ public class MainActivity extends Activity {
                                 }
                                 containerSettingsItems.addView(btn, insertAt + i);
                             }
+                            if (releases.size() > picker.size()) {
+                                TextView note = new TextView(MainActivity.this);
+                                note.setFocusable(false);
+                                note.setText(getString(R.string.update_releases_truncated,
+                                        picker.size(), releases.size()));
+                                note.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                                        getResources().getDimension(R.dimen.y1_menu_text_size) * 0.85f);
+                                ThemeManager.applyThemedTextStyle(note, ThemeManager.getTextColorSecondary());
+                                int pad = (int) (12 * getResources().getDisplayMetrics().density);
+                                note.setPadding(pad, pad / 2, pad, pad);
+                                containerSettingsItems.addView(note);
+                            }
                             if (insertAt < containerSettingsItems.getChildCount()) {
                                 containerSettingsItems.getChildAt(insertAt).requestFocus();
                             }
@@ -10695,6 +10720,7 @@ public class MainActivity extends Activity {
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
+                            if (!SettingsScreens.SYSTEM_UPDATE.equals(settingsSubScreenKey)) return;
                             if (loadingView.getParent() != null) {
                                 containerSettingsItems.removeView(loadingView);
                             }

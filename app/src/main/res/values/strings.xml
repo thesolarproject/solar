@@ -387,6 +387,7 @@
     <string name="update_download_title">Downloading Update</string>
     <string name="update_network_error">Could not reach GitHub</string>
     <string name="update_none_found">No release found</string>
+    <string name="update_releases_truncated">Showing %1$d of %2$d releases (newest first)</string>
 
     <!-- Soulseek rows -->
     <string name="soulseek_search_row">Search</string>

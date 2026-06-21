@@ -1,6 +1,7 @@
 package com.solar.launcher;
 
 import android.content.Intent;
+import android.view.ViewGroup;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
@@ -30,13 +31,13 @@ public class MainActivityLaunchDeviceTest {
                 public void run() { /* sync */ }
             });
             Thread.sleep(250);
-            if (activity.findViewById(R.id.container_home_menu_items) != null
-                    && activity.findViewById(R.id.container_home_menu_items).getChildCount() > 0) {
+            ViewGroup home = (ViewGroup) activity.findViewById(R.id.container_home_menu_items);
+            if (home != null && home.getChildCount() > 0) {
                 return;
             }
         }
-        int count = activity.findViewById(R.id.container_home_menu_items) != null
-                ? activity.findViewById(R.id.container_home_menu_items).getChildCount() : -1;
+        ViewGroup home = (ViewGroup) activity.findViewById(R.id.container_home_menu_items);
+        int count = home != null ? home.getChildCount() : -1;
         throw new AssertionError("home menu empty, children=" + count);
     }
 }

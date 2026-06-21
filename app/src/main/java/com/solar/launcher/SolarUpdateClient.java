@@ -19,6 +19,10 @@ import okhttp3.Response;
 public final class SolarUpdateClient {
     public static final String DEFAULT_UPDATES_URL =
             "https://thesolarproject.github.io/solar-update/updates.xml";
+    /** Max rows on Change App Version screen (Y1 scroll + RAM). */
+    public static final int MAX_PICKER_RELEASES = 8;
+    /** Max nightly APKs kept in published OTA catalog. */
+    public static final int MAX_CATALOG_NIGHTLIES = 12;
 
     public static final class ReleaseInfo {
         public final String tag;
@@ -147,6 +151,104 @@ public final class SolarUpdateClient {
         return best;
     }
 
+    /** Human-readable version for About / update rows (no double v-prefix). */
+    public static String formatVersionLabel(String versionName) {
+        if (versionName == null) return "";
+        String v = versionName.trim();
+        if (v.isEmpty()) return "";
+        if (v.startsWith("nightly-")) return v;
+        if (v.startsWith("v")) return v;
+        return "v" + v;
+    }
+
+    /**
+     * Newest-first subset for the version picker — caps row count and keeps the installed
+     * release visible even when it would fall outside the window.
+     */
+    public static List<ReleaseInfo> releasesForPicker(List<ReleaseInfo> all,
+            int localCode, String localName, int maxItems) {
+        if (all == null || all.isEmpty()) return new ArrayList<ReleaseInfo>();
+        if (maxItems <= 0) maxItems = MAX_PICKER_RELEASES;
+
+        String local = localName == null ? "" : localName.trim();
+        boolean onNightly = local.startsWith("nightly-");
+
+        List<ReleaseInfo> sorted = new ArrayList<ReleaseInfo>(all);
+        sortNewestFirst(sorted);
+
+        ReleaseInfo installed = null;
+        for (ReleaseInfo r : sorted) {
+            if (r.matchesInstalled(localCode, local)) {
+                installed = r;
+                break;
+            }
+        }
+
+        List<ReleaseInfo> out = new ArrayList<ReleaseInfo>();
+        for (ReleaseInfo r : sorted) {
+            if (out.size() >= maxItems) break;
+            if (onNightly && !r.nightly) continue;
+            out.add(r);
+        }
+
+        if (installed != null && !containsRelease(out, installed)) {
+            if (out.size() >= maxItems && !out.isEmpty()) {
+                out.remove(out.size() - 1);
+            }
+            out.add(installed);
+            sortNewestFirst(out);
+        }
+        return out;
+    }
+
+    /** Trim catalog entries before publishing — keeps all stables + newest nightlies. */
+    public static List<ReleaseInfo> trimCatalog(List<ReleaseInfo> all, int maxNightlies) {
+        if (all == null || all.isEmpty()) return new ArrayList<ReleaseInfo>();
+        if (maxNightlies <= 0) maxNightlies = MAX_CATALOG_NIGHTLIES;
+
+        List<ReleaseInfo> stables = new ArrayList<ReleaseInfo>();
+        List<ReleaseInfo> nightlies = new ArrayList<ReleaseInfo>();
+        for (ReleaseInfo r : all) {
+            if (r.nightly) nightlies.add(r);
+            else stables.add(r);
+        }
+        sortNewestFirst(stables);
+        sortNewestFirst(nightlies);
+        if (nightlies.size() > maxNightlies) {
+            nightlies = new ArrayList<ReleaseInfo>(nightlies.subList(0, maxNightlies));
+        }
+
+        List<ReleaseInfo> out = new ArrayList<ReleaseInfo>();
+        out.addAll(nightlies);
+        out.addAll(stables);
+        sortNewestFirst(out);
+        return out;
+    }
+
+    static void sortNewestFirst(List<ReleaseInfo> releases) {
+        if (releases == null || releases.size() < 2) return;
+        java.util.Collections.sort(releases, new java.util.Comparator<ReleaseInfo>() {
+            @Override
+            public int compare(ReleaseInfo a, ReleaseInfo b) {
+                if (a.nightly != b.nightly) return a.nightly ? -1 : 1;
+                if (a.nightly) {
+                    if (a.versionCode != b.versionCode) {
+                        return a.versionCode > b.versionCode ? -1 : 1;
+                    }
+                    return b.tag.compareTo(a.tag);
+                }
+                return -compareSemver(a.versionName, b.versionName);
+            }
+        });
+    }
+
+    private static boolean containsRelease(List<ReleaseInfo> list, ReleaseInfo target) {
+        for (ReleaseInfo r : list) {
+            if (r.tag.equals(target.tag)) return true;
+        }
+        return false;
+    }
+
     static int parseNightlyCode(String tag) {
         if (tag == null || !tag.startsWith("nightly-")) return 0;
         try {
@@ -207,6 +309,23 @@ public final class SolarUpdateClient {
         if (r.compareToInstalled(0, "0.3") != InstallRelation.DOWNGRADE) {
             throw new AssertionError("stable downgrade");
         }
+        List<ReleaseInfo> many = new ArrayList<ReleaseInfo>();
+        for (int i = 1; i <= 20; i++) {
+            many.add(new ReleaseInfo("nightly-" + i, "nightly-" + i, i, "https://x/a.apk", true));
+        }
+        many.add(new ReleaseInfo("v0.2", "0.2", 0, "https://x/s.apk", false));
+        List<ReleaseInfo> picked = releasesForPicker(many, 3, "0.2.1", MAX_PICKER_RELEASES);
+        if (picked.size() > MAX_PICKER_RELEASES) throw new AssertionError("picker cap");
+        if (picked.isEmpty()) throw new AssertionError("picker empty stable");
+        if (!picked.get(0).nightly) throw new AssertionError("newest nightly first");
+        List<ReleaseInfo> trimmed = trimCatalog(many, 5);
+        int nightlyCount = 0;
+        for (ReleaseInfo r2 : trimmed) if (r2.nightly) nightlyCount++;
+        if (nightlyCount > 5) throw new AssertionError("catalog trim nightlies");
+        if (!"nightly-20".equals(formatVersionLabel("nightly-20"))) {
+            throw new AssertionError("nightly label format");
+        }
+        if (!"v0.2".equals(formatVersionLabel("0.2"))) throw new AssertionError("stable label format");
         String sample = "<?xml version=\"1.0\"?><solar-updates base=\"https://example.com/ota/\">"
                 + "<release tag=\"v0.2\" versionName=\"0.2\" versionCode=\"0\" nightly=\"false\" apk=\"solar-v0.2.apk\"/>"
                 + "<release tag=\"nightly-9\" versionName=\"nightly-9\" versionCode=\"9\" nightly=\"true\" apk=\"solar-nightly-9.apk\"/>"
