@@ -8,8 +8,8 @@ Release source: [github.com/thatwitchgirl/solar](https://github.com/thatwitchgir
 
 | Branch | Releases | Versioning |
 |--------|----------|------------|
-| `nightly` | Every push | Tags `nightly-{build}` — APK, `rom.zip`, `rom_type_b.zip` |
-| `main` | Stable | Tags `v0.1`, `v0.2`, … (+0.1 per release); first stable is **0.1** |
+| `nightly` | Every push | Tags `nightly-{N}` — **CI assigns N** as latest git tag + 1 (local `app/build.gradle` is only a dev hint) |
+| `main` | Stable | Tags `v0.1`, `v0.2`, … — **CI assigns** next +0.1 from latest `v0.*` release tag |
 
 Day-to-day development targets **`nightly`**. Merge to **`main`** when cutting a stable release.
 

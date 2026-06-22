@@ -28,7 +28,6 @@ local.properties
 /scripts/test_context_queue_adb.sh
 /scripts/test_podcast_emulator.sh
 /scripts/test_soulseek_device.sh
-/solar-rom/scripts/bump-nightly-version.sh
 
 # Stray docs / screenshots at repo root
 /docs/

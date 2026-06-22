@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Emit release tag and metadata for CI from branch + app/build.gradle.
-# main: stable tag v{versionName}; nightly: tag matches versionName in app/build.gradle
+# Emit release tag and metadata for CI — version is sequential from latest git release tag.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,6 +7,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/solar-repo.sh"
 GRADLE="$REPO_ROOT/app/build.gradle"
+RESOLVE="$SCRIPT_DIR/resolve-release-version.py"
 
 die() {
     echo "error: $*" >&2
@@ -27,39 +27,34 @@ PY
 }
 
 [ -f "$GRADLE" ] || die "missing $GRADLE"
+[ -f "$RESOLVE" ] || die "missing $RESOLVE"
 
 BRANCH="${GITHUB_REF_NAME:-$(git -C "$REPO_ROOT" branch --show-current 2>/dev/null || echo "")}"
-BUILD_NUM="${GITHUB_RUN_NUMBER:-}"
 SHORT_SHA="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
-if [ "$BRANCH" = "nightly" ]; then
-    CHANNEL="nightly"
-    VERSION_NAME="$(sed -n 's/.*versionName "\([^"]*\)".*/\1/p' "$GRADLE" | head -1)"
-    VERSION_CODE="$(sed -n 's/.*versionCode \([0-9]*\).*/\1/p' "$GRADLE" | head -1)"
-    [[ "$VERSION_NAME" == nightly-* ]] || die "nightly builds require versionName nightly-N in app/build.gradle"
-    [ -n "$VERSION_CODE" ] || die "could not read versionCode"
-    TAG="$VERSION_NAME"
-elif [ "$BRANCH" = "main" ]; then
-    CHANNEL="stable"
-    VERSION_NAME="$(sed -n 's/.*versionName "\([^"]*\)".*/\1/p' "$GRADLE" | head -1)"
-    VERSION_CODE="$(sed -n 's/.*versionCode \([0-9]*\).*/\1/p' "$GRADLE" | head -1)"
-    TAG="v${VERSION_NAME}"
-else
-    die "releases only from main or nightly (branch: ${BRANCH:-unknown})"
-fi
+[ "$BRANCH" = "nightly" ] || [ "$BRANCH" = "main" ] || die "releases only from main or nightly (branch: ${BRANCH:-unknown})"
 
-[ -n "$VERSION_NAME" ] || die "could not read versionName"
-[ -n "$VERSION_CODE" ] || die "could not read versionCode"
+echo "== Resolve release version from git tags (branch: $BRANCH) =="
+eval "$(python3 "$RESOLVE" "$BRANCH" "$GRADLE")"
+[ -n "${channel:-}" ] || die "resolve-release-version produced no channel"
+[ -n "${version_name:-}" ] || die "resolve-release-version produced no version_name"
+[ -n "${version_code:-}" ] || die "resolve-release-version produced no version_code"
+[ -n "${tag:-}" ] || die "resolve-release-version produced no tag"
+
+echo "  tag=$tag version_name=$version_name version_code=$version_code"
+
+apply_gradle_version "$version_name" "$version_code"
+echo "  patched $GRADLE"
 
 python3 - <<PY
 import json
 import os
 
 meta = {
-    "tag": "${TAG}",
-    "channel": "${CHANNEL}",
-    "version_name": "${VERSION_NAME}",
-    "version_code": int("${VERSION_CODE}"),
+    "tag": "${tag}",
+    "channel": "${channel}",
+    "version_name": "${version_name}",
+    "version_code": int("${version_code}"),
     "short_sha": "${SHORT_SHA}",
     "github_repo": "${SOLAR_GITHUB_REPO}",
 }
