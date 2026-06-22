@@ -442,6 +442,7 @@
     <string name="soulseek_account_saved">Reach account saved.</string>
     <string name="soulseek_downloading">Downloading %1$s (%2$d%%)</string>
     <string name="soulseek_searching">Searching…</string>
+    <string name="soulseek_widening_search">Widening search…</string>
     <string name="soulseek_more_results">+%1$d more (showing first %2$d)</string>
     <string name="soulseek_show_more">Show more (%1$d of %2$d)</string>
     <string name="soulseek_add_to_queue">Add to queue</string>

@@ -7,6 +7,7 @@ import com.solar.launcher.soulseek.SoulseekClient;
 import com.solar.launcher.soulseek.SoulseekSearchHistory;
 import com.solar.launcher.soulseek.SoulseekShareIndex;
 import com.solar.launcher.soulseek.SoulseekSharePolicy;
+import com.solar.launcher.soulseek.SoulseekSearchRanking;
 import com.solar.launcher.soulseek.SoulseekSearchSuggestions;
 import com.solar.launcher.theme.ThemeBrowser;
 import com.solar.launcher.theme.ThemeDownloader;
@@ -359,6 +360,7 @@ public class MainActivity extends Activity {
     private long soulseekLastStatusUiMs = 0;
     private Button soulseekMoreRow = null;
     private Button soulseekFocusedResultRow = null;
+    private String soulseekPendingFocusKey = null;
     private long soulseekLastProgressUiMs = 0;
     private int soulseekPendingAction = 0;
     private int soulseekActiveDownloadPercent = 0;
@@ -14493,6 +14495,11 @@ public class MainActivity extends Activity {
                         return;
                     }
                     if (!isSoulseekUiActive()) return;
+                    if (message != null && message.startsWith("Widening")
+                            && soulseekSearchStatusRow != null
+                            && soulseekUiMode == SOULSEEK_UI_RESULTS) {
+                        soulseekSearchStatusRow.setText(getString(R.string.soulseek_widening_search));
+                    }
                     if (tvBrowserPath != null) tvBrowserPath.setText(getString(R.string.path_soulseek, message));
                 }
             });
@@ -14574,12 +14581,19 @@ public class MainActivity extends Activity {
                     soulseekUiHandler.removeCallbacks(soulseekUiFlushRunnable);
                     flushSoulseekResultsUi(true);
                     mergeSoulseekResultsFromSnapshot();
+                    if (soulseekFocusedResultRow != null
+                            && soulseekFocusedResultRow.getTag() instanceof SoulseekClient.Result) {
+                        soulseekPendingFocusKey = soulseekResultKey(
+                                (SoulseekClient.Result) soulseekFocusedResultRow.getTag());
+                    } else {
+                        soulseekPendingFocusKey = null;
+                    }
                     final List<SoulseekClient.Result> toSort =
                             new ArrayList<SoulseekClient.Result>(soulseekResults);
                     new Thread(new Runnable() {
                         @Override
                         public void run() {
-                            sortSoulseekResultsByQuality(toSort);
+                            sortSoulseekResults(toSort, soulseekLastQuery);
                             runOnUiThreadSafe(new Runnable() {
                                 @Override
                                 public void run() {
@@ -14804,20 +14818,46 @@ public class MainActivity extends Activity {
         return result.username.toLowerCase(Locale.US) + "\0" + result.filename;
     }
 
-    private static void sortSoulseekResultsByQuality(List<SoulseekClient.Result> list) {
+    private static void sortSoulseekResults(List<SoulseekClient.Result> list, final String query) {
+        final String q = query != null ? query : "";
         Collections.sort(list, new Comparator<SoulseekClient.Result>() {
             @Override
             public int compare(SoulseekClient.Result a, SoulseekClient.Result b) {
-                return SoulseekClient.Result.compareByDownloadReliability(a, b);
+                return SoulseekSearchRanking.compareResults(a, b, q);
             }
         });
     }
 
     private int soulseekRankInsertIndex(SoulseekClient.Result r) {
         for (int i = 0; i < soulseekResults.size(); i++) {
-            if (SoulseekClient.Result.compareByDownloadReliability(r, soulseekResults.get(i)) < 0) return i;
+            if (SoulseekSearchRanking.compareResults(r, soulseekResults.get(i), soulseekLastQuery) < 0) {
+                return i;
+            }
         }
         return soulseekResults.size();
+    }
+
+    private void addSoulseekResultToList(SoulseekClient.Result r) {
+        if (soulseekSearchInProgress) {
+            soulseekResults.add(r);
+        } else {
+            soulseekResults.add(soulseekRankInsertIndex(r), r);
+        }
+    }
+
+    private boolean requestSoulseekFocusByKey(String key) {
+        if (key == null || containerBrowserItems == null) return false;
+        for (int i = 0; i < containerBrowserItems.getChildCount(); i++) {
+            View v = containerBrowserItems.getChildAt(i);
+            if (v.getTag() instanceof SoulseekClient.Result) {
+                SoulseekClient.Result r = (SoulseekClient.Result) v.getTag();
+                if (key.equals(soulseekResultKey(r))) {
+                    v.requestFocus();
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private static String formatSoulseekSize(long bytes) {
@@ -14856,7 +14896,7 @@ public class MainActivity extends Activity {
         for (SoulseekClient.Result r : batch) {
             if (soulseekClient != null && soulseekClient.isPeerDenied(r.username)) continue;
             if (!soulseekResultKeys.add(soulseekResultKey(r))) continue;
-            soulseekResults.add(soulseekRankInsertIndex(r), r);
+            addSoulseekResultToList(r);
         }
         if (soulseekSearchInProgress) {
             appendSoulseekResultRowsInner();
@@ -14878,7 +14918,7 @@ public class MainActivity extends Activity {
         for (SoulseekClient.Result r : soulseekClient.getResultsSnapshot()) {
             if (!soulseekResultAllowed(r)) continue;
             if (!soulseekResultKeys.add(soulseekResultKey(r))) continue;
-            soulseekResults.add(soulseekRankInsertIndex(r), r);
+            addSoulseekResultToList(r);
         }
     }
 
@@ -16334,7 +16374,7 @@ public class MainActivity extends Activity {
             if (!r.title().equalsIgnoreCase(base)) continue;
             out.add(r);
         }
-        sortSoulseekResultsByQuality(out);
+        sortSoulseekResults(out, soulseekLastQuery);
         return out;
     }
 
@@ -16378,12 +16418,21 @@ public class MainActivity extends Activity {
             empty.setEnabled(false);
             containerBrowserItems.addView(empty);
         } else {
-            sortSoulseekResultsByQuality(soulseekResults);
+            sortSoulseekResults(soulseekResults, soulseekLastQuery);
             updateReachBrowserHint(R.string.reach_hint_results);
             soulseekResultUiCount = 0;
             appendSoulseekResultRowsInner();
         }
-        if (containerBrowserItems.getChildCount() > 0) containerBrowserItems.getChildAt(0).requestFocus();
+        if (soulseekPendingFocusKey != null) {
+            if (!requestSoulseekFocusByKey(soulseekPendingFocusKey)) {
+                if (containerBrowserItems.getChildCount() > 0) {
+                    containerBrowserItems.getChildAt(0).requestFocus();
+                }
+            }
+            soulseekPendingFocusKey = null;
+        } else if (containerBrowserItems.getChildCount() > 0) {
+            containerBrowserItems.getChildAt(0).requestFocus();
+        }
     }
 
     private void finishSoulseekUserEntry() {
