@@ -158,11 +158,7 @@ public final class ArtistBrowsePolicy {
 
     private static String displayArtist(String raw, LibraryBrowsePrefs prefs) {
         if (raw == null) return "";
-        String t = raw.trim();
-        if (prefs != null && prefs.normalizeHonorifics()) {
-            return ArtistNames.normalizeDisplay(t);
-        }
-        return t;
+        return raw.trim();
     }
 
     private static String trackOwner(Track song, LibraryBrowsePrefs prefs) {

@@ -26,7 +26,6 @@ public final class LibraryBrowsePrefs {
     private static final String PREFS = "SOLAR_SETTINGS";
     private static final String KEY_SPLIT = "lib_split_credits";
     private static final String KEY_NORM_ALBUM = "lib_normalize_album_case";
-    private static final String KEY_NORM_HONOR = "lib_normalize_honorifics";
     private static final String KEY_GUEST_MODE = "lib_guest_browse_mode";
     private static final String KEY_ARTIST_FILTER = "lib_artist_filter";
     private static final String KEY_ARTIST_SORT = "lib_artist_sort";
@@ -59,14 +58,6 @@ public final class LibraryBrowsePrefs {
 
     public void setNormalizeAlbumCase(boolean on) {
         prefs.edit().putBoolean(KEY_NORM_ALBUM, on).commit();
-    }
-
-    public boolean normalizeHonorifics() {
-        return prefs.getBoolean(KEY_NORM_HONOR, true);
-    }
-
-    public void setNormalizeHonorifics(boolean on) {
-        prefs.edit().putBoolean(KEY_NORM_HONOR, on).commit();
     }
 
     public int guestBrowseMode() {
@@ -157,5 +148,19 @@ public final class LibraryBrowsePrefs {
             case SONG_SORT_DATE: return R.string.library_sort_date;
             default: return R.string.library_sort_title;
         }
+    }
+
+    /** Right-hand settings preview blurb for Music library rows. */
+    public static int previewTextRes(String rowKey) {
+        if (rowKey == null) return 0;
+        if (RowKeys.LIB_SPLIT_CREDITS.equals(rowKey)) return R.string.lib_preview_split_credits;
+        if (RowKeys.LIB_NORM_ALBUM.equals(rowKey)) return R.string.lib_preview_norm_album;
+        if (RowKeys.LIB_GUEST_MODE.equals(rowKey)) return R.string.lib_preview_guest_browse;
+        if (RowKeys.LIB_ARTIST_FILTER.equals(rowKey)) return R.string.lib_preview_artist_filter;
+        if (RowKeys.LIB_ARTIST_SORT.equals(rowKey)) return R.string.lib_preview_artist_sort;
+        if (RowKeys.LIB_SONG_SORT.equals(rowKey)) return R.string.lib_preview_song_sort;
+        if (RowKeys.LIB_ALBUM_SUB.equals(rowKey)) return R.string.lib_preview_album_sub;
+        if (RowKeys.LIB_GUEST_SUB.equals(rowKey)) return R.string.lib_preview_guest_sub;
+        return 0;
     }
 }

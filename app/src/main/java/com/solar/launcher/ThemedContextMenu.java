@@ -247,6 +247,11 @@ public final class ThemedContextMenu {
         requestOverlayFocus();
     }
 
+    /** True when focus is on the Back chip (not the tier title row). */
+    public boolean isBackChipFocused() {
+        return focusZone == FocusZone.OPTIONS_TITLE && hasBackChip();
+    }
+
     /** Collapse contextual action rows and highlight Back. */
     public void focusOptionsTitle() {
         if (titleView == null) return;
@@ -2011,9 +2016,23 @@ public final class ThemedContextMenu {
             newStart--;
         }
         if (newStart != queueBrowseWindowStart) {
-            slideQueueBrowseWindow(newStart);
-        }
-        if (findQueueRowByIndex(focusIndex) == null) {
+            if (newStart >= maxStart || focusIndex >= count - 3) {
+                // #region agent log
+                try {
+                    org.json.JSONObject d = new org.json.JSONObject();
+                    d.put("focusIndex", focusIndex);
+                    d.put("count", count);
+                    d.put("newStart", newStart);
+                    d.put("maxStart", maxStart);
+                    DebugAgentLog.log(activity, "ThemedContextMenu.ensureQueueBrowseWindowForFocus",
+                            "rebuild near end", "H6", d);
+                } catch (Exception ignored) {}
+                // #endregion
+                rebuildQueueBrowseWindow();
+            } else {
+                slideQueueBrowseWindow(newStart);
+            }
+        } else if (findQueueRowByIndex(focusIndex) == null) {
             rebuildQueueBrowseWindow();
         }
     }

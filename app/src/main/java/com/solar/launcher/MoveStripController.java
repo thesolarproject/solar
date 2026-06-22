@@ -67,6 +67,16 @@ public final class MoveStripController {
         listBuilt = false;
         buildList();
         animatePickEnter();
+        if (host != null) {
+            host.getViewTreeObserver().addOnGlobalLayoutListener(
+                    new android.view.ViewTreeObserver.OnGlobalLayoutListener() {
+                        @Override
+                        public void onGlobalLayout() {
+                            host.getViewTreeObserver().removeGlobalOnLayoutListener(this);
+                            scrollRowIntoView(pickIndex);
+                        }
+                    });
+        }
     }
 
     /** Refresh bindings without animation (after external data sync). */
@@ -110,12 +120,13 @@ public final class MoveStripController {
                 if (remaining[0] > 0) return;
                 fromRow.setTranslationY(0f);
                 toRow.setTranslationY(0f);
-                reorderChild(fromIndex, toIndex);
-                moveFrom = toIndex;
-                refreshAllRows();
-                scrollRowIntoView(toIndex);
                 animating = false;
+                // Sync backing data first, then rebuild rows — reorderChild+refresh before
+                // onComplete left highlight/labels on the wrong strip after each wheel step.
                 if (onComplete != null) onComplete.run();
+                moveFrom = toIndex;
+                buildList();
+                scrollRowIntoView(toIndex);
             }
         };
 
@@ -272,21 +283,38 @@ public final class MoveStripController {
 
     private void scrollRowIntoView(int index) {
         if (scrollParent == null || host == null) return;
-        View row = findRowByDataIndex(index);
-        if (row == null) return;
         scrollParent.post(new Runnable() {
             @Override
             public void run() {
-                int rowTop = row.getTop();
-                int rowBottom = row.getBottom();
+                View row = findRowByDataIndex(index);
+                if (row == null) return;
+                int rowTop = topWithinScrollParent(row);
+                int rowBottom = rowTop + row.getHeight();
                 int scrollY = scrollParent.getScrollY();
                 int height = scrollParent.getHeight();
+                if (height <= 0) {
+                    int slotH = adapter.rowSlotHeight();
+                    scrollParent.scrollTo(0, Math.max(0, index * slotH));
+                    return;
+                }
                 if (rowTop < scrollY) {
-                    scrollParent.smoothScrollTo(0, rowTop);
+                    scrollParent.scrollTo(0, rowTop);
                 } else if (rowBottom > scrollY + height) {
-                    scrollParent.smoothScrollTo(0, rowBottom - height);
+                    scrollParent.scrollTo(0, rowBottom - height);
                 }
             }
         });
+    }
+
+    /** Row top relative to {@link #scrollParent} (handles nested hosts in settings lists). */
+    private int topWithinScrollParent(View row) {
+        int top = 0;
+        View v = row;
+        while (v != null && v != scrollParent) {
+            top += v.getTop();
+            if (!(v.getParent() instanceof View)) break;
+            v = (View) v.getParent();
+        }
+        return top;
     }
 }

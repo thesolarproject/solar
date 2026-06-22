@@ -269,24 +269,6 @@ public class MainActivity extends Activity {
     private int homeScreenEditorMenuFocusIndex = 11;
     private int homeScreenEditorFocusIndex = 1;
     private int homeScreenOrderFocusIndex = 1;
-    private int homeEditorMoveIndex = -1;
-    private int homeEditorMovePickIndex = -1;
-    private java.util.List<String> homeEditorMoveSnapshot = null;
-    private boolean homeEditorMoveDirty = false;
-    private final QueueMoveWheelFilter homeEditorMoveWheelFilter = new QueueMoveWheelFilter();
-    private String homeEditorMoveHoldPreviewKey = null;
-    private ScrollView homeEditorMoveScroll = null;
-    private LinearLayout homeEditorMoveStripHost = null;
-    private MoveStripController homeEditorMoveStrip = null;
-    private int moreEditorMoveIndex = -1;
-    private int moreEditorMovePickIndex = -1;
-    private java.util.List<String> moreEditorMoveSnapshot = null;
-    private boolean moreEditorMoveDirty = false;
-    private final QueueMoveWheelFilter moreEditorMoveWheelFilter = new QueueMoveWheelFilter();
-    private String moreEditorMoveHoldPreviewKey = null;
-    private ScrollView moreEditorMoveScroll = null;
-    private LinearLayout moreEditorMoveStripHost = null;
-    private MoveStripController moreEditorMoveStrip = null;
     private int playlistMoveFrom = -1;
     private int playlistMovePickIndex = -1;
     private java.util.List<File> playlistMoveSnapshot = null;
@@ -509,6 +491,17 @@ public class MainActivity extends Activity {
             if (!canScheduleCenterMovePick()) return;
             centerMovePickHandled = true;
             performCenterMovePickUp();
+            // #region agent log
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("playlist", isVirtualPlaylistView());
+                d.put("playlistCtx", isPlaylistBrowseContext());
+                d.put("playlistMove", isPlaylistMoveActive());
+                d.put("queue", contextMenuInQueueTier);
+                DebugAgentLog.log(MainActivity.this, "MainActivity.centerMovePickRunnable",
+                        "move pick fired", "H3", d);
+            } catch (Exception ignored) {}
+            // #endregion
             clickFeedback();
         }
     };
@@ -3127,27 +3120,11 @@ public class MainActivity extends Activity {
             return false;
         }
         if (SettingsScreens.HOME.equals(settingsSubScreenKey)) {
-            if (isHomeEditorMoveActive()) {
-                cancelHomeEditorMove(true);
-                return true;
-            }
             lastSettingsFocusIndex = homeScreenEditorMenuFocusIndex;
             returnToSettingsParent();
             return true;
         }
-        if (SettingsScreens.HOME_MORE.equals(settingsSubScreenKey)) {
-            if (isMoreEditorMoveActive()) {
-                cancelMoreEditorMove(true);
-                return true;
-            }
-            buildHomeScreenEditorUI();
-            return true;
-        }
         return false;
-    }
-
-    private boolean isHomeMoreEditorScreen() {
-        return SettingsScreens.HOME_MORE.equals(settingsSubScreenKey);
     }
 
     // ponytail: Y1 wheel key→move mapping may change if driver remaps axes
@@ -4545,6 +4522,8 @@ public class MainActivity extends Activity {
             Toast.makeText(this, getString(R.string.home_videos_coming_soon), Toast.LENGTH_LONG).show();
         } else if (HomeMenuConfig.ID_PHOTOS.equals(id)) {
             Toast.makeText(this, getString(R.string.home_photos_coming_soon), Toast.LENGTH_LONG).show();
+        } else if (HomeMenuConfig.ID_AUDIOBOOKS.equals(id)) {
+            Toast.makeText(this, getString(R.string.home_audiobooks_coming_soon), Toast.LENGTH_LONG).show();
         } else if (HomeMenuConfig.ID_APPS.equals(id)) {
             changeScreen(STATE_APPS);
         }
@@ -4908,17 +4887,7 @@ public class MainActivity extends Activity {
             }
         } else if (currentScreenState != STATE_BRIGHTNESS && currentScreenState != STATE_STORAGE
                 && currentScreenState != STATE_PLAYER) {
-            if (currentScreenState == STATE_SETTINGS && SettingsScreens.HOME.equals(settingsSubScreenKey)
-                    && !isHomeEditorMoveActive()) {
-                View c = getCurrentFocus();
-                if (c != null) {
-                    if (System.currentTimeMillis() < suppressListClickUntil) return;
-                    c.performClick();
-                }
-                return;
-            }
-            if (currentScreenState == STATE_SETTINGS && isHomeMoreEditorScreen()
-                    && !isMoreEditorMoveActive()) {
+            if (currentScreenState == STATE_SETTINGS && SettingsScreens.HOME.equals(settingsSubScreenKey)) {
                 View c = getCurrentFocus();
                 if (c != null) {
                     if (System.currentTimeMillis() < suppressListClickUntil) return;
@@ -4950,16 +4919,12 @@ public class MainActivity extends Activity {
             if (event.getAction() == KeyEvent.ACTION_UP) return handleCenterKeyUp(event, true);
             return true;
         }
-        // ponytail: intercept center before focused rows/ListView eat it (com.innioasis.y1 BaseActivity)
-        if (isCenterKey(event.getKeyCode())) {
+        // ponytail: Y1 wheel OK is often KEYCODE_MEDIA_PLAY_PAUSE — treat as center everywhere
+        if (isContextMenuOkKey(event.getKeyCode())) {
             if (isWakingKeyEvent(event)) return true;
-            if (themedContextMenu != null && themedContextMenu.isShowing()) {
-                if (event.getAction() == KeyEvent.ACTION_DOWN) return trackCenterKeyDown(event, true);
-                if (event.getAction() == KeyEvent.ACTION_UP) return handleCenterKeyUp(event, true);
-                return true;
-            }
-            if (event.getAction() == KeyEvent.ACTION_DOWN) return trackCenterKeyDown(event, false);
-            if (event.getAction() == KeyEvent.ACTION_UP) return handleCenterKeyUp(event, false);
+            boolean fromMenu = themedContextMenu != null && themedContextMenu.isShowing();
+            if (event.getAction() == KeyEvent.ACTION_DOWN) return trackCenterKeyDown(event, fromMenu);
+            if (event.getAction() == KeyEvent.ACTION_UP) return handleCenterKeyUp(event, fromMenu);
             return true;
         }
         if (themedContextMenu != null && themedContextMenu.isShowing()) {
@@ -5477,7 +5442,7 @@ public class MainActivity extends Activity {
         try {
             if (device.getBondState() == BluetoothDevice.BOND_BONDED) {
                 if (isBluetoothAudioConnected(device)) {
-                    Toast.makeText(this, getString(R.string.toast_already_connected, device.getName()), Toast.LENGTH_SHORT).show();
+                    disconnectBluetoothAudio(device);
                 } else {
                     connectBluetoothAudio(device);
                 }
@@ -5568,6 +5533,33 @@ public class MainActivity extends Activity {
         if (bluetoothA2dp != null) {
             connectA2dpNow(device);
             pendingA2dpDevice = null;
+        }
+    }
+
+    @android.annotation.SuppressLint("MissingPermission")
+    private void disconnectBluetoothAudio(BluetoothDevice device) {
+        if (device == null) return;
+        ensureA2dpProfile();
+        if (bluetoothA2dp == null) {
+            Toast.makeText(this, getString(R.string.toast_audio_connect_failed), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        try {
+            Method disconnect = bluetoothA2dp.getClass().getMethod("disconnect", BluetoothDevice.class);
+            Object ok = disconnect.invoke(bluetoothA2dp, device);
+            // #region agent log
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("addr", device.getAddress());
+                d.put("ok", ok);
+                DebugAgentLog.log(this, "MainActivity.disconnectBluetoothAudio", "a2dp disconnect", "H4", d);
+            } catch (Exception ignored) {}
+            // #endregion
+            if (ok instanceof Boolean && !(Boolean) ok) {
+                Toast.makeText(this, getString(R.string.toast_audio_connect_failed), Toast.LENGTH_SHORT).show();
+            }
+        } catch (Exception e) {
+            Toast.makeText(this, getString(R.string.toast_audio_connect_failed), Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -6648,47 +6640,22 @@ public class MainActivity extends Activity {
         }
         if (rowKey != null && rowKey.startsWith("home.shortcut.")) {
             String id = rowKey.substring("home.shortcut.".length());
-            if (rowKey.equals(homeEditorMoveHoldPreviewKey) || rowKey.equals(moreEditorMoveHoldPreviewKey)) {
-                return getString(R.string.home_screen_move_grip);
-            }
-            if (isHomeEditorMoveActive() && SettingsScreens.HOME.equals(settingsSubScreenKey)) {
-                java.util.List<String> orderIds = HomeMenuConfig.loadHomeEditorMoveIds(prefs);
-                int idx = orderIds.indexOf(id);
-                if (idx >= 0) {
-                    return getString(R.string.common_position_format, idx + 1, orderIds.size());
-                }
-                return getString(R.string.home_screen_move_mode);
-            }
-            if (isMoreEditorMoveActive() && isHomeMoreEditorScreen()) {
-                java.util.List<String> orderIds = HomeMenuConfig.loadMoreOrderIds(prefs);
-                int idx = orderIds.indexOf(id);
-                if (idx >= 0) {
-                    return getString(R.string.common_position_format, idx + 1, orderIds.size());
-                }
-                return getString(R.string.home_screen_move_mode);
-            }
             HomeMenuConfig.Entry e = HomeMenuConfig.find(id);
             if (e == null) return "";
             if (SettingsScreens.HOME.equals(settingsSubScreenKey)) {
-                return stateOnOff(HomeMenuConfig.isShortcutEnabled(prefs, id));
-            }
-            if (isHomeMoreEditorScreen()) {
-                return stateOnOff(HomeMenuConfig.isShortcutEnabled(prefs, id));
+                return homeShortcutEditorState(id);
             }
             if (HomeMenuConfig.ID_GET_THEMES.equals(id) || HomeMenuConfig.ID_THEMES.equals(id)) {
                 return getString(R.string.home_screen_preview_themes);
             }
             if (HomeMenuConfig.ID_VIDEOS.equals(id)) return getString(R.string.home_screen_preview_videos);
             if (HomeMenuConfig.ID_PHOTOS.equals(id)) return getString(R.string.home_screen_preview_photos);
+            if (HomeMenuConfig.ID_AUDIOBOOKS.equals(id)) {
+                return getString(R.string.home_audiobooks_coming_soon);
+            }
             return stateOnOff(HomeMenuConfig.isShortcutEnabled(prefs, id));
         }
         if (RowKeys.HOME_MORE.equals(rowKey)) {
-            if (rowKey.equals(homeEditorMoveHoldPreviewKey)) {
-                return getString(R.string.home_screen_move_grip);
-            }
-            if (isHomeEditorMoveActive()) {
-                return getString(R.string.home_screen_move_mode);
-            }
             return stateOnOff(HomeMenuConfig.isMoreEnabled(prefs));
         }
         if (RowKeys.HOME_MANAGE_MORE.equals(rowKey)) return "";
@@ -6717,7 +6684,6 @@ public class MainActivity extends Activity {
         if (SettingsScreens.LIBRARY_BROWSE.equals(settingsSubScreenKey)) {
             if (RowKeys.LIB_SPLIT_CREDITS.equals(rowKey)) return stateOnOff(libraryBrowsePrefs.splitCredits());
             if (RowKeys.LIB_NORM_ALBUM.equals(rowKey)) return stateOnOff(libraryBrowsePrefs.normalizeAlbumCase());
-            if (RowKeys.LIB_NORM_HONOR.equals(rowKey)) return stateOnOff(libraryBrowsePrefs.normalizeHonorifics());
             if (RowKeys.LIB_GUEST_MODE.equals(rowKey)) {
                 return getString(LibraryBrowsePrefs.guestBrowseModeLabelRes(libraryBrowsePrefs.guestBrowseMode()));
             }
@@ -6956,7 +6922,7 @@ public class MainActivity extends Activity {
             String hint = homeShortcutConnectivityHint(id);
             if (hint != null) {
                 stateText = hint;
-            } else if (SettingsScreens.HOME.equals(settingsSubScreenKey) || isHomeMoreEditorScreen()) {
+            } else if (SettingsScreens.HOME.equals(settingsSubScreenKey)) {
                 if (HomeMenuConfig.ID_THEMES.equals(id) || HomeMenuConfig.ID_GET_THEMES.equals(id)) {
                     stateText = getString(R.string.home_screen_preview_themes);
                 } else if (HomeMenuConfig.ID_VIDEOS.equals(id)) {
@@ -6964,6 +6930,16 @@ public class MainActivity extends Activity {
                 } else if (HomeMenuConfig.ID_PHOTOS.equals(id)) {
                     stateText = getString(R.string.home_screen_preview_photos);
                 }
+            }
+        }
+        if (SettingsScreens.LIBRARY_BROWSE.equals(settingsSubScreenKey)) {
+            int previewRes = LibraryBrowsePrefs.previewTextRes(rowKey);
+            if (previewRes != 0) {
+                String current = resolveSettingStateText(rowKey);
+                String desc = getString(previewRes);
+                stateText = current != null && !current.isEmpty()
+                        ? desc + "\n\n" + getString(R.string.lib_preview_current, current)
+                        : desc;
             }
         }
         if (tvSettingsPreviewState != null) {
@@ -6985,20 +6961,30 @@ public class MainActivity extends Activity {
         return String.format(Locale.US, "%.0f MB", bytes / (1024.0 * 1024.0));
     }
 
-    private boolean suppressCenterSleepForReorder() {
-        if (themedContextMenu != null && themedContextMenu.isShowing() && contextMenuInQueueTier) {
-            return true;
+    private boolean suppressCenterSleepForReorder(long heldMs) {
+        if (themedContextMenu != null && themedContextMenu.isShowing()) {
+            if (contextMenuInQueueTier) return true;
+            if (contextQueueMoveFrom >= 0) return true;
+            if (themedContextMenu.isSubmenuTierOpen()) return true;
         }
-        if (isVirtualPlaylistView()) return true;
-        if (isHomeEditorMoveActive() || isMoreEditorMoveActive()) return true;
-        if (homeEditorMoveHoldPreviewKey != null || moreEditorMoveHoldPreviewKey != null) return true;
+        if (isPlaylistMoveActive()) return true;
+        if (isPlaylistBrowseContext()) return true;
+        if (canScheduleCenterMovePick() && heldMs < CENTER_MOVE_HOLD_MS + 80) return true;
         return false;
     }
 
-    private boolean isVirtualPlaylistView() {
+    private boolean isPlaylistBrowseContext() {
         return currentScreenState == STATE_BROWSER
                 && currentBrowserMode == BROWSER_VIRTUAL_SONGS
-                && "PLAYLIST".equals(virtualQueryType)
+                && "PLAYLIST".equals(virtualQueryType);
+    }
+
+    private boolean isPlaylistMoveActive() {
+        return playlistMoveFrom >= 0 && isPlaylistBrowseContext();
+    }
+
+    private boolean isVirtualPlaylistView() {
+        return isPlaylistBrowseContext()
                 && listVirtualSongs != null && listVirtualSongs.getVisibility() == View.VISIBLE;
     }
 
@@ -7007,17 +6993,7 @@ public class MainActivity extends Activity {
             return contextQueueMoveFrom < 0 && isContextQueueListFocused();
         }
         if (isVirtualPlaylistView()) return playlistMoveFrom < 0;
-        if (currentScreenState == STATE_SETTINGS && SettingsScreens.HOME.equals(settingsSubScreenKey)
-                && !isHomeEditorMoveActive()) {
-            String rowKey = focusedSettingsRowKey();
-            return homeEditorMoveIndexForRowKey(rowKey) >= 0 || RowKeys.HOME_MORE.equals(rowKey);
-        }
-        if (currentScreenState == STATE_SETTINGS && isHomeMoreEditorScreen() && !isMoreEditorMoveActive()) {
-            String rowKey = focusedSettingsRowKey();
-            if (!isHomeEditorShortcutRow(rowKey)) return false;
-            String id = rowKey.substring("home.shortcut.".length());
-            return HomeMenuConfig.loadMoreOrderIds(prefs).contains(id);
-        }
+        if (isPlaylistBrowseContext()) return playlistMoveFrom < 0;
         return false;
     }
 
@@ -7027,20 +7003,8 @@ public class MainActivity extends Activity {
             handleContextQueueCenterActivate(true);
             return;
         }
-        if (isVirtualPlaylistView()) {
+        if (isPlaylistBrowseContext()) {
             handlePlaylistListCenterActivate(true);
-            return;
-        }
-        if (currentScreenState == STATE_SETTINGS && SettingsScreens.HOME.equals(settingsSubScreenKey)) {
-            clearHomeEditorMoveHoldPreview();
-            handleHomeEditorCenterActivate(true);
-            centerMovePickHandled = true;
-            return;
-        }
-        if (currentScreenState == STATE_SETTINGS && isHomeMoreEditorScreen()) {
-            clearMoreEditorMoveHoldPreview();
-            handleMoreEditorCenterActivate(true);
-            centerMovePickHandled = true;
         }
     }
 
@@ -7058,15 +7022,6 @@ public class MainActivity extends Activity {
             if (isKeyboardDelSelected()) {
                 clockHandler.postDelayed(keyboardDelRepeatRunnable, 80);
             } else if (canScheduleCenterMovePick()) {
-                String rowKey = focusedSettingsRowKey();
-                if (SettingsScreens.HOME.equals(settingsSubScreenKey) && !isHomeEditorMoveActive()) {
-                    if (isHomeEditorShortcutRow(rowKey) || RowKeys.HOME_MORE.equals(rowKey)) {
-                        setHomeEditorMoveHoldPreview(rowKey);
-                    }
-                } else if (isHomeMoreEditorScreen() && !isMoreEditorMoveActive()
-                        && isHomeEditorShortcutRow(rowKey)) {
-                    setMoreEditorMoveHoldPreview(rowKey);
-                }
                 clockHandler.postDelayed(centerMovePickRunnable, CENTER_MOVE_HOLD_MS);
             } else if (fromContextMenu && themedContextMenu != null
                     && themedContextMenu.focusZone() == ThemedContextMenu.FocusZone.QUICK_BAR) {
@@ -7111,26 +7066,25 @@ public class MainActivity extends Activity {
                 return true;
             }
             centerMovePickHandled = false;
-            if (heldMs >= CENTER_SLEEP_HOLD_MS) {
-                performScreenSleep(false);
-                return true;
-            }
             // #region agent log
             try {
                 org.json.JSONObject d = new org.json.JSONObject();
+                d.put("heldMs", heldMs);
+                d.put("suppressSleep", suppressCenterSleepForReorder(heldMs));
                 d.put("zone", themedContextMenu != null ? themedContextMenu.focusZone().name() : "null");
-                d.put("quickIdx", themedContextMenu != null ? themedContextMenu.quickFocusIndex() : -1);
-                d.put("screen", currentScreenState);
-                d.put("inQueue", contextMenuInQueueTier);
-                d.put("queueList", isContextQueueListFocused());
-                DebugAgentLog.log(this, "MainActivity.handleCenterKeyUp", "context center", "H3", d);
+                d.put("submenuOpen", themedContextMenu != null && themedContextMenu.isSubmenuTierOpen());
+                DebugAgentLog.log(this, "MainActivity.handleCenterKeyUp", "context center", "H1-H2", d);
             } catch (Exception ignored) {}
             // #endregion
+            if (heldMs >= CENTER_SLEEP_HOLD_MS && !suppressCenterSleepForReorder(heldMs)) {
+                performScreenSleep(false);
+                return true;
+            }
             themedContextMenu.activateFocused();
             clickFeedback();
             return true;
         }
-        if (isVirtualPlaylistView()) {
+        if (isPlaylistMoveActive() || isVirtualPlaylistView()) {
             if (!centerMovePickHandled) {
                 handlePlaylistListCenterActivate(false);
                 clickFeedback();
@@ -7138,30 +7092,21 @@ public class MainActivity extends Activity {
             centerMovePickHandled = false;
             return true;
         }
-        if (currentScreenState == STATE_SETTINGS && SettingsScreens.HOME.equals(settingsSubScreenKey)) {
-            clearHomeEditorMoveHoldPreview();
-            if (isHomeEditorMoveActive()) {
-                if (!centerMovePickHandled) {
-                    confirmHomeEditorMove();
-                    clickFeedback();
-                }
-                centerMovePickHandled = false;
-                return true;
-            }
-        }
-        if (currentScreenState == STATE_SETTINGS && isHomeMoreEditorScreen()) {
-            clearMoreEditorMoveHoldPreview();
-            if (isMoreEditorMoveActive()) {
-                if (!centerMovePickHandled) {
-                    confirmMoreEditorMove();
-                    clickFeedback();
-                }
-                centerMovePickHandled = false;
-                return true;
-            }
-        }
         centerMovePickHandled = false;
-        if (heldMs >= CENTER_SLEEP_HOLD_MS) {
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("heldMs", heldMs);
+            d.put("suppressSleep", suppressCenterSleepForReorder(heldMs));
+            d.put("playlist", isVirtualPlaylistView());
+            d.put("playlistCtx", isPlaylistBrowseContext());
+            d.put("playlistMove", isPlaylistMoveActive());
+            d.put("moveFrom", playlistMoveFrom);
+            d.put("canPick", canScheduleCenterMovePick());
+            DebugAgentLog.log(this, "MainActivity.handleCenterKeyUp", "global center", "H1-H3", d);
+        } catch (Exception ignored) {}
+        // #endregion
+        if (heldMs >= CENTER_SLEEP_HOLD_MS && !suppressCenterSleepForReorder(heldMs)) {
             performScreenSleep(false);
             return true;
         }
@@ -7727,6 +7672,19 @@ public class MainActivity extends Activity {
 
         if (contextMenuInQueueTier && contextQueueMoveFrom >= 0) {
             cancelContextQueueMove(true);
+            return;
+        }
+
+        if (themedContextMenu.isBackChipFocused() && hasContextActiveTier()) {
+            // #region agent log
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("layer", "backChip→dismiss");
+                d.put("tierTop", contextMenuTopTier());
+                DebugAgentLog.log(this, "MainActivity.navigateContextMenuBack", "back layer", "H5", d);
+            } catch (Exception ignored) {}
+            // #endregion
+            dismissThemedContextMenu();
             return;
         }
 
@@ -8790,6 +8748,14 @@ public class MainActivity extends Activity {
 
     private void beginPlaylistMove(int pickIndex) {
         if (pickIndex < 0 || pickIndex >= virtualSongList.size()) return;
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("pickIndex", pickIndex);
+            d.put("size", virtualSongList.size());
+            DebugAgentLog.log(this, "MainActivity.beginPlaylistMove", "move begin", "H3", d);
+        } catch (Exception ignored) {}
+        // #endregion
         playlistMovePickIndex = pickIndex;
         playlistMoveFrom = pickIndex;
         playlistMoveSnapshot = new java.util.ArrayList<File>(virtualSongList);
@@ -8889,8 +8855,7 @@ public class MainActivity extends Activity {
     /** True when the artist is primary on at least one album in the library. */
     private boolean artistHasOwnAlbum(String artist) {
         if (artist == null || artist.trim().isEmpty()) return false;
-        String normalized = libraryBrowsePrefs.normalizeHonorifics()
-                ? ArtistNames.normalizeDisplay(artist) : artist.trim();
+        String normalized = artist.trim();
         String cacheKey = ArtistNames.matchKey(normalized);
         if (cacheKey.equals(artistOwnAlbumCacheKey)) return artistOwnAlbumCacheValue;
         boolean owns = ArtistBrowsePolicy.hasOwnAlbum(normalized, policyTracksFromLibrary(), libraryBrowsePrefs);
@@ -8900,8 +8865,7 @@ public class MainActivity extends Activity {
     }
 
     private void openArtistBrowse(String artist) {
-        virtualQueryArtist = libraryBrowsePrefs.normalizeHonorifics()
-                ? ArtistNames.normalizeDisplay(artist) : artist.trim();
+        virtualQueryArtist = artist.trim();
         if (ArtistBrowsePolicy.shouldSkipAlbumPicker(virtualQueryArtist, libraryBrowsePrefs,
                 policyTracksFromLibrary())) {
             currentBrowserMode = BROWSER_VIRTUAL_SONGS;
@@ -8991,8 +8955,6 @@ public class MainActivity extends Activity {
                     virtualSongList.add(to, moved);
                     playlistMoveFrom = to;
                     playlistMoveDirty = true;
-                    playlistMoveStrip.setMoveFrom(to);
-                    playlistMoveStrip.refreshAllRows();
                 }
             });
             return;
@@ -9041,8 +9003,6 @@ public class MainActivity extends Activity {
                     File moved = virtualSongList.remove(current);
                     virtualSongList.add(next, moved);
                     playlistMoveFrom = next;
-                    playlistMoveStrip.setMoveFrom(next);
-                    playlistMoveStrip.refreshAllRows();
                     cancelPlaylistMove();
                 }
             });
@@ -9519,6 +9479,14 @@ public class MainActivity extends Activity {
         contextMenuStateTexts.clear();
         contextMenuHeaders.clear();
         contextMenuActions.clear();
+        if (currentScreenState == STATE_MENU) {
+            addContextAction(getString(R.string.context_action_edit_home), new Runnable() {
+                @Override
+                public void run() {
+                    openHomeScreenEditorFromMenu();
+                }
+            });
+        }
         if (currentScreenState == STATE_MENU && focusedHomeMenuIndex >= 0
                 && focusedHomeMenuIndex < homeMenuEntries.size()) {
             final String homeId = homeMenuEntries.get(focusedHomeMenuIndex).id;
@@ -10510,6 +10478,10 @@ public class MainActivity extends Activity {
             changeScreen(STATE_MENU);
             return;
         }
+        if (currentScreenState == STATE_MORE) {
+            changeScreen(STATE_MENU);
+            return;
+        }
         if (currentScreenState == STATE_BLUETOOTH || currentScreenState == STATE_WIFI) {
             returnFromAuxScreen();
             return;
@@ -11094,19 +11066,6 @@ public class MainActivity extends Activity {
             }
         });
         containerSettingsItems.addView(btnNormAlbum);
-
-        LinearLayout btnNormHonor = createSettingsRow(RowKeys.LIB_NORM_HONOR, R.string.lib_norm_honorifics, false);
-        btnNormHonor.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                clickFeedback();
-                libraryBrowsePrefs.setNormalizeHonorifics(!libraryBrowsePrefs.normalizeHonorifics());
-                clearArtistOwnAlbumCache();
-                refreshLibraryBrowseIfVisible();
-                refreshSettingsPreview(RowKeys.LIB_NORM_HONOR);
-            }
-        });
-        containerSettingsItems.addView(btnNormHonor);
 
         LinearLayout btnGuest = createSettingsRow(RowKeys.LIB_GUEST_MODE, R.string.lib_guest_browse, false);
         btnGuest.setOnClickListener(new View.OnClickListener() {
@@ -11959,467 +11918,35 @@ public class MainActivity extends Activity {
         }).start();
     }
 
-    private boolean isHomeEditorMoveActive() {
-        return homeEditorMoveIndex >= 0;
-    }
-
-    private boolean isMoreEditorMoveActive() {
-        return moreEditorMoveIndex >= 0;
-    }
-
-    private String focusedSettingsRowKey() {
-        View focused = getCurrentFocus();
-        if (focused == null) return null;
-        Object tag = focused.getTag();
-        return tag instanceof String ? (String) tag : null;
-    }
-
-    private boolean isHomeEditorShortcutRow(String rowKey) {
-        return rowKey != null && rowKey.startsWith("home.shortcut.");
-    }
-
-    private String homeEditorMoveIdAt(int index) {
-        java.util.List<String> ids = HomeMenuConfig.loadHomeEditorMoveIds(prefs);
-        if (index < 0 || index >= ids.size()) return null;
-        return ids.get(index);
-    }
-
-    private int homeEditorMoveIndexForRowKey(String rowKey) {
-        if (RowKeys.HOME_MORE.equals(rowKey)) {
-            java.util.List<String> ids = HomeMenuConfig.loadHomeEditorMoveIds(prefs);
-            return ids.indexOf(HomeMenuConfig.ID_MORE);
+    private String homeShortcutEditorState(String id) {
+        if (HomeMenuConfig.isVisible(prefs, id)) {
+            return stateOnOff(true);
         }
-        if (!isHomeEditorShortcutRow(rowKey)) return -1;
-        String id = rowKey.substring("home.shortcut.".length());
-        java.util.List<String> ids = HomeMenuConfig.loadHomeEditorMoveIds(prefs);
-        return ids.indexOf(id);
-    }
-
-    private String homeEditorMoveLabel(String id) {
-        if (HomeMenuConfig.ID_MORE.equals(id)) return getString(R.string.home_screen_more);
-        HomeMenuConfig.Entry e = HomeMenuConfig.find(id);
-        return e != null ? getString(e.labelResId) : id;
-    }
-
-    private String moreEditorMoveLabel(String id) {
-        HomeMenuConfig.Entry e = HomeMenuConfig.find(id);
-        return e != null ? getString(e.labelResId) : id;
-    }
-
-    private int homeEditorMoveRowSlotHeight() {
-        return y1RowHeightPx + 2;
-    }
-
-    private void clearHomeEditorMoveHoldPreview() {
-        if (homeEditorMoveHoldPreviewKey == null) return;
-        homeEditorMoveHoldPreviewKey = null;
-        refreshHomeEditorHoldPreviewUi(false);
-    }
-
-    private void setHomeEditorMoveHoldPreview(String rowKey) {
-        homeEditorMoveHoldPreviewKey = rowKey;
-        refreshHomeEditorHoldPreviewUi(true);
-    }
-
-    private void clearMoreEditorMoveHoldPreview() {
-        if (moreEditorMoveHoldPreviewKey == null) return;
-        moreEditorMoveHoldPreviewKey = null;
-        refreshMoreEditorHoldPreviewUi(false);
-    }
-
-    private void setMoreEditorMoveHoldPreview(String rowKey) {
-        moreEditorMoveHoldPreviewKey = rowKey;
-        refreshMoreEditorHoldPreviewUi(true);
-    }
-
-    private void refreshHomeEditorHoldPreviewUi(boolean grip) {
-        if (containerSettingsItems == null) return;
-        for (int i = 0; i < containerSettingsItems.getChildCount(); i++) {
-            View row = containerSettingsItems.getChildAt(i);
-            Object tag = row.getTag();
-            if (!(tag instanceof String)) continue;
-            String key = (String) tag;
-            if (!grip && !key.equals(homeEditorMoveHoldPreviewKey)) continue;
-            if (grip && !key.equals(homeEditorMoveHoldPreviewKey)) continue;
-            refreshSettingsRowInline(key);
-            if (!isFullWidthMenus) updateSettingsPreview(key);
+        if (HomeMenuConfig.isInMore(prefs, id)) {
+            return getString(R.string.home_screen_in_more);
         }
+        return getString(R.string.home_screen_off);
     }
 
-    private void refreshMoreEditorHoldPreviewUi(boolean grip) {
-        if (containerSettingsItems == null) return;
-        for (int i = 0; i < containerSettingsItems.getChildCount(); i++) {
-            View row = containerSettingsItems.getChildAt(i);
-            Object tag = row.getTag();
-            if (!(tag instanceof String)) continue;
-            String key = (String) tag;
-            if (!grip && !key.equals(moreEditorMoveHoldPreviewKey)) continue;
-            if (grip && !key.equals(moreEditorMoveHoldPreviewKey)) continue;
-            refreshSettingsRowInline(key);
-            if (!isFullWidthMenus) updateSettingsPreview(key);
-        }
-    }
-
-    private MoveStripController.Adapter createHomeEditorMoveAdapter(final boolean moreMenu) {
-        return new MoveStripController.Adapter() {
-            @Override
-            public View createRow() {
-                return MoveRibbonRows.createMenuMoveRow(
-                        MainActivity.this, y1RowHeightPx, y1ActiveRowWidthPx());
-            }
-
-            @Override
-            public void bindRow(View row, int dataIndex, boolean moving, boolean confirming) {
-                java.util.List<String> ids = moreMenu
-                        ? HomeMenuConfig.loadMoreOrderIds(prefs)
-                        : HomeMenuConfig.loadHomeEditorMoveIds(prefs);
-                String id = ids.get(dataIndex);
-                String label = moreMenu ? moreEditorMoveLabel(id) : homeEditorMoveLabel(id);
-                MoveRibbonRows.bindMenuMoveRow(MainActivity.this, (FrameLayout) row, label, moving,
-                        moving || confirming, y1ActiveRowWidthPx(), y1RowHeightPx);
-            }
-
-            @Override
-            public int itemCount() {
-                return moreMenu
-                        ? HomeMenuConfig.loadMoreOrderIds(prefs).size()
-                        : HomeMenuConfig.loadHomeEditorMoveIds(prefs).size();
-            }
-
-            @Override
-            public int rowSlotHeight() {
-                return homeEditorMoveRowSlotHeight();
-            }
-        };
-    }
-
-    private void beginHomeEditorMove(int pickIndex) {
-        java.util.List<String> ids = HomeMenuConfig.loadHomeEditorMoveIds(prefs);
-        if (pickIndex < 0 || pickIndex >= ids.size()) return;
-        homeEditorMovePickIndex = pickIndex;
-        homeEditorMoveIndex = pickIndex;
-        homeEditorMoveSnapshot = new java.util.ArrayList<String>(ids);
-        homeEditorMoveDirty = false;
-        homeEditorMoveWheelFilter.reset();
-        showHomeEditorMoveStripUi();
-    }
-
-    private void beginMoreEditorMove(int pickIndex) {
-        java.util.List<String> ids = HomeMenuConfig.loadMoreOrderIds(prefs);
-        if (pickIndex < 0 || pickIndex >= ids.size()) return;
-        moreEditorMovePickIndex = pickIndex;
-        moreEditorMoveIndex = pickIndex;
-        moreEditorMoveSnapshot = new java.util.ArrayList<String>(ids);
-        moreEditorMoveDirty = false;
-        moreEditorMoveWheelFilter.reset();
-        showMoreEditorMoveStripUi();
-    }
-
-    private void showHomeEditorMoveStripUi() {
-        containerSettingsItems.removeAllViews();
-        Button btnBack = createListButton(getString(R.string.common_back_short));
-        styleSecondaryLabel(btnBack);
-        btnBack.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                clickFeedback();
-                cancelHomeEditorMove(true);
-            }
-        });
-        containerSettingsItems.addView(btnBack);
-        TextView movingHeader = new TextView(this);
-        movingHeader.setText(getString(R.string.home_screen_move_mode));
-        movingHeader.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
-        movingHeader.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
-                getResources().getDimension(R.dimen.y1_menu_text_size) * 0.85f);
-        ThemeManager.applyThemedTextStyle(movingHeader, ThemeManager.getSectionHeaderTextColor());
-        int hPad = (int) (10 * getResources().getDisplayMetrics().density);
-        movingHeader.setPadding(hPad, hPad, hPad, hPad / 2);
-        containerSettingsItems.addView(movingHeader);
-        homeEditorMoveScroll = new ScrollView(this);
-        homeEditorMoveScroll.setVerticalScrollBarEnabled(false);
-        homeEditorMoveScroll.setFillViewport(true);
-        homeEditorMoveStripHost = new LinearLayout(this);
-        homeEditorMoveStripHost.setOrientation(LinearLayout.VERTICAL);
-        homeEditorMoveScroll.addView(homeEditorMoveStripHost, new ScrollView.LayoutParams(
-                ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
-        homeEditorMoveStrip = new MoveStripController(homeEditorMoveStripHost,
-                createHomeEditorMoveAdapter(false));
-        homeEditorMoveStrip.setScrollParent(homeEditorMoveScroll);
-        LinearLayout.LayoutParams scrollLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
-        containerSettingsItems.addView(homeEditorMoveScroll, scrollLp);
-        homeEditorMoveStrip.enter(homeEditorMoveIndex);
-        updateSettingsPreviewForHomeMove();
-    }
-
-    private void showMoreEditorMoveStripUi() {
-        containerSettingsItems.removeAllViews();
-        Button btnBack = createListButton(getString(R.string.common_back_short));
-        styleSecondaryLabel(btnBack);
-        btnBack.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                clickFeedback();
-                cancelMoreEditorMove(true);
-            }
-        });
-        containerSettingsItems.addView(btnBack);
-        TextView movingHeader = new TextView(this);
-        movingHeader.setText(getString(R.string.home_screen_move_mode));
-        movingHeader.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
-        movingHeader.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
-                getResources().getDimension(R.dimen.y1_menu_text_size) * 0.85f);
-        ThemeManager.applyThemedTextStyle(movingHeader, ThemeManager.getSectionHeaderTextColor());
-        int hPad = (int) (10 * getResources().getDisplayMetrics().density);
-        movingHeader.setPadding(hPad, hPad, hPad, hPad / 2);
-        containerSettingsItems.addView(movingHeader);
-        moreEditorMoveScroll = new ScrollView(this);
-        moreEditorMoveScroll.setVerticalScrollBarEnabled(false);
-        moreEditorMoveScroll.setFillViewport(true);
-        moreEditorMoveStripHost = new LinearLayout(this);
-        moreEditorMoveStripHost.setOrientation(LinearLayout.VERTICAL);
-        moreEditorMoveScroll.addView(moreEditorMoveStripHost, new ScrollView.LayoutParams(
-                ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
-        moreEditorMoveStrip = new MoveStripController(moreEditorMoveStripHost,
-                createHomeEditorMoveAdapter(true));
-        moreEditorMoveStrip.setScrollParent(moreEditorMoveScroll);
-        LinearLayout.LayoutParams scrollLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
-        containerSettingsItems.addView(moreEditorMoveScroll, scrollLp);
-        moreEditorMoveStrip.enter(moreEditorMoveIndex);
-        updateSettingsPreviewForMoreMove();
-    }
-
-    private void updateSettingsPreviewForHomeMove() {
-        if (isFullWidthMenus || homeEditorMoveIndex < 0) return;
-        String id = homeEditorMoveIdAt(homeEditorMoveIndex);
-        if (HomeMenuConfig.ID_MORE.equals(id)) {
-            updateSettingsPreview(RowKeys.HOME_MORE);
-        } else if (id != null) {
-            updateSettingsPreview(RowKeys.homeShortcut(id));
-        }
-    }
-
-    private void updateSettingsPreviewForMoreMove() {
-        if (isFullWidthMenus || moreEditorMoveIndex < 0) return;
-        String id = HomeMenuConfig.loadMoreOrderIds(prefs).get(moreEditorMoveIndex);
-        updateSettingsPreview(RowKeys.homeShortcut(id));
-    }
-
-    private void applyHomeEditorMove(int from, int to) {
-        java.util.List<String> ids = HomeMenuConfig.loadHomeEditorMoveIds(prefs);
-        if (from == to || from < 0 || to < 0 || from >= ids.size() || to >= ids.size()) return;
-        if (homeEditorMoveStrip != null && homeEditorMoveStrip.isAnimating()) return;
-        if (homeEditorMoveStrip != null) {
-            homeEditorMoveStrip.animateStep(from, to, new Runnable() {
-                @Override
-                public void run() {
-                    HomeMenuConfig.moveEditorHome(prefs, from, to);
-                    homeEditorMoveIndex = to;
-                    homeEditorMoveDirty = true;
-                    buildHomeMenu();
-                    homeEditorMoveStrip.setMoveFrom(to);
-                    homeEditorMoveStrip.refreshAllRows();
-                    updateSettingsPreviewForHomeMove();
-                }
-            });
-            return;
-        }
-        HomeMenuConfig.moveEditorHome(prefs, from, to);
-        homeEditorMoveIndex = to;
-        homeEditorMoveDirty = true;
-        buildHomeMenu();
-        updateSettingsPreviewForHomeMove();
-    }
-
-    private void applyMoreEditorMove(int from, int to) {
-        java.util.List<String> ids = HomeMenuConfig.loadMoreOrderIds(prefs);
-        if (from == to || from < 0 || to < 0 || from >= ids.size() || to >= ids.size()) return;
-        if (moreEditorMoveStrip != null && moreEditorMoveStrip.isAnimating()) return;
-        if (moreEditorMoveStrip != null) {
-            moreEditorMoveStrip.animateStep(from, to, new Runnable() {
-                @Override
-                public void run() {
-                    HomeMenuConfig.moveMore(prefs, from, to);
-                    moreEditorMoveIndex = to;
-                    moreEditorMoveDirty = true;
-                    buildHomeMenu();
-                    moreEditorMoveStrip.setMoveFrom(to);
-                    moreEditorMoveStrip.refreshAllRows();
-                    updateSettingsPreviewForMoreMove();
-                }
-            });
-            return;
-        }
-        HomeMenuConfig.moveMore(prefs, from, to);
-        moreEditorMoveIndex = to;
-        moreEditorMoveDirty = true;
-        buildHomeMenu();
-        updateSettingsPreviewForMoreMove();
-    }
-
-    private void flushHomeEditorMoveIfDirty() {
-        if (!homeEditorMoveDirty) return;
-        homeEditorMoveDirty = false;
-    }
-
-    private void flushMoreEditorMoveIfDirty() {
-        if (!moreEditorMoveDirty) return;
-        moreEditorMoveDirty = false;
-    }
-
-    private void clearHomeEditorMoveSession() {
-        if (homeEditorMoveStrip != null) homeEditorMoveStrip.teardown();
-        homeEditorMoveIndex = -1;
-        homeEditorMovePickIndex = -1;
-        homeEditorMoveSnapshot = null;
-        homeEditorMoveDirty = false;
-        homeEditorMoveWheelFilter.reset();
-        homeEditorMoveStrip = null;
-        homeEditorMoveStripHost = null;
-        homeEditorMoveScroll = null;
-    }
-
-    private void clearMoreEditorMoveSession() {
-        if (moreEditorMoveStrip != null) moreEditorMoveStrip.teardown();
-        moreEditorMoveIndex = -1;
-        moreEditorMovePickIndex = -1;
-        moreEditorMoveSnapshot = null;
-        moreEditorMoveDirty = false;
-        moreEditorMoveWheelFilter.reset();
-        moreEditorMoveStrip = null;
-        moreEditorMoveStripHost = null;
-        moreEditorMoveScroll = null;
-    }
-
-    private void confirmHomeEditorMove() {
-        if (homeEditorMoveStrip != null && homeEditorMoveStrip.isAnimating()) return;
-        final int placed = homeEditorMoveIndex;
-        Runnable finish = new Runnable() {
-            @Override
-            public void run() {
-                flushHomeEditorMoveIfDirty();
-                clearHomeEditorMoveSession();
-                buildHomeScreenEditorUI();
-            }
-        };
-        if (homeEditorMoveStrip != null && placed >= 0) {
-            homeEditorMoveStrip.flashConfirm(placed, finish);
+    private void onHomeShortcutEditorClick(final HomeMenuConfig.Entry entry) {
+        if (entry.required) return;
+        clickFeedback();
+        if (HomeMenuConfig.isVisible(prefs, entry.id)) {
+            HomeMenuConfig.hideFromHome(prefs, entry.id);
+        } else if (HomeMenuConfig.isInMore(prefs, entry.id)) {
+            HomeMenuConfig.setVisible(prefs, entry.id, true);
         } else {
-            finish.run();
+            HomeMenuConfig.setShortcutEnabled(prefs, entry.id, true);
         }
-    }
-
-    private void confirmMoreEditorMove() {
-        if (moreEditorMoveStrip != null && moreEditorMoveStrip.isAnimating()) return;
-        final int placed = moreEditorMoveIndex;
-        Runnable finish = new Runnable() {
-            @Override
-            public void run() {
-                flushMoreEditorMoveIfDirty();
-                clearMoreEditorMoveSession();
-                buildHomeMoreEditorUI();
-            }
-        };
-        if (moreEditorMoveStrip != null && placed >= 0) {
-            moreEditorMoveStrip.flashConfirm(placed, finish);
-        } else {
-            finish.run();
-        }
-    }
-
-    private void finishCancelHomeEditorMove() {
-        if (homeEditorMoveSnapshot != null) {
-            HomeMenuConfig.saveHomeEditorMoveOrder(prefs, homeEditorMoveSnapshot);
-            buildHomeMenu();
-        }
-        homeEditorMoveDirty = false;
-        clearHomeEditorMoveSession();
+        buildHomeMenu();
         buildHomeScreenEditorUI();
     }
 
-    private void finishCancelMoreEditorMove() {
-        if (moreEditorMoveSnapshot != null) {
-            HomeMenuConfig.saveMoreOrder(prefs, moreEditorMoveSnapshot);
-            buildHomeMenu();
-        }
-        moreEditorMoveDirty = false;
-        clearMoreEditorMoveSession();
-        buildHomeMoreEditorUI();
-    }
-
-    private void cancelHomeEditorMove(boolean animated) {
-        if (homeEditorMoveIndex < 0) return;
-        if (homeEditorMoveStrip != null && homeEditorMoveStrip.isAnimating()) return;
-        final int home = homeEditorMovePickIndex >= 0 ? homeEditorMovePickIndex : homeEditorMoveIndex;
-        final int current = homeEditorMoveIndex;
-        if (animated && homeEditorMoveStrip != null && current != home) {
-            final int next = current + (current > home ? -1 : 1);
-            homeEditorMoveStrip.animateStep(current, next, new Runnable() {
-                @Override
-                public void run() {
-                    HomeMenuConfig.moveEditorHome(prefs, current, next);
-                    homeEditorMoveIndex = next;
-                    buildHomeMenu();
-                    homeEditorMoveStrip.setMoveFrom(next);
-                    homeEditorMoveStrip.refreshAllRows();
-                    cancelHomeEditorMove(true);
-                }
-            });
-            return;
-        }
-        finishCancelHomeEditorMove();
-    }
-
-    private void cancelMoreEditorMove(boolean animated) {
-        if (moreEditorMoveIndex < 0) return;
-        if (moreEditorMoveStrip != null && moreEditorMoveStrip.isAnimating()) return;
-        final int home = moreEditorMovePickIndex >= 0 ? moreEditorMovePickIndex : moreEditorMoveIndex;
-        final int current = moreEditorMoveIndex;
-        if (animated && moreEditorMoveStrip != null && current != home) {
-            final int next = current + (current > home ? -1 : 1);
-            moreEditorMoveStrip.animateStep(current, next, new Runnable() {
-                @Override
-                public void run() {
-                    HomeMenuConfig.moveMore(prefs, current, next);
-                    moreEditorMoveIndex = next;
-                    buildHomeMenu();
-                    moreEditorMoveStrip.setMoveFrom(next);
-                    moreEditorMoveStrip.refreshAllRows();
-                    cancelMoreEditorMove(true);
-                }
-            });
-            return;
-        }
-        finishCancelMoreEditorMove();
-    }
-
-    private void handleHomeEditorCenterActivate(boolean longPress) {
-        if (isHomeEditorMoveActive()) {
-            confirmHomeEditorMove();
-            return;
-        }
-        String rowKey = focusedSettingsRowKey();
-        int idx = homeEditorMoveIndexForRowKey(rowKey);
-        if (longPress && idx >= 0) {
-            beginHomeEditorMove(idx);
-        }
-    }
-
-    private void handleMoreEditorCenterActivate(boolean longPress) {
-        if (isMoreEditorMoveActive()) {
-            confirmMoreEditorMove();
-            return;
-        }
-        String rowKey = focusedSettingsRowKey();
-        if (!isHomeEditorShortcutRow(rowKey)) return;
-        String id = rowKey.substring("home.shortcut.".length());
-        java.util.List<String> ids = HomeMenuConfig.loadMoreOrderIds(prefs);
-        int idx = ids.indexOf(id);
-        if (longPress && idx >= 0) {
-            beginMoreEditorMove(idx);
-        }
+    private void openHomeScreenEditorFromMenu() {
+        homeScreenEditorFocusIndex = 2;
+        settingsParentKey = SettingsScreens.APPEARANCE;
+        changeScreen(STATE_SETTINGS);
+        buildHomeScreenEditorUI();
     }
 
     private void buildHomeScreenEditorUI() {
@@ -12442,24 +11969,22 @@ public class MainActivity extends Activity {
 
         createCategoryHeader(getString(R.string.home_screen_shortcuts));
 
-        for (final HomeMenuConfig.Entry entry : HomeMenuConfig.catalog()) {
-            String state = stateOnOff(HomeMenuConfig.isShortcutEnabled(prefs, entry.id));
-            final LinearLayout row = createSettingRow(RowKeys.homeShortcut(entry.id), entry.labelResId, state);
+        for (final HomeMenuConfig.Entry entry : HomeMenuConfig.loadEditorCatalogEntries()) {
+            final LinearLayout row = createSettingRow(RowKeys.homeShortcut(entry.id), entry.labelResId,
+                    homeShortcutEditorState(entry.id));
             if (!entry.required) {
                 row.setOnClickListener(new View.OnClickListener() {
                     @Override
                     public void onClick(View v) {
-                        clickFeedback();
                         homeScreenEditorFocusIndex = containerSettingsItems.indexOfChild(v);
-                        boolean nowOn = !HomeMenuConfig.isShortcutEnabled(prefs, entry.id);
-                        HomeMenuConfig.setShortcutEnabled(prefs, entry.id, nowOn);
-                        buildHomeMenu();
-                        buildHomeScreenEditorUI();
+                        onHomeShortcutEditorClick(entry);
                     }
                 });
             }
             containerSettingsItems.addView(row);
         }
+
+        createCategoryHeader(getString(R.string.home_screen_options));
 
         LinearLayout btnMoreTile = createSettingRow(RowKeys.HOME_MORE, R.string.home_screen_more,
                 stateOnOff(HomeMenuConfig.isMoreEnabled(prefs)));
@@ -12474,21 +11999,6 @@ public class MainActivity extends Activity {
             }
         });
         containerSettingsItems.addView(btnMoreTile);
-
-        if (HomeMenuConfig.isMoreEnabled(prefs)) {
-            LinearLayout btnManageMore = createSettingsRow(RowKeys.HOME_MANAGE_MORE,
-                    R.string.home_screen_manage_more, true);
-            btnManageMore.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    if (isHomeEditorMoveActive()) return;
-                    clickFeedback();
-                    homeScreenEditorFocusIndex = containerSettingsItems.indexOfChild(v);
-                    buildHomeMoreEditorUI();
-                }
-            });
-            containerSettingsItems.addView(btnManageMore);
-        }
 
         createCategoryHeader(getString(R.string.settings_widgets_section));
 
@@ -12533,50 +12043,6 @@ public class MainActivity extends Activity {
             }
         });
         containerSettingsItems.addView(btnAlbum);
-
-        restoreHomeScreenEditorFocus(targetFocusIndex);
-    }
-
-    private void buildHomeMoreEditorUI() {
-        setSettingsSubScreen(SettingsScreens.HOME_MORE);
-        updateStatusBarTitle();
-        containerSettingsItems.removeAllViews();
-        final int targetFocusIndex = homeScreenEditorFocusIndex;
-
-        Button btnBack = createListButton(getString(R.string.common_back_short));
-        styleSecondaryLabel(btnBack);
-        btnBack.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                clickFeedback();
-                if (isMoreEditorMoveActive()) {
-                    cancelMoreEditorMove(true);
-                } else {
-                    buildHomeScreenEditorUI();
-                }
-            }
-        });
-        containerSettingsItems.addView(btnBack);
-
-        createCategoryHeader(getString(R.string.home_menu_more));
-
-        for (final HomeMenuConfig.Entry entry : HomeMenuConfig.catalog()) {
-            if (HomeMenuConfig.ID_SETTINGS.equals(entry.id)) continue;
-            String state = stateOnOff(HomeMenuConfig.isShortcutEnabled(prefs, entry.id));
-            final LinearLayout row = createSettingRow(RowKeys.homeShortcut(entry.id), entry.labelResId, state);
-            row.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    clickFeedback();
-                    homeScreenEditorFocusIndex = containerSettingsItems.indexOfChild(v);
-                    boolean nowOn = !HomeMenuConfig.isShortcutEnabled(prefs, entry.id);
-                    HomeMenuConfig.setShortcutEnabled(prefs, entry.id, nowOn);
-                    buildHomeMenu();
-                    buildHomeMoreEditorUI();
-                }
-            });
-            containerSettingsItems.addView(row);
-        }
 
         restoreHomeScreenEditorFocus(targetFocusIndex);
     }
@@ -12934,6 +12400,7 @@ public class MainActivity extends Activity {
                 containerBrowserItems.addView(row);
             }
         }
+
         if (containerBrowserItems.getChildCount() > 0) {
             containerBrowserItems.getChildAt(0).requestFocus();
         }
@@ -13219,8 +12686,7 @@ public class MainActivity extends Activity {
         if (raw == null) return;
         String trimmed = raw.trim();
         if (trimmed.isEmpty() || "Unknown Artist".equalsIgnoreCase(trimmed)) return;
-        String display = libraryBrowsePrefs.normalizeHonorifics()
-                ? ArtistNames.normalizeDisplay(trimmed) : trimmed;
+        String display = trimmed;
         String key = ArtistNames.matchKey(display);
         String existing = artistByKey.get(key);
         if (existing == null) {
@@ -14923,8 +14389,10 @@ public class MainActivity extends Activity {
                 public void run() {
                     ConnectivityHelper.setReachLoginOk(false);
                     buildHomeMenu();
+                    if (isTransientReachError(reason)) return;
                     Toast.makeText(MainActivity.this,
-                            getString(R.string.soulseek_login_failed_check_account, reason),
+                            getString(R.string.soulseek_login_failed_check_account,
+                                    humanizeSoulseekError(reason)),
                             Toast.LENGTH_LONG).show();
                 }
             });
@@ -15131,6 +14599,9 @@ public class MainActivity extends Activity {
                         if (!isSoulseekUiActive() && !shouldDeferSoulseekOffScreenCleanup()) {
                             soulseekOffScreenCleanup();
                         }
+                        return;
+                    }
+                    if (isTransientReachError(message) && currentScreenState != STATE_SOULSEEK) {
                         return;
                     }
                     String msg = humanizeSoulseekError(message);
@@ -15714,8 +15185,23 @@ public class MainActivity extends Activity {
                 || soulseekUiMode == SOULSEEK_UI_ACTION;
     }
 
+    private boolean isTransientReachError(String msg) {
+        if (msg == null || msg.isEmpty()) return false;
+        String lower = msg.toLowerCase(Locale.US);
+        if (lower.contains("eof") || lower.contains("socket")
+                || lower.contains("disconnected") || lower.contains("econnreset")
+                || lower.contains("not connected") || lower.contains("connection reset")) {
+            return true;
+        }
+        return "EOFException".equals(msg) || "SocketException".equals(msg)
+                || "SocketTimeoutException".equals(msg);
+    }
+
     private String humanizeSoulseekError(String msg) {
         if (msg == null || msg.isEmpty()) return getString(R.string.soulseek_error_unknown);
+        if (isTransientReachError(msg)) {
+            return getString(R.string.soulseek_error_server_unreachable);
+        }
         if (msg.contains("EMFILE") || msg.contains("Too many peer")) {
             return getString(R.string.reach_error_too_many_peers);
         }
@@ -18791,6 +18277,21 @@ public class MainActivity extends Activity {
                 || currentScreenState == STATE_SETTINGS || currentScreenState == STATE_BLUETOOTH
                 || currentScreenState == STATE_WIFI || currentScreenState == STATE_PODCASTS
                 || currentScreenState == STATE_SOULSEEK) {
+            // Playlist move strip replaces the ListView — handle wheel while list is hidden.
+            if (currentScreenState == STATE_BROWSER && isPlaylistMoveActive()) {
+                if (playlistMoveStrip != null && playlistMoveStrip.isAnimating()) return true;
+                int delta = mapWheelToMenuMove(keyCode);
+                if (delta != 0) {
+                    if (!playlistMoveWheelFilter.accept()) return true;
+                    int newIdx = QueueMoveWindow.nextMoveIndex(
+                            playlistMoveFrom, delta, virtualSongList.size());
+                    if (newIdx != playlistMoveFrom) {
+                        applyPlaylistMove(playlistMoveFrom, newIdx);
+                        clickFeedback();
+                    }
+                    return true;
+                }
+            }
             // 🚀 [여기서부터 덮어쓰기!] 초고속 리스트뷰가 켜져있을 때는, 시스템 본연의 부드러운 스크롤 엔진에 휠 신호를 넘깁니다!
             if (currentScreenState == STATE_BROWSER && listVirtualSongs != null && listVirtualSongs.getVisibility() == View.VISIBLE) {
 
@@ -18876,41 +18377,6 @@ public class MainActivity extends Activity {
                         return true;
                     }
                 }
-            }
-            // 🚀 [여기까지 덮어쓰기 완료!]
-            if (currentScreenState == STATE_SETTINGS && SettingsScreens.HOME.equals(settingsSubScreenKey)
-                    && isHomeEditorMoveActive()) {
-                if (homeEditorMoveStrip != null && homeEditorMoveStrip.isAnimating()) return true;
-                int delta = mapWheelToMenuMove(keyCode);
-                if (delta != 0) {
-                    if (!homeEditorMoveWheelFilter.accept()) return true;
-                    java.util.List<String> ids = HomeMenuConfig.loadHomeEditorMoveIds(prefs);
-                    int newIdx = QueueMoveWindow.nextMoveIndex(homeEditorMoveIndex, delta, ids.size());
-                    if (newIdx != homeEditorMoveIndex) {
-                        applyHomeEditorMove(homeEditorMoveIndex, newIdx);
-                        clickFeedback();
-                    }
-                    return true;
-                }
-            }
-            if (currentScreenState == STATE_SETTINGS && isHomeMoreEditorScreen()
-                    && isMoreEditorMoveActive()) {
-                if (moreEditorMoveStrip != null && moreEditorMoveStrip.isAnimating()) return true;
-                int delta = mapWheelToMenuMove(keyCode);
-                if (delta != 0) {
-                    if (!moreEditorMoveWheelFilter.accept()) return true;
-                    java.util.List<String> ids = HomeMenuConfig.loadMoreOrderIds(prefs);
-                    int newIdx = QueueMoveWindow.nextMoveIndex(moreEditorMoveIndex, delta, ids.size());
-                    if (newIdx != moreEditorMoveIndex) {
-                        applyMoreEditorMove(moreEditorMoveIndex, newIdx);
-                        clickFeedback();
-                    }
-                    return true;
-                }
-            }
-            if (currentScreenState == STATE_SETTINGS && SettingsScreens.HOME.equals(settingsSubScreenKey)
-                    && isHomeEditorMoveActive()) {
-                return true;
             }
             if (currentScreenState == STATE_SETTINGS && isThemeListActive()
                     && (keyCode == 21 || keyCode == 22)) {

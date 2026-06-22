@@ -26,7 +26,6 @@ public class LibraryBrowsePrefsTest {
     public void defaultsMatchCurrentBehavior() {
         assertTrue(prefs.splitCredits());
         assertTrue(prefs.normalizeAlbumCase());
-        assertTrue(prefs.normalizeHonorifics());
         assertEquals(LibraryBrowsePrefs.GUEST_BROWSE_AUTO, prefs.guestBrowseMode());
         assertEquals(LibraryBrowsePrefs.FILTER_ALL, prefs.artistFilter());
         assertEquals(LibraryBrowsePrefs.ARTIST_SORT_NAME, prefs.artistSort());

@@ -20,6 +20,7 @@ final class MoveRibbonRows {
     static final int TAG_PP = 0x70cb0013;
     static final int TAG_CONFIRM = 0x70cb0015;
     static final int TAG_DROP = 0x70cb0016;
+    static final int TAG_STATE = 0x70cb0017;
 
     private MoveRibbonRows() {}
 
@@ -50,6 +51,18 @@ final class MoveRibbonRows {
         slotLp.gravity = Gravity.CENTER_VERTICAL | Gravity.END;
         rightSlot.setLayoutParams(slotLp);
 
+        TextView state = new TextView(activity);
+        state.setTag(TAG_STATE);
+        state.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        state.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
+        state.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, menuTextPx);
+        state.setSingleLine(true);
+        state.setEllipsize(TextUtils.TruncateAt.END);
+        FrameLayout.LayoutParams stateLp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.MATCH_PARENT);
+        stateLp.gravity = Gravity.CENTER_VERTICAL | Gravity.START;
+        rightSlot.addView(state, stateLp);
+
         TextView grip = new TextView(activity);
         grip.setTag(TAG_GRIP);
         grip.setText(activity.getString(R.string.home_screen_move_grip));
@@ -57,8 +70,10 @@ final class MoveRibbonRows {
         grip.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
         grip.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, menuTextPx);
         grip.setVisibility(View.GONE);
-        rightSlot.addView(grip, new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        FrameLayout.LayoutParams gripLp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.MATCH_PARENT);
+        gripLp.gravity = Gravity.CENTER_VERTICAL | Gravity.END;
+        rightSlot.addView(grip, gripLp);
 
         ImageView confirm = new ImageView(activity);
         confirm.setTag(TAG_CONFIRM);

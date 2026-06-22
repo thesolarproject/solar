@@ -8,11 +8,11 @@ import org.json.JSONObject;
 import java.io.File;
 import java.io.FileWriter;
 
-/** Debug-mode NDJSON logger — session 6cc566; pull via adb from /storage/sdcard0/. */
+/** Debug-mode NDJSON logger — session 384d9d; pull via adb from /storage/sdcard0/. */
 final class DebugAgentLog {
     private static final String TAG = "SolarNetDbg";
-    private static final String FILE = "debug-6cc566.log";
-    private static final String SESSION = "6cc566";
+    private static final String FILE = "debug-384d9d.log";
+    private static final String SESSION = "384d9d";
 
     private DebugAgentLog() {}
 

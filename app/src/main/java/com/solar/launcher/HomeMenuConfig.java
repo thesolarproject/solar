@@ -28,6 +28,7 @@ public final class HomeMenuConfig {
     public static final String ID_THEMES = "themes";
     public static final String ID_VIDEOS = "videos";
     public static final String ID_PHOTOS = "photos";
+    public static final String ID_AUDIOBOOKS = "audiobooks";
     public static final String ID_APPS = "apps";
     public static final String ID_MORE = "more";
 
@@ -35,14 +36,28 @@ public final class HomeMenuConfig {
 
     /** Stock Y1 home order for equivalent items, then Solar-only shortcuts. */
     private static final String DEFAULT_ORDER = String.join(",",
-            ID_NOW_PLAYING, ID_MUSIC, ID_VIDEOS, ID_PHOTOS, ID_FM, ID_BLUETOOTH, ID_SETTINGS,
-            ID_PC_UPLOAD, ID_PODCASTS, ID_SOULSEEK);
+            ID_NOW_PLAYING, ID_MUSIC, ID_VIDEOS, ID_AUDIOBOOKS, ID_PHOTOS, ID_FM, ID_BLUETOOTH,
+            ID_SETTINGS, ID_PC_UPLOAD, ID_PODCASTS, ID_SOULSEEK);
 
-    /** Editor / arrange: all enabled shortcuts as if online (ignores live connectivity). */
-    public static List<Entry> loadEditorHomeEntries(SharedPreferences prefs) {
-        List<String> ids = loadHomeOrderIds(prefs);
+    /** Fixed home / More menu order — not user-reorderable. */
+    private static final List<String> FIXED_HOME_ORDER = Arrays.asList(
+            ID_NOW_PLAYING, ID_MUSIC, ID_VIDEOS, ID_AUDIOBOOKS, ID_PHOTOS, ID_FM, ID_BLUETOOTH,
+            ID_SETTINGS, ID_PC_UPLOAD, ID_PODCASTS, ID_SOULSEEK, ID_THEMES, ID_APPS);
+
+    /** Editor: all catalog shortcuts in fixed order (ignores live connectivity). */
+    public static List<Entry> loadEditorCatalogEntries() {
         List<Entry> out = new ArrayList<Entry>();
-        for (String id : ids) {
+        for (String id : FIXED_HOME_ORDER) {
+            Entry e = find(id);
+            if (e != null) out.add(e);
+        }
+        return out;
+    }
+
+    /** @deprecated use {@link #loadEditorCatalogEntries} */
+    public static List<Entry> loadEditorHomeEntries(SharedPreferences prefs) {
+        List<Entry> out = new ArrayList<Entry>();
+        for (String id : loadHomeOrderIds(prefs)) {
             if (ID_MORE.equals(id)) continue;
             Entry e = find(id);
             if (e != null) out.add(e);
@@ -94,6 +109,7 @@ public final class HomeMenuConfig {
             new Entry(ID_THEMES, R.string.home_menu_themes, "theme", R.drawable.setting_circle, "Themes", false),
             new Entry(ID_VIDEOS, R.string.home_menu_videos, "video", R.drawable.music_list, null, false),
             new Entry(ID_PHOTOS, R.string.home_menu_photos, "photos", R.drawable.music_list, null, false),
+            new Entry(ID_AUDIOBOOKS, R.string.home_menu_audiobooks, "audiobooks", R.drawable.music_list, null, false),
             new Entry(ID_APPS, R.string.home_menu_apps, null, R.drawable.setting_circle, "Apps", false),
     };
 
@@ -302,43 +318,20 @@ public final class HomeMenuConfig {
         prefs.edit().putString(PREF_MORE_ORDER, joinIds(cleaned)).commit();
     }
 
-    public static List<String> loadHomeEditorMoveIds(SharedPreferences prefs) {
-        List<String> ids = new ArrayList<String>(loadHomeOrderIds(prefs));
-        if (isMoreEnabled(prefs)) {
-            if (!ids.contains(ID_MORE)) ids.add(ID_MORE);
-        } else {
-            ids.remove(ID_MORE);
+    /**
+     * Home-menu row order: connectivity-filtered shortcuts plus More tile when shown.
+     */
+    public static List<String> loadHomeDisplayIds(SharedPreferences prefs,
+            boolean internetAvailable, boolean localNetworkAvailable, boolean showNowPlaying) {
+        List<String> out = new ArrayList<String>();
+        for (Entry e : loadVisibleForDisplay(prefs, internetAvailable, localNetworkAvailable)) {
+            if (ID_NOW_PLAYING.equals(e.id) && !showNowPlaying) continue;
+            out.add(e.id);
         }
-        return ids;
-    }
-
-    public static void saveHomeEditorMoveOrder(SharedPreferences prefs, List<String> ids) {
-        if (prefs == null || ids == null) return;
-        saveOrder(prefs, ids);
-    }
-
-    public static void moveEditorHome(SharedPreferences prefs, int from, int to) {
-        List<String> ids = new ArrayList<String>(loadHomeEditorMoveIds(prefs));
-        if (from < 0 || from >= ids.size() || to < 0 || to >= ids.size() || from == to) return;
-        String item = ids.remove(from);
-        ids.add(to, item);
-        saveHomeEditorMoveOrder(prefs, ids);
-    }
-
-    public static void move(SharedPreferences prefs, int from, int to) {
-        List<String> ids = new ArrayList<String>(loadHomeOrderIds(prefs));
-        if (from < 0 || from >= ids.size() || to < 0 || to >= ids.size() || from == to) return;
-        String item = ids.remove(from);
-        ids.add(to, item);
-        saveOrder(prefs, ids);
-    }
-
-    public static void moveMore(SharedPreferences prefs, int from, int to) {
-        List<String> ids = new ArrayList<String>(loadMoreOrderIds(prefs));
-        if (from < 0 || from >= ids.size() || to < 0 || to >= ids.size() || from == to) return;
-        String item = ids.remove(from);
-        ids.add(to, item);
-        saveMoreOrder(prefs, ids);
+        if (shouldShowMoreTile(prefs, internetAvailable, localNetworkAvailable)) {
+            out.add(ID_MORE);
+        }
+        return out;
     }
 
     static List<String> parseRawOrder(String raw) {
@@ -347,44 +340,43 @@ public final class HomeMenuConfig {
     }
 
     static List<String> normalizeOrder(List<String> order) {
-        List<String> out = new ArrayList<String>();
-        Set<String> seen = new HashSet<String>();
+        Set<String> enabled = new HashSet<String>();
         if (order != null) {
             for (String id : order) {
                 if (id == null) continue;
                 id = migrateId(id.trim());
-                if (id.isEmpty() || seen.contains(id)) continue;
-                if (ID_MORE.equals(id)) {
-                    seen.add(id);
-                    out.add(id);
-                    continue;
-                }
+                if (id.isEmpty() || ID_MORE.equals(id)) continue;
                 if (find(id) == null) continue;
-                seen.add(id);
-                out.add(id);
+                enabled.add(id);
             }
         }
-        if (!out.contains(ID_SETTINGS)) {
-            out.add(ID_SETTINGS);
+        if (enabled.isEmpty()) {
+            for (String id : parseRawOrder(DEFAULT_ORDER)) {
+                enabled.add(migrateId(id));
+            }
         }
-        if (out.isEmpty()) {
-            out.add(ID_SETTINGS);
+        enabled.add(ID_SETTINGS);
+        List<String> out = new ArrayList<String>();
+        for (String id : FIXED_HOME_ORDER) {
+            if (enabled.contains(id)) out.add(id);
         }
         return out;
     }
 
     static List<String> normalizeMoreOrder(List<String> order) {
-        List<String> out = new ArrayList<String>();
-        Set<String> seen = new HashSet<String>();
+        Set<String> inMore = new HashSet<String>();
         if (order != null) {
             for (String id : order) {
                 if (id == null) continue;
                 id = migrateId(id.trim());
-                if (id.isEmpty() || ID_MORE.equals(id) || ID_SETTINGS.equals(id)
-                        || seen.contains(id) || find(id) == null) continue;
-                seen.add(id);
-                out.add(id);
+                if (id.isEmpty() || ID_MORE.equals(id) || ID_SETTINGS.equals(id)) continue;
+                if (find(id) == null) continue;
+                inMore.add(id);
             }
+        }
+        List<String> out = new ArrayList<String>();
+        for (String id : FIXED_HOME_ORDER) {
+            if (inMore.contains(id)) out.add(id);
         }
         return out;
     }

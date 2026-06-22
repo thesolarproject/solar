@@ -26,7 +26,6 @@ public final class RowKeys {
     public static final String LIBRARY_BROWSE = "settings.library_browse";
     public static final String LIB_SPLIT_CREDITS = "library.split_credits";
     public static final String LIB_NORM_ALBUM = "library.norm_album";
-    public static final String LIB_NORM_HONOR = "library.norm_honor";
     public static final String LIB_GUEST_MODE = "library.guest_mode";
     public static final String LIB_ARTIST_FILTER = "library.artist_filter";
     public static final String LIB_ARTIST_SORT = "library.artist_sort";
@@ -107,7 +106,6 @@ public final class RowKeys {
         if (LIBRARY_BROWSE.equals(rowKey)) return R.string.settings_library_browse;
         if (LIB_SPLIT_CREDITS.equals(rowKey)) return R.string.lib_split_credits;
         if (LIB_NORM_ALBUM.equals(rowKey)) return R.string.lib_norm_album_case;
-        if (LIB_NORM_HONOR.equals(rowKey)) return R.string.lib_norm_honorifics;
         if (LIB_GUEST_MODE.equals(rowKey)) return R.string.lib_guest_browse;
         if (LIB_ARTIST_FILTER.equals(rowKey)) return R.string.lib_artist_filter;
         if (LIB_ARTIST_SORT.equals(rowKey)) return R.string.lib_artist_sort;
