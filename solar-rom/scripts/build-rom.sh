@@ -86,6 +86,55 @@ die() {
     exit 1
 }
 
+# Y1 rockbox bases unpack flat; Y2 ATA ships images under a versioned subfolder.
+normalize_firmware_layout() {
+    if [ -f "$BASE_DIR/system.img" ]; then
+        return 0
+    fi
+    local fw_sub
+    fw_sub=$(find "$BASE_DIR" -mindepth 1 -maxdepth 3 -name system.img -printf '%h\n' 2>/dev/null | head -1)
+    if [ -z "$fw_sub" ] || [ "$fw_sub" = "$BASE_DIR" ]; then
+        die "base firmware missing system.img (expected flat zip or single subfolder)"
+    fi
+    echo "==> Normalizing nested base firmware layout ($(basename "$fw_sub") -> base)"
+    shopt -s dotglob nullglob
+    mv "$fw_sub"/* "$BASE_DIR/"
+    shopt -u dotglob nullglob
+    rmdir "$fw_sub" 2>/dev/null || true
+}
+
+# Y2 ships Android sparse images; loop mount needs raw ext4 (Y1 bases are already raw).
+is_sparse_android_image() {
+    local img="$1"
+    local magic
+    magic=$(dd if="$img" bs=1 count=4 2>/dev/null | od -An -tx1 | tr -d ' \n')
+    [ "$magic" = "3aff26ed" ]
+}
+
+prepare_image_for_mount() {
+    local img="$1"
+    if is_sparse_android_image "$img"; then
+        require_cmd simg2img
+        local raw="${img%.img}.mount.raw"
+        echo "==> Converting sparse $(basename "$img") to raw for loop mount" >&2
+        simg2img "$img" "$raw"
+        printf '%s\n' "$raw"
+    else
+        printf '%s\n' "$img"
+    fi
+}
+
+finalize_image_after_mount() {
+    local shipped_path="$1"
+    local mount_src="$2"
+    if [ "$mount_src" != "$shipped_path" ]; then
+        require_cmd img2simg
+        echo "==> Repacking $(basename "$shipped_path") to Android sparse"
+        img2simg "$mount_src" "$shipped_path"
+        rm -f "$mount_src"
+    fi
+}
+
 require_cmd() {
     command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
@@ -182,6 +231,11 @@ audit_rom_contents() {
         errors=$((errors + 1))
     fi
 
+    if [ "$TYPE" = "y2" ] && find "$sys_mount/priv-app" -iname '*factorylauncher*' 2>/dev/null | grep -q .; then
+        echo "audit fail: stock Y2 factory launcher still present in /system/priv-app" >&2
+        errors=$((errors + 1))
+    fi
+
     if [ ! -f "$sys_mount/app/$SYSTEM_APK_NAME" ]; then
         echo "audit fail: $SYSTEM_APK_NAME missing from /system/app" >&2
         errors=$((errors + 1))
@@ -268,11 +322,18 @@ fi
 echo "==> Downloading type-${TYPE} base firmware"
 curl -fsSL -o "$BASE_DIR/rom.zip" "$BASE_URL"
 unzip -q "$BASE_DIR/rom.zip" -d "$BASE_DIR"
+normalize_firmware_layout
+
+[ -f "$BASE_DIR/system.img" ] || die "system.img not found under $BASE_DIR after unzip"
+[ -f "$BASE_DIR/userdata.img" ] || die "userdata.img not found under $BASE_DIR after unzip"
+
+SYSTEM_MOUNT_SRC="$(prepare_image_for_mount "$BASE_DIR/system.img")"
+USERDATA_MOUNT_SRC="$(prepare_image_for_mount "$BASE_DIR/userdata.img")"
 
 echo "==> Mounting system.img and userdata.img"
 sudo modprobe loop 2>/dev/null || true
-sudo mount -t ext4 -o loop "$BASE_DIR/system.img" "$MOUNT_SYS"
-sudo mount -t ext4 -o loop "$BASE_DIR/userdata.img" "$MOUNT_USER"
+sudo mount -t ext4 -o loop "$SYSTEM_MOUNT_SRC" "$MOUNT_SYS"
+sudo mount -t ext4 -o loop "$USERDATA_MOUNT_SRC" "$MOUNT_USER"
 
 echo "==> Patching system partition"
 while IFS= read -r apk; do
@@ -281,13 +342,21 @@ while IFS= read -r apk; do
     sudo rm -f "$apk"
 done < <(find "$MOUNT_SYS/priv-app" -iname '*innioasis*' 2>/dev/null || true)
 
-for apk in "$MOUNT_SYS/app"/com.*.apk; do
-    [ -e "$apk" ] || continue
-    base=$(basename "$apk")
-    [ "$base" = "$SYSTEM_APK_NAME" ] && continue
-    echo "  removing system/app/$base"
-    sudo rm -f "$apk"
-done
+if [ "$TYPE" = "y2" ]; then
+    while IFS= read -r apk; do
+        [ -n "$apk" ] || continue
+        echo "  removing $apk"
+        sudo rm -f "$apk" "${apk%.apk}.odex"
+    done < <(find "$MOUNT_SYS/priv-app" -iname '*factorylauncher*' 2>/dev/null || true)
+else
+    for apk in "$MOUNT_SYS/app"/com.*.apk; do
+        [ -e "$apk" ] || continue
+        base=$(basename "$apk")
+        [ "$base" = "$SYSTEM_APK_NAME" ] && continue
+        echo "  removing system/app/$base"
+        sudo rm -f "$apk"
+    done
+fi
 
 sudo rm -f "$MOUNT_SYS/app/org.rockbox.apk"
 sudo rm -f "$MOUNT_SYS/lib/librockbox.so"
@@ -339,6 +408,9 @@ sudo umount "$MOUNT_SYS"
 sudo umount "$MOUNT_USER"
 MOUNT_SYS=""
 MOUNT_USER=""
+
+finalize_image_after_mount "$BASE_DIR/system.img" "$SYSTEM_MOUNT_SRC"
+finalize_image_after_mount "$BASE_DIR/userdata.img" "$USERDATA_MOUNT_SRC"
 
 rm -f "$BASE_DIR/rom.zip"
 rm -rf "$MOUNT_SYS" "$MOUNT_USER"

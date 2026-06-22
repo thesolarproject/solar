@@ -53,7 +53,7 @@ jobs:
 
       - name: Install ROM build dependencies
         run: |
-          sudo apt-get update && sudo apt-get install -y unzip zip e2fsprogs curl util-linux kmod openssl
+          sudo apt-get update && sudo apt-get install -y unzip zip e2fsprogs curl util-linux kmod openssl android-sdk-libsparse-utils
           sudo modprobe loop || true
 
       - name: Verify ROM base firmware URLs
@@ -99,6 +99,13 @@ jobs:
           ./solar-rom/scripts/build-rom.sh b --apk "$APK" "$GITHUB_WORKSPACE/dist/rom_type_b.zip"
           ./solar-rom/scripts/build-rom.sh y2 --apk "$APK" "$GITHUB_WORKSPACE/dist/rom_y2.zip"
           ls -la dist/
+          for z in dist/rom.zip dist/rom_type_b.zip dist/rom_y2.zip; do
+            test -s "$z" || { echo "::error::Missing or empty $z"; exit 1; }
+          done
+          unzip -l dist/rom.zip | grep -q MT6572_Android_scatter.txt
+          unzip -l dist/rom_type_b.zip | grep -q MT6572_Android_scatter.txt
+          unzip -l dist/rom_y2.zip | grep -q MT6582_Android_scatter.txt
+          echo "All three ROM zips built and verified"
 
       - name: Prepare release notes
         run: ./solar-rom/scripts/format-release-notes.sh release.json > RELEASE_NOTES.md
