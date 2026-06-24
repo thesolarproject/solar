@@ -1285,7 +1285,8 @@ public class ThemeManager {
      * App labels use {@link #solarAppConfigKey}: e.g. "PC Upload" → {@code appPC_Upload}.
      */
     public static Bitmap getSolarConfigIcon(String key) {
-        JSONObject solar = solarBlock();
+        // ponytail: icons are per-theme only — never merge bundled Aura solarConfig into third-party themes.
+        JSONObject solar = solarBlock(getCurrentTheme().root);
         if (solar == null || key == null || key.isEmpty()) return null;
         String path = solar.optString(key, "").trim();
         if (path.isEmpty()) return null;
@@ -1297,7 +1298,7 @@ public class ThemeManager {
         if (f != null) {
             bmp = decodeBitmapFileMaxSide(f.getAbsolutePath(), SOLAR_CONFIG_ICON_MAX_PX);
         }
-        if (bmp == null) {
+        if (bmp == null && isBuiltInDefault(t)) {
             bmp = decodeBundledThemeAsset(path, SOLAR_CONFIG_ICON_MAX_PX);
         }
         if (bmp != null) bitmapCache.put(cacheKey, bmp);
@@ -1331,7 +1332,14 @@ public class ThemeManager {
         Bitmap solar = getSolarAppIcon(appName);
         if (solar != null) return solar;
         if ("Podcasts".equals(appName)) {
-            return getHomeIcon(context, "audiobooks", defaultResId);
+            JSONObject home = getCurrentTheme().root.optJSONObject("homePageConfig");
+            if (home != null) {
+                String path = home.optString("audiobooks", "").trim();
+                if (!path.isEmpty()) {
+                    Bitmap bmp = getThemeBitmap(path);
+                    if (bmp != null) return bmp;
+                }
+            }
         }
         return null;
     }

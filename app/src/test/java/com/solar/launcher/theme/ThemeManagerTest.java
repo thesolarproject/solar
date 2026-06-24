@@ -126,6 +126,22 @@ public class ThemeManagerTest {
     }
 
     @Test
+    public void solarAppIconNotMergedFromOtherThemes() throws Exception {
+        JSONObject club = new JSONObject();
+        club.put("theme_info", new JSONObject().put("title", "Club Penguin"));
+        ThemeManager.availableThemes.clear();
+        ThemeManager.availableThemes.add(new ThemeManager.ThemeEntry(
+                "/tmp/club", "Club", "Club Penguin", club));
+        ThemeManager.setThemeIndex(0);
+        if (ThemeManager.getSolarAppIcon("Get Music") != null) {
+            throw new AssertionError("third-party theme must not inherit bundled appGet_Music");
+        }
+        if (ThemeManager.getSolarAppHomeIcon(null, "Get Music", 0) != null) {
+            throw new AssertionError("no right-pane icon when theme omits solarConfig");
+        }
+    }
+
+    @Test
     public void selfCheck() {
         ThemeManager.selfCheck();
     }

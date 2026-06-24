@@ -212,6 +212,47 @@ download_solar_apk() {
     curl -fsSL -o "$dest" "$apk_url"
 }
 
+SOLAR_SYS="$REPO_ROOT/solar-rom/system"
+
+install_solar_boot_assets() {
+    local base_dir="$1"
+    local sys_mount="$2"
+
+    if [ -f "$SOLAR_SYS/media/bootanimation.zip" ]; then
+        echo "==> Install Solar boot animation (system/media/bootanimation.zip)"
+        sudo mkdir -p "$sys_mount/media"
+        sudo cp "$SOLAR_SYS/media/bootanimation.zip" "$sys_mount/media/bootanimation.zip"
+        sudo chmod 644 "$sys_mount/media/bootanimation.zip"
+        sudo chown root:root "$sys_mount/media/bootanimation.zip"
+    else
+        die "missing $SOLAR_SYS/media/bootanimation.zip"
+    fi
+
+    if [ -f "$SOLAR_SYS/bin/bootanimation" ]; then
+        echo "==> Install Solar bootanimation binary (system/bin/bootanimation)"
+        sudo mkdir -p "$sys_mount/bin"
+        sudo cp "$SOLAR_SYS/bin/bootanimation" "$sys_mount/bin/bootanimation"
+        sudo chmod 755 "$sys_mount/bin/bootanimation"
+        sudo chown root:root "$sys_mount/bin/bootanimation"
+    else
+        die "missing $SOLAR_SYS/bin/bootanimation"
+    fi
+
+    if [ -f "$SOLAR_SYS/boot.img" ]; then
+        echo "==> Replace boot.img in ROM archive"
+        cp "$SOLAR_SYS/boot.img" "$base_dir/boot.img"
+    else
+        die "missing $SOLAR_SYS/boot.img"
+    fi
+
+    if [ -f "$SOLAR_SYS/logo.bin" ]; then
+        echo "==> Replace logo.bin in ROM archive"
+        cp "$SOLAR_SYS/logo.bin" "$base_dir/logo.bin"
+    else
+        die "missing $SOLAR_SYS/logo.bin"
+    fi
+}
+
 audit_rom_contents() {
     local base_dir="$1"
     local sys_mount="$2"
@@ -272,6 +313,26 @@ audit_rom_contents() {
         errors=$((errors + 1))
     elif ! cmp -s "$sys_mount/usr/keylayout/Generic.kl" "$sys_mount/usr/keylayout/Stock.kl"; then
         echo "audit fail: Generic.kl is not identical to Stock.kl" >&2
+        errors=$((errors + 1))
+    fi
+
+    if [ ! -f "$sys_mount/media/bootanimation.zip" ]; then
+        echo "audit fail: /system/media/bootanimation.zip missing" >&2
+        errors=$((errors + 1))
+    fi
+
+    if [ ! -f "$sys_mount/bin/bootanimation" ]; then
+        echo "audit fail: /system/bin/bootanimation missing" >&2
+        errors=$((errors + 1))
+    fi
+
+    if [ ! -f "$base_dir/boot.img" ]; then
+        echo "audit fail: boot.img missing from ROM archive" >&2
+        errors=$((errors + 1))
+    fi
+
+    if [ ! -f "$base_dir/logo.bin" ]; then
+        echo "audit fail: logo.bin missing from ROM archive" >&2
         errors=$((errors + 1))
     fi
 
@@ -388,6 +449,8 @@ sudo cp "$SCRIPT_DIR/Stock.kl" "$MOUNT_SYS/usr/keylayout/Stock.kl"
 sudo cp "$SCRIPT_DIR/Stock.kl" "$MOUNT_SYS/usr/keylayout/Generic.kl"
 sudo chmod 644 "$MOUNT_SYS/usr/keylayout/Stock.kl" "$MOUNT_SYS/usr/keylayout/Generic.kl"
 sudo chown root:root "$MOUNT_SYS/usr/keylayout/Stock.kl" "$MOUNT_SYS/usr/keylayout/Generic.kl"
+
+install_solar_boot_assets "$BASE_DIR" "$MOUNT_SYS"
 
 echo "==> Patching userdata partition"
 sudo rm -rf "$MOUNT_USER/org.rockbox"
