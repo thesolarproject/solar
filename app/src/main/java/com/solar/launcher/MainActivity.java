@@ -9375,12 +9375,7 @@ public class MainActivity extends Activity {
         }
 
         String solarKey = resolveSoulseekSolarConfigKey(rowKey);
-        Bitmap icon = null;
-        if (RowKeys.ABOUT.equals(rowKey)) {
-            if (ThemeManager.hasThemeSolarConfigKey("appAbout")) {
-                icon = ThemeManager.getSolarConfigIcon("appAbout");
-            }
-        }
+        Bitmap icon = ThemeManager.getSolarSettingsIcon(rowLabel(rowKey));
         if (icon == null && isAppearancePreviewRow(rowKey)) {
             icon = ThemeManager.getSettingIcon("theme");
         }

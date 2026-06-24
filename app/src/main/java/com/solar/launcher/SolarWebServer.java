@@ -350,6 +350,7 @@ public class SolarWebServer extends Thread {
             SharedPreferences prefs = context.getSharedPreferences(
                     DeezerAccount.PREFS_NAME, Context.MODE_PRIVATE);
             boolean hasArl = DeezerAccount.hasArl(prefs);
+            String quality = DeezerAccount.loadQuality(prefs);
             String status = hasArl ? "Logged in" : "Not configured";
             String msgHtml = message != null
                     ? "<p style='color:" + (message.startsWith("✅") ? "#0f0" : "#f66") + "'>"

@@ -88,6 +88,24 @@ public class ThemeManagerTest {
     }
 
     @Test
+    public void getMusicHomeIconUsesSolarConfigKey() throws Exception {
+        if (!"appGet_Music".equals(ThemeManager.solarAppConfigKey("Get Music"))) {
+            throw new AssertionError("Get Music key");
+        }
+        HomeMenuConfig.Entry e = HomeMenuConfig.find(HomeMenuConfig.ID_SOULSEEK);
+        if (e == null || !"Get Music".equals(e.solarAppName)) {
+            throw new AssertionError("soulseek home entry should use Get Music solarAppName");
+        }
+    }
+
+    @Test
+    public void settingsAboutUsesSolarConfigKey() {
+        if (!"settingsAbout".equals(ThemeManager.solarSettingsConfigKey("About"))) {
+            throw new AssertionError("settingsAbout key");
+        }
+    }
+
+    @Test
     public void podcastsHomeIconPrefersSolarConfig() throws Exception {
         JSONObject root = new JSONObject();
         root.put("homePageConfig", new JSONObject().put("audiobooks", "Audiobooks_YS.png"));

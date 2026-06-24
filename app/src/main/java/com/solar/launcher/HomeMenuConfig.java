@@ -148,7 +148,7 @@ public final class HomeMenuConfig {
             new Entry(ID_FM, R.string.home_menu_fm, "fm", R.drawable.radio_circle, null, false),
             new Entry(ID_PC_UPLOAD, R.string.home_menu_pc_upload, null, R.drawable.file_sync, "PC Upload", false),
             new Entry(ID_PODCASTS, R.string.home_menu_podcasts, null, R.drawable.music_list, "Podcasts", false),
-            new Entry(ID_SOULSEEK, R.string.home_menu_soulseek, null, R.drawable.music_list, "Reach", false),
+            new Entry(ID_SOULSEEK, R.string.home_menu_soulseek, null, R.drawable.music_list, "Get Music", false),
             new Entry(ID_DEEZER, R.string.home_menu_deezer, null, R.drawable.music_list, "Deezer", false),
             new Entry(ID_THEMES, R.string.home_menu_themes, "theme", R.drawable.setting_circle, "Themes", false),
             new Entry(ID_VIDEOS, R.string.home_menu_videos, "video", R.drawable.music_list, null, false),

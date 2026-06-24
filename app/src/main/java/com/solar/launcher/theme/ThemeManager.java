@@ -1246,12 +1246,20 @@ public class ThemeManager {
         return BitmapFactory.decodeResource(context.getResources(), defaultResId);
     }
 
-    /** solarConfig key for a Solar-only app label, e.g. Podcasts → appPodcasts, PC Upload → appPC_Upload */
+    /** solarConfig key for a Solar-only app label, e.g. Podcasts → appPodcasts, Get Music → appGet_Music */
     public static String solarAppConfigKey(String appName) {
         if (appName == null) return null;
         String suffix = appName.replaceAll("[^a-zA-Z0-9]+", "_").replaceAll("^_+|_+$", "");
         if (suffix.isEmpty()) return null;
         return "app" + suffix;
+    }
+
+    /** solarConfig key for a settings row label, e.g. About → settingsAbout */
+    public static String solarSettingsConfigKey(String settingsLabel) {
+        if (settingsLabel == null) return null;
+        String suffix = settingsLabel.replaceAll("[^a-zA-Z0-9]+", "_").replaceAll("^_+|_+$", "");
+        if (suffix.isEmpty()) return null;
+        return "settings" + suffix;
     }
 
     /** Legacy key before underscores replaced stripped separators (appPCUpload). */
@@ -1298,19 +1306,21 @@ public class ThemeManager {
 
     /** solarConfig app{Name} — theme asset for Solar-only apps; null if unset */
     public static Bitmap getSolarAppIcon(String appName) {
-        JSONObject solar = solarBlock();
-        if (solar == null) return null;
         String key = solarAppConfigKey(appName);
         if (key == null) return null;
-        String path = solar.optString(key, "").trim();
-        if (path.isEmpty()) {
-            String legacy = solarAppConfigKeyLegacy(appName);
-            if (legacy != null && !legacy.equals(key)) {
-                path = solar.optString(legacy, "").trim();
-            }
+        Bitmap bmp = getSolarConfigIcon(key);
+        if (bmp != null) return bmp;
+        String legacy = solarAppConfigKeyLegacy(appName);
+        if (legacy != null && !legacy.equals(key)) {
+            return getSolarConfigIcon(legacy);
         }
-        if (path.isEmpty()) return null;
-        return getThemeBitmap(path);
+        return null;
+    }
+
+    /** solarConfig settings{Name} — right-pane icon for settings rows; null if unset */
+    public static Bitmap getSolarSettingsIcon(String settingsLabel) {
+        String key = solarSettingsConfigKey(settingsLabel);
+        return key != null ? getSolarConfigIcon(key) : null;
     }
 
     /**
@@ -1854,8 +1864,9 @@ public class ThemeManager {
             availableThemes.set(0, new ThemeEntry("/tmp", "t", "t", root));
             if (!isHighContrastTextEnabled()) throw new AssertionError("highContrastText");
             if (!"appPodcasts".equals(solarAppConfigKey("Podcasts"))) throw new AssertionError("appPodcasts key");
-            if (!"appSoulseek".equals(solarAppConfigKey("Soulseek"))) throw new AssertionError("appSoulseek key");
+            if (!"appGet_Music".equals(solarAppConfigKey("Get Music"))) throw new AssertionError("appGet_Music key");
             if (!"appPC_Upload".equals(solarAppConfigKey("PC Upload"))) throw new AssertionError("appPC_Upload key");
+            if (!"settingsAbout".equals(solarSettingsConfigKey("About"))) throw new AssertionError("settingsAbout key");
             JSONObject ipod = new JSONObject();
             ipod.put("menuConfig", new JSONObject()
                     .put("menuBackgroundColor", "#000000")
