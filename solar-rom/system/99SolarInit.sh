@@ -32,6 +32,22 @@ if [ -f /system/etc/solar/sync-y1-keymap.sh ]; then
     sh /system/etc/solar/sync-y1-keymap.sh
 fi
 
+# First boot after Solar ROM flash: Solar is HOME, Rockbox disabled until user switches.
+# ponytail: marker skipped on reflash (build-rom wipes it); skipped after first run so Rockbox survives reboot.
+SOLAR_HOME_MARKER=/data/data/.solar_rom_home_ready
+if [ ! -f "$SOLAR_HOME_MARKER" ]; then
+    i=0
+    while [ "$i" -lt 90 ]; do
+        [ "$(getprop sys.boot_completed)" = "1" ] && break
+        sleep 1
+        i=$((i + 1))
+    done
+    pm enable com.solar.launcher 2>/dev/null
+    pm disable org.rockbox 2>/dev/null
+    touch "$SOLAR_HOME_MARKER"
+    log -p i -t SolarInit "first boot: Solar default launcher, Rockbox disabled"
+fi
+
 if [ ! -f /system/lib/libconscrypt_jni.so ]; then
     log -p w -t SolarInit "missing /system/lib/libconscrypt_jni.so — OkHttp/Reach TLS needs clean_install or Solar ROM"
 fi

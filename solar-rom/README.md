@@ -33,7 +33,7 @@ Each ROM includes, on the **system** partition:
 | `/system/bin/bootanimation` | Boot animation player binary |
 | `/system/lib/libconscrypt_jni.so` | Conscrypt JNI for TLS 1.2+ (Reach, podcasts, themes via OkHttp) |
 | `/system/etc/security/cacerts/*.0` | Modern CA roots (Let's Encrypt, etc.) for **MediaPlayer** HTTPS and all apps |
-| `/system/etc/init.d/99SolarInit.sh` | Boot: create `Music` / `Podcasts` / `Themes` on SD; log if TLS prep missing |
+| `/system/etc/init.d/99SolarInit.sh` | Boot: SD library folders; first boot sets Solar as HOME (`pm` enable Solar, disable Rockbox); switch scripts + keymap/codec sync |
 
 The ROM zip root also ships **`boot.img`** and **`logo.bin`** from `solar-rom/system/`.
 

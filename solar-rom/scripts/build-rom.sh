@@ -537,6 +537,7 @@ sudo rm -f "$MOUNT_USER/data/com.innioasis.y1.apk"
 sudo rm -f "$MOUNT_USER/data/com.innioasis.y2.apk"
 sudo rm -f "$MOUNT_USER"/*_launcher.apk
 sudo rm -f "$MOUNT_USER/data/*_launcher_initialized"
+sudo rm -f "$MOUNT_USER/data/.solar_rom_home_ready"
 sudo rm -f "$MOUNT_USER/data/initialized"
 
 echo "==> Seed Rockbox switch scripts in userdata (overwrite rockbox-y1 reboot/keylayout script)"

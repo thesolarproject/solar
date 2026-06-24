@@ -13,5 +13,6 @@ public class SolarApplication extends Application {
         com.solar.launcher.theme.ActiveThemeEngine.init(this);
         Y1InputKeys.selfCheckWheelMapping();
         Y1RomPrep.ensureSwitchScripts(this);
+        LauncherDefault.ensureDefaultHome(this);
     }
 }
