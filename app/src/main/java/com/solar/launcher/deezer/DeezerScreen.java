@@ -213,7 +213,6 @@ public final class DeezerScreen {
         }
 
         String typeLabel = host.string(R.string.deezer_type_search);
-        if (!lastQuery.isEmpty()) typeLabel += " (" + lastQuery + ")";
         Button typeSearch = host.createListButton(typeLabel);
         typeSearch.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {

@@ -659,11 +659,11 @@
     <string name="deezer_setup_dialog_message">You can return here any time from Settings → Deezer → Set up on PC.</string>
     <string name="deezer_setup_stop_exit">I\'m finished</string>
     <string name="deezer_setup_stay">Keep setting up</string>
-    <string name="deezer_account_status">Logged in as %1$s · %2$s</string>
+    <string name="deezer_account_status">Logged in</string>
     <string name="deezer_account_not_logged_in">Not configured</string>
     <string name="deezer_cleared">Deezer account cleared</string>
     <string name="deezer_demo_account_label">Test/Demo Account</string>
-    <string name="deezer_demo_account_web_note">A built-in Test/Demo Account is active for testers. Paste your own arl below to replace it.</string>
+    <string name="deezer_demo_account_web_note">A built-in test ARL is active for testers. Paste your own arl below to replace it.</string>
     <string name="deezer_reset_to_demo">Reset to test account</string>
     <string name="deezer_reset_to_demo_done">Restored test account</string>
     <string name="search_service_picker_title">Search on</string>

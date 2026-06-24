@@ -7329,17 +7329,13 @@ public class MainActivity extends Activity {
         });
         containerSettingsItems.addView(setup);
 
-        String user = DeezerAccount.displayLabel(prefs, getString(R.string.deezer_demo_account_label));
         boolean demo = DeezerAccount.isUsingDemoArl(prefs);
         String status;
         if (!hasArl) {
             status = getString(R.string.deezer_account_not_logged_in);
         } else {
-            String qual = com.solar.launcher.deezer.DeezerClient.formatQualityLabel(
-                    prefs.getString(DeezerAccount.PREF_QUALITY, "mp3"));
-            String label = user.isEmpty() && !demo ? "…" : user;
-            status = getString(R.string.deezer_account_status, label, qual);
-            if (!demo && user.isEmpty()) refreshDeezerSessionFromPrefs(true);
+            status = getString(R.string.deezer_account_status);
+            if (!demo && DeezerAccount.displayUser(prefs).isEmpty()) refreshDeezerSessionFromPrefs(true);
         }
         Button account = createListButton(status);
         account.setEnabled(false);
@@ -19679,9 +19675,6 @@ public class MainActivity extends Activity {
         }
 
         String typeLabel = getString(R.string.podcasts_type_search);
-        if (podcastLastQuery != null && podcastLastQuery.length() > 0) {
-            typeLabel += " (" + podcastLastQuery + ")";
-        }
         Button typeSearch = createListButton(typeLabel);
         typeSearch.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -22029,9 +22022,6 @@ public class MainActivity extends Activity {
         }
 
         String typeLabel = getString(getMusic ? R.string.get_music_type_search : R.string.soulseek_type_search);
-        if (soulseekLastQuery != null && soulseekLastQuery.length() > 0) {
-            typeLabel += " (" + soulseekLastQuery + ")";
-        }
         Button typeSearch = createListButton(typeLabel);
         typeSearch.setOnClickListener(new View.OnClickListener() {
             @Override

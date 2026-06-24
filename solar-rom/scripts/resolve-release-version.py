@@ -33,11 +33,16 @@ def nightly_ts_minutes(version_name: str) -> int:
     match = NIGHTLY_TS_TAG_RE.match(version_name)
     if not match:
         return 0
-    y = int(match.group(1)[:4])
-    mo = int(match.group(1)[4:6])
-    d = int(match.group(1)[6:8])
-    hh = int(match.group(2)[:2])
-    mm = int(match.group(2)[2:])
+    # Tag body is YYYYMMDD-HHMM in a single capture group.
+    parts = match.group(1).split("-", 1)
+    if len(parts) != 2 or len(parts[0]) != 8 or len(parts[1]) < 4:
+        return 0
+    date_part, time_part = parts[0], parts[1]
+    y = int(date_part[:4])
+    mo = int(date_part[4:6])
+    d = int(date_part[6:8])
+    hh = int(time_part[:2])
+    mm = int(time_part[2:4])
     dt = datetime(y, mo, d, hh, mm, tzinfo=timezone.utc)
     epoch = datetime(2020, 1, 1, tzinfo=timezone.utc)
     return int((dt - epoch).total_seconds() // 60)

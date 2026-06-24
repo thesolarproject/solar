@@ -350,17 +350,7 @@ public class SolarWebServer extends Thread {
             SharedPreferences prefs = context.getSharedPreferences(
                     DeezerAccount.PREFS_NAME, Context.MODE_PRIVATE);
             boolean hasArl = DeezerAccount.hasArl(prefs);
-            String demoLabel = context.getString(R.string.deezer_demo_account_label);
-            String accountLabel = DeezerAccount.displayLabel(prefs, demoLabel);
-            String quality = DeezerAccount.loadQuality(prefs);
-            String status;
-            if (!hasArl) {
-                status = "Not configured";
-            } else if (DeezerAccount.isUsingDemoArl(prefs)) {
-                status = demoLabel;
-            } else {
-                status = accountLabel.isEmpty() ? "Configured" : ("Configured — " + accountLabel);
-            }
+            String status = hasArl ? "Logged in" : "Not configured";
             String msgHtml = message != null
                     ? "<p style='color:" + (message.startsWith("✅") ? "#0f0" : "#f66") + "'>"
                     + htmlEscape(message) + "</p>" : "";
