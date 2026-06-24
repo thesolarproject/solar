@@ -15,7 +15,16 @@ tasks.register("ensurePlatformKeystore") {
     }
 }
 
-tasks.named("preBuild").configure { dependsOn("ensurePlatformKeystore") }
+tasks.register("syncY1Assets") {
+    doLast {
+        exec {
+            workingDir rootProject.projectDir
+            commandLine "bash", "solar-rom/scripts/sync-y1-assets.sh"
+        }
+    }
+}
+
+tasks.named("preBuild").configure { dependsOn("ensurePlatformKeystore", "syncY1Assets") }
 
 android {
     namespace 'com.solar.launcher'

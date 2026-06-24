@@ -935,6 +935,7 @@
     <string name="dialog_rockbox_failed">Failed: Root access required.</string>
     <string name="dialog_rockbox_unavailable">Rockbox is not installed on this device.</string>
     <string name="settings_switch_rockbox">Switch to Rockbox</string>
+    <string name="settings_switch_rockbox_hint">No reboot. Switch back from Rockbox System menu or hold Back+Play.</string>
     <string name="settings_sub_debug">Debug</string>
     <string name="settings_debug_jj_themes">JJ theme engine (experimental)</string>
     <string name="settings_debug_jj_themes_hint">Use themes from /JJ_Themes/ instead of Y1 Themes/</string>

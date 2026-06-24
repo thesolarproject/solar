@@ -12,5 +12,6 @@ public class SolarApplication extends Application {
         TlsHelper.init(this);
         com.solar.launcher.theme.ActiveThemeEngine.init(this);
         Y1InputKeys.selfCheckWheelMapping();
+        Y1RomPrep.ensureSwitchScripts(this);
     }
 }

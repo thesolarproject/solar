@@ -6177,7 +6177,7 @@ public class MainActivity extends Activity {
     }
 
     private static boolean isCenterKey(int keyCode) {
-        return keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER;
+        return Y1InputKeys.isCenterKey(keyCode);
     }
 
     private boolean isWakingKeyEvent(KeyEvent event) {
@@ -9024,6 +9024,7 @@ public class MainActivity extends Activity {
 
     private String resolveSoulseekSolarConfigKey(String rowKey) {
         if (rowKey == null) return null;
+        if (RowKeys.SWITCH_ROCKBOX.equals(rowKey)) return "settingsRockbox";
         if (RowKeys.SOULSEEK_SEARCH.equals(rowKey)) return "soulseekSearch";
         if (RowKeys.SOULSEEK_ACCOUNT.equals(rowKey)) return "soulseekAccount";
         if (RowKeys.SOULSEEK_REGENERATE.equals(rowKey)) return "soulseekRegenerate";
@@ -9060,6 +9061,7 @@ public class MainActivity extends Activity {
         if (RowKeys.BACKGROUND.equals(rowKey)) return "wallpaper";
         if (RowKeys.NOW_PLAYING.equals(rowKey)) return "nowPlaying";
         if (RowKeys.DATETIME.equals(rowKey)) return "dateTime";
+        if (RowKeys.SWITCH_ROCKBOX.equals(rowKey)) return "launcher";
         return null;
     }
 
@@ -9080,6 +9082,9 @@ public class MainActivity extends Activity {
         if (RowKeys.AUTO_FETCH.equals(rowKey)) return stateOnOff(isAutoFetchEnabled);
         if (RowKeys.ABOUT.equals(rowKey)) {
             return AppVersion.displayLabel(this);
+        }
+        if (RowKeys.SWITCH_ROCKBOX.equals(rowKey)) {
+            return getString(R.string.settings_switch_rockbox_hint);
         }
         if (RowKeys.NOW_PLAYING_ALBUM_BLUR.equals(rowKey)) return stateOnOff(playerAlbumBlurEnabled);
         if (RowKeys.WIDGET_CLOCK.equals(rowKey)) return stateOnOff(false);
@@ -14140,7 +14145,7 @@ public class MainActivity extends Activity {
             }
         });
         containerSettingsItems.addView(btnPowerOff);
-        if (LauncherSwitch.isRockboxInstalled(this)) {
+        if (LauncherSwitch.isRockboxAvailable(this) && LauncherSwitch.isSwitchScriptAvailable()) {
             LinearLayout btnRockbox = createSettingsRow(RowKeys.SWITCH_ROCKBOX, R.string.settings_switch_rockbox, true);
             btnRockbox.setOnClickListener(new View.OnClickListener() {
                 @Override
@@ -25797,9 +25802,11 @@ public class MainActivity extends Activity {
         if (!isScreenOffControlEnabled) return false;
         if (Y1InputKeys.isVolumeDownKey(keyCode)) { adjustVolume(false); clickFeedback(); return true; }
         if (Y1InputKeys.isVolumeUpKey(keyCode)) { adjustVolume(true); clickFeedback(); return true; }
-        if (keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS || keyCode == 88
-                || keyCode == KeyEvent.KEYCODE_MEDIA_NEXT || keyCode == 87) {
-            return false;
+        if (Y1InputKeys.isWheelUp(keyCode) || Y1InputKeys.isWheelDown(keyCode)) {
+            return false; // ponytail: wheel while screen off — let Rockbox/other launcher handle
+        }
+        if (Y1InputKeys.isTrackPreviousKey(keyCode) || Y1InputKeys.isTrackNextKey(keyCode)) {
+            return false; // ponytail: 21/22 are transport on side buttons, not screen-off wheel
         }
         if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || keyCode == 85 || keyCode == 86) {
             playOrPauseMusic(); clickFeedback(); return true;
@@ -25894,11 +25901,11 @@ public class MainActivity extends Activity {
     }
 
     private boolean isMediaNextKey(int keyCode) {
-        return keyCode == KeyEvent.KEYCODE_MEDIA_NEXT || keyCode == 87;
+        return Y1InputKeys.isTrackNextKey(keyCode);
     }
 
     private boolean isMediaPrevKey(int keyCode) {
-        return keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS || keyCode == 88;
+        return Y1InputKeys.isTrackPreviousKey(keyCode);
     }
 
     private boolean isMediaSkipKey(int keyCode) {
@@ -25906,8 +25913,7 @@ public class MainActivity extends Activity {
     }
 
     private boolean isMediaPlayPauseKey(int keyCode) {
-        return keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || keyCode == 85
-                || keyCode == KeyEvent.KEYCODE_MEDIA_STOP || keyCode == 86;
+        return Y1InputKeys.isPlayPauseKey(keyCode);
     }
 
     /** Prev/next/play-pause while context menu is open; wheel volume stays on volume tier only. */
@@ -26298,7 +26304,7 @@ public class MainActivity extends Activity {
             clickFeedback();
             return true;
         }
-        if (keyCode == KeyEvent.KEYCODE_BACK) {
+        if (Y1InputKeys.isBackKey(keyCode)) {
             return handleBackKeyDown(event);
         }
         if (handleContextMenuMediaKeyDown(keyCode, event)) {
@@ -26348,8 +26354,7 @@ public class MainActivity extends Activity {
                     }
                     return true;
                 }
-                if (keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS || keyCode == 88
-                        || keyCode == KeyEvent.KEYCODE_MEDIA_NEXT || keyCode == 87) {
+                if (Y1InputKeys.isTrackPreviousKey(keyCode) || Y1InputKeys.isTrackNextKey(keyCode)) {
                     return handleMediaSkipKeyDown(keyCode, event);
                 }
                 if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || keyCode == 85 || keyCode == 86) {
@@ -26361,7 +26366,7 @@ public class MainActivity extends Activity {
             return true;
         }
 
-        if (keyCode == KeyEvent.KEYCODE_BACK) {
+        if (Y1InputKeys.isBackKey(keyCode)) {
             return handleBackKeyDown(event);
         }
 
@@ -26420,9 +26425,11 @@ public class MainActivity extends Activity {
             return true;
         }
 
-        if (keyCode == KeyEvent.KEYCODE_MEDIA_NEXT || keyCode == 87
-                || keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS || keyCode == 88) {
-            return handleMediaSkipKeyDown(keyCode, event);
+        if (Y1InputKeys.isTrackPreviousKey(keyCode) || Y1InputKeys.isTrackNextKey(keyCode)) {
+            if (currentScreenState == STATE_PLAYER || hasActiveMediaPlayback()) {
+                return handleMediaSkipKeyDown(keyCode, event);
+            }
+            return true; // ponytail: consume side buttons on menus — not wheel (21/22)
         }
 
         if (currentScreenState == STATE_PLAYER) {
@@ -26658,7 +26665,7 @@ public class MainActivity extends Activity {
 
     @Override
     public boolean onKeyUp(int keyCode, KeyEvent event) {
-        if (keyCode == KeyEvent.KEYCODE_BACK) {
+        if (Y1InputKeys.isBackKey(keyCode)) {
             clockHandler.removeCallbacks(backLongPressRunnable);
             clockHandler.removeCallbacks(backForceQuitRunnable);
             clockHandler.removeCallbacks(backForceQuitHintRunnable);

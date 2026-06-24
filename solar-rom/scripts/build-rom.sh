@@ -316,6 +316,9 @@ audit_rom_contents() {
     if [ ! -f "$sys_mount/etc/solar/switch-to-stock.sh" ]; then
         echo "audit fail: /system/etc/solar/switch-to-stock.sh missing" >&2
         errors=$((errors + 1))
+    elif grep -qi reboot "$sys_mount/etc/solar/switch-to-stock.sh" 2>/dev/null; then
+        echo "audit fail: switch-to-stock.sh must not reboot (unified keymap)" >&2
+        errors=$((errors + 1))
     fi
 
     if [ ! -f "$sys_mount/etc/init.d/99Y1ButtonScript" ]; then
@@ -326,8 +329,14 @@ audit_rom_contents() {
     if [ ! -f "$sys_mount/usr/keylayout/Generic.kl" ] || [ ! -f "$sys_mount/usr/keylayout/Rockbox.kl" ]; then
         echo "audit fail: keylayout files missing" >&2
         errors=$((errors + 1))
-    elif ! cmp -s "$sys_mount/usr/keylayout/Generic.kl" "$sys_mount/usr/keylayout/Rockbox.kl"; then
-        echo "audit fail: Generic.kl is not identical to Rockbox.kl (unified keymap)" >&2
+    elif ! cmp -s "$sys_mount/usr/keylayout/Generic.kl" "$sys_mount/usr/keylayout/Y1-Rockbox.kl"; then
+        echo "audit fail: Generic.kl is not identical to Y1-Rockbox.kl (Y1 wheel 126/127)" >&2
+        errors=$((errors + 1))
+    elif ! cmp -s "$sys_mount/usr/keylayout/Stock.kl" "$sys_mount/usr/keylayout/Y1-Rockbox.kl"; then
+        echo "audit fail: Stock.kl must match Y1-Rockbox.kl (unified keymap)" >&2
+        errors=$((errors + 1))
+    elif ! cmp -s "$sys_mount/usr/keylayout/Rockbox.kl" "$sys_mount/usr/keylayout/Y1-Rockbox.kl"; then
+        echo "audit fail: Rockbox.kl must match Y1-Rockbox.kl (unified keymap)" >&2
         errors=$((errors + 1))
     fi
 
@@ -358,6 +367,17 @@ audit_rom_contents() {
 
     if find "$user_mount" -maxdepth 1 -name 'com.innioasis.*.apk' 2>/dev/null | grep -q .; then
         echo "audit fail: stock Innioasis launcher APK present in userdata" >&2
+        errors=$((errors + 1))
+    fi
+
+    if [ ! -f "$user_mount/data/switch-to-stock.sh" ]; then
+        echo "audit fail: userdata/data/switch-to-stock.sh missing (Rockbox launcher handoff)" >&2
+        errors=$((errors + 1))
+    elif ! cmp -s "$user_mount/data/switch-to-stock.sh" "$sys_mount/etc/solar/switch-to-stock.sh"; then
+        echo "audit fail: userdata switch-to-stock.sh must match /system/etc/solar copy" >&2
+        errors=$((errors + 1))
+    elif grep -qi reboot "$user_mount/data/switch-to-stock.sh" 2>/dev/null; then
+        echo "audit fail: userdata switch-to-stock.sh must not reboot" >&2
         errors=$((errors + 1))
     fi
 
@@ -463,12 +483,15 @@ sudo cp "$REPO_ROOT/solar-rom/system/99Y1ButtonScript" "$MOUNT_SYS/etc/init.d/99
 sudo chmod 755 "$MOUNT_SYS/etc/init.d/99Y1ButtonScript"
 sudo chown root:root "$MOUNT_SYS/etc/init.d/99Y1ButtonScript"
 
-[ -f "$SCRIPT_DIR/Rockbox.kl" ] || die "missing $SCRIPT_DIR/Rockbox.kl"
-sudo cp "$SCRIPT_DIR/Stock.kl" "$MOUNT_SYS/usr/keylayout/Stock.kl"
-sudo cp "$SCRIPT_DIR/Rockbox.kl" "$MOUNT_SYS/usr/keylayout/Rockbox.kl"
-sudo cp "$SCRIPT_DIR/Rockbox.kl" "$MOUNT_SYS/usr/keylayout/Generic.kl"
-sudo chmod 644 "$MOUNT_SYS/usr/keylayout/Stock.kl" "$MOUNT_SYS/usr/keylayout/Rockbox.kl" "$MOUNT_SYS/usr/keylayout/Generic.kl"
-sudo chown root:root "$MOUNT_SYS/usr/keylayout/Stock.kl" "$MOUNT_SYS/usr/keylayout/Rockbox.kl" "$MOUNT_SYS/usr/keylayout/Generic.kl"
+[ -f "$SCRIPT_DIR/Y1-Rockbox.kl" ] || die "missing $SCRIPT_DIR/Y1-Rockbox.kl"
+# ponytail: one unified map for Solar + Rockbox-y1 — wheel 105/106→126/127, side 165/163→88/87.
+for _kl in Stock.kl Rockbox.kl Y1-Rockbox.kl Generic.kl; do
+    sudo cp "$SCRIPT_DIR/Y1-Rockbox.kl" "$MOUNT_SYS/usr/keylayout/$_kl"
+done
+sudo chmod 644 "$MOUNT_SYS/usr/keylayout/Stock.kl" "$MOUNT_SYS/usr/keylayout/Rockbox.kl" \
+    "$MOUNT_SYS/usr/keylayout/Y1-Rockbox.kl" "$MOUNT_SYS/usr/keylayout/Generic.kl"
+sudo chown root:root "$MOUNT_SYS/usr/keylayout/Stock.kl" "$MOUNT_SYS/usr/keylayout/Rockbox.kl" \
+    "$MOUNT_SYS/usr/keylayout/Y1-Rockbox.kl" "$MOUNT_SYS/usr/keylayout/Generic.kl"
 
 install_solar_boot_assets "$BASE_DIR" "$MOUNT_SYS"
 
@@ -483,6 +506,13 @@ sudo rm -f "$MOUNT_USER/data/com.innioasis.y2.apk"
 sudo rm -f "$MOUNT_USER"/*_launcher.apk
 sudo rm -f "$MOUNT_USER/data/*_launcher_initialized"
 sudo rm -f "$MOUNT_USER/data/initialized"
+
+echo "==> Seed Rockbox switch scripts in userdata (overwrite rockbox-y1 reboot/keylayout script)"
+sudo mkdir -p "$MOUNT_USER/data"
+sudo cp "$SCRIPT_DIR/switch-to-stock.sh" "$MOUNT_USER/data/switch-to-stock.sh"
+sudo cp "$SCRIPT_DIR/switch-to-rockbox.sh" "$MOUNT_USER/data/switch-to-rockbox.sh"
+sudo chmod 755 "$MOUNT_USER/data/switch-to-stock.sh" "$MOUNT_USER/data/switch-to-rockbox.sh"
+sudo chown root:root "$MOUNT_USER/data/switch-to-stock.sh" "$MOUNT_USER/data/switch-to-rockbox.sh"
 
 audit_rom_contents "$BASE_DIR" "$MOUNT_SYS" "$MOUNT_USER"
 

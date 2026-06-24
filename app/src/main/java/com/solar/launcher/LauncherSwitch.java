@@ -4,6 +4,8 @@ import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 
+import java.io.File;
+
 /**
  * No-reboot launcher handoff between Solar and Rockbox via /data/data/switch-to-stock.sh.
  */
@@ -24,6 +26,18 @@ public final class LauncherSwitch {
         } catch (PackageManager.NameNotFoundException e) {
             return false;
         }
+    }
+
+    /** Solar ROM with co-installed Rockbox APK (package or /system/app blob). */
+    public static boolean isRockboxAvailable(Context context) {
+        if (isRockboxInstalled(context)) return true;
+        return new File("/system/app/org.rockbox.apk").exists();
+    }
+
+    /** Launcher switch script shipped in Solar ROM (seeded to /data/data on boot). */
+    public static boolean isSwitchScriptAvailable() {
+        return new File("/data/data/switch-to-stock.sh").exists()
+                || new File("/system/etc/solar/switch-to-stock.sh").exists();
     }
 
     /** True when Rockbox is installed but currently disabled (typical when Solar is home). */

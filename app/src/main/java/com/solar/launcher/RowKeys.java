@@ -119,6 +119,7 @@ public final class RowKeys {
         if (SCREEN_TIMEOUT.equals(rowKey)) return R.string.settings_screen_timeout;
         if (FULL_WIDTH.equals(rowKey)) return R.string.settings_full_width_menus;
         if (POWER_OFF.equals(rowKey)) return R.string.settings_power_off;
+        if (SWITCH_ROCKBOX.equals(rowKey)) return R.string.settings_switch_rockbox;
         if (WEB_SERVER.equals(rowKey)) return R.string.settings_web_server;
         if (WIFI_SETUP.equals(rowKey)) return R.string.settings_wifi_setup;
         if (SOULSEEK.equals(rowKey)) return R.string.settings_soulseek;
