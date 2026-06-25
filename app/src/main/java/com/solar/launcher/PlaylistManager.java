@@ -127,6 +127,37 @@ public final class PlaylistManager {
     w.close();
   }
 
+  /** Write M3U with paths relative to the playlist file directory. */
+  public static void saveM3uRelative(Entry entry, File dest) throws Exception {
+    if (entry == null || dest == null) throw new IllegalArgumentException("entry/dest");
+    File baseDir = dest.getParentFile();
+    if (baseDir != null && !baseDir.exists()) baseDir.mkdirs();
+    BufferedWriter w = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(dest), "UTF-8"));
+    w.write("#EXTM3U\n");
+    for (File t : entry.tracks) {
+      if (t == null || !t.isFile()) continue;
+      String title = t.getName();
+      int dot = title.lastIndexOf('.');
+      if (dot > 0) title = title.substring(0, dot);
+      w.write("#EXTINF:-1," + title + "\n");
+      w.write(relativize(baseDir, t) + "\n");
+    }
+    w.close();
+  }
+
+  /** ponytail: URI relativize — M3U paths use forward slashes on all platforms. */
+  static String relativize(File baseDir, File file) {
+    if (baseDir == null || file == null) return file != null ? file.getAbsolutePath() : "";
+    try {
+      java.net.URI baseUri = baseDir.getCanonicalFile().toURI();
+      java.net.URI fileUri = file.getCanonicalFile().toURI();
+      String path = baseUri.relativize(fileUri).getPath();
+      if (path == null || path.isEmpty()) return file.getName();
+      return path;
+    } catch (Exception ignored) {}
+    return file.getAbsolutePath();
+  }
+
   public static Entry fromTracks(String name, List<File> tracks) {
     return new Entry(name, null, new ArrayList<File>(tracks));
   }

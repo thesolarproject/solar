@@ -24,6 +24,11 @@ public final class SolarUpdateClient {
     public static final int MAX_PICKER_RELEASES = 8;
     /** Max nightly APKs kept in published OTA catalog. */
     public static final int MAX_CATALOG_NIGHTLIES = 12;
+    /** Current nightly tag format: {@code nightly-YYYYMMDD-HHMM} (UTC). */
+    private static final Pattern TIMESTAMP_NIGHTLY_TAG =
+            Pattern.compile("^nightly-\\d{8}-\\d{4}$");
+    private static final Pattern TIMESTAMP_NIGHTLY_PARTS =
+            Pattern.compile("^(\\d{4})(\\d{2})(\\d{2})-(\\d{2})(\\d{2})$");
 
     public static final class ReleaseInfo {
         public final String tag;
@@ -41,7 +46,10 @@ public final class SolarUpdateClient {
         }
 
         public String listLabel() {
-            return nightly ? tag : ("v" + versionName);
+            if (nightly) {
+                return isTimestampNightly(tag) ? formatNightlyDisplayLabel(tag) : tag;
+            }
+            return "v" + versionName;
         }
 
         public boolean matchesInstalled(int localCode, String localName) {
@@ -138,6 +146,41 @@ public final class SolarUpdateClient {
         return out;
     }
 
+
+    public static boolean isTimestampNightly(String tag) {
+        return tag != null && TIMESTAMP_NIGHTLY_TAG.matcher(tag).matches();
+    }
+
+    public static String formatNightlyDisplayLabel(String tag) {
+        if (!isTimestampNightly(tag)) return tag == null ? "" : tag;
+        String rest = tag.substring("nightly-".length());
+        Matcher m = TIMESTAMP_NIGHTLY_PARTS.matcher(rest);
+        if (!m.matches()) return tag;
+        try {
+            int y = Integer.parseInt(m.group(1));
+            int mo = Integer.parseInt(m.group(2));
+            int d = Integer.parseInt(m.group(3));
+            int hh = Integer.parseInt(m.group(4));
+            int mm = Integer.parseInt(m.group(5));
+            java.util.Calendar cal = java.util.Calendar.getInstance(
+                    java.util.TimeZone.getTimeZone("UTC"));
+            cal.set(y, mo - 1, d, hh, mm, 0);
+            cal.set(java.util.Calendar.MILLISECOND, 0);
+            java.text.SimpleDateFormat fmt = new java.text.SimpleDateFormat(
+                    "MMM d, yyyy · HH:mm", Locale.US);
+            fmt.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+            return fmt.format(cal.getTime()) + " UTC";
+        } catch (Exception e) {
+            return tag;
+        }
+    }
+
+    static boolean includeInNightlyPicker(ReleaseInfo r, int localCode, String localName) {
+        if (r == null || !r.nightly) return false;
+        if (isTimestampNightly(r.tag)) return true;
+        return r.matchesInstalled(localCode, localName);
+    }
+
     public static ReleaseInfo latestStable(List<ReleaseInfo> releases) {
         ReleaseInfo best = null;
         for (ReleaseInfo r : releases) {
@@ -150,7 +193,7 @@ public final class SolarUpdateClient {
     public static ReleaseInfo latestNightly(List<ReleaseInfo> releases) {
         ReleaseInfo best = null;
         for (ReleaseInfo r : releases) {
-            if (!r.nightly) continue;
+            if (!r.nightly || !isTimestampNightly(r.tag)) continue;
             if (best == null || r.versionCode > best.versionCode) best = r;
         }
         return best;
@@ -161,6 +204,7 @@ public final class SolarUpdateClient {
         if (versionName == null) return "";
         String v = versionName.trim();
         if (v.isEmpty()) return "";
+        if (isTimestampNightly(v)) return formatNightlyDisplayLabel(v);
         if (v.startsWith("nightly-")) return v;
         if (v.startsWith("v")) return v;
         return "v" + v;
@@ -220,6 +264,7 @@ public final class SolarUpdateClient {
         for (ReleaseInfo r : sorted) {
             if (out.size() >= maxItems) break;
             if (onNightly && !r.nightly) continue;
+            if (onNightly && r.nightly && !includeInNightlyPicker(r, localCode, local)) continue;
             out.add(r);
         }
 
@@ -241,7 +286,7 @@ public final class SolarUpdateClient {
         List<ReleaseInfo> stables = new ArrayList<ReleaseInfo>();
         List<ReleaseInfo> nightlies = new ArrayList<ReleaseInfo>();
         for (ReleaseInfo r : all) {
-            if (r.nightly) nightlies.add(r);
+            if (r.nightly && isTimestampNightly(r.tag)) nightlies.add(r);
             else stables.add(r);
         }
         sortNewestFirst(stables);
@@ -371,7 +416,11 @@ public final class SolarUpdateClient {
         if (!r.isNewerThan(1, "0.1")) throw new AssertionError("stable newer");
         ReleaseInfo n = new ReleaseInfo("nightly-10", "nightly-10", 10, "https://x/a.apk", true);
         if (!n.isNewerThan(5, "nightly-5")) throw new AssertionError("nightly newer");
-        if (!"nightly-10".equals(n.listLabel())) throw new AssertionError("nightly label");
+        ReleaseInfo ts = new ReleaseInfo("nightly-20240622-1530", "nightly-20240622-1530", 100,
+                "https://x/a.apk", true);
+        if (!ts.listLabel().contains("2024")) throw new AssertionError("nightly display label");
+        if (isTimestampNightly("nightly-52")) throw new AssertionError("legacy not timestamp");
+        if (!isTimestampNightly("nightly-20240622-1530")) throw new AssertionError("timestamp tag");
         if (!n.matchesInstalled(10, "nightly-10")) throw new AssertionError("nightly installed");
         if (!r.matchesInstalled(0, "0.2")) throw new AssertionError("stable installed");
         if (n.compareToInstalled(5, "nightly-5") != InstallRelation.UPGRADE) {
@@ -390,10 +439,23 @@ public final class SolarUpdateClient {
                     "https://x/solar-" + variant + "-nightly-" + i + ".apk", true));
         }
         many.add(new ReleaseInfo("v0.2", "0.2", 0, "https://x/s.apk", false));
-        List<ReleaseInfo> picked = releasesForPicker(many, 3, "0.2.1", MAX_PICKER_RELEASES);
-        if (picked.size() > MAX_PICKER_RELEASES) throw new AssertionError("picker cap");
-        if (picked.isEmpty()) throw new AssertionError("picker empty stable");
-        if (!picked.get(0).nightly) throw new AssertionError("newest nightly first");
+        List<ReleaseInfo> legacyMany = new ArrayList<ReleaseInfo>();
+        for (int i = 1; i <= 20; i++) {
+            legacyMany.add(new ReleaseInfo("nightly-" + i, "nightly-" + i, i,
+                    "https://x/solar-nightly-" + i + ".apk", true));
+        }
+        List<ReleaseInfo> legacyPicked = releasesForPicker(legacyMany, 3, "nightly-5", MAX_PICKER_RELEASES);
+        if (!legacyPicked.isEmpty() && legacyPicked.size() > 1) {
+            throw new AssertionError("legacy nightlies should not fill picker");
+        }
+        List<ReleaseInfo> tsMany = new ArrayList<ReleaseInfo>();
+        tsMany.add(new ReleaseInfo("nightly-20240622-1530", "nightly-20240622-1530", 10,
+                "https://x/a.apk", true));
+        tsMany.add(new ReleaseInfo("nightly-20240622-1545", "nightly-20240622-1545", 11,
+                "https://x/b.apk", true));
+        List<ReleaseInfo> picked = releasesForPicker(tsMany, 3, "0.2.1", MAX_PICKER_RELEASES);
+        if (picked.size() != 2) throw new AssertionError("timestamp picker count");
+        if (!picked.get(0).tag.endsWith("1545")) throw new AssertionError("newest timestamp first");
         List<ReleaseInfo> trimmed = trimCatalog(many, 5);
         int nightlyCount = 0;
         for (ReleaseInfo r2 : trimmed) if (r2.nightly) nightlyCount++;

@@ -47,8 +47,8 @@ public final class GetMusicSearch {
     }
 
     /**
-     * Build unified top-level rows: Deezer artists, grouped albums/folders from both sources,
-     * then loose tracks (Deezer first, Reach deduped).
+     * Build top-level rows with artists, albums, folders, and loose tracks round-robin
+     * interleaved so one result type does not dominate the list.
      */
     public static List<MusicSearchEntry> organizeWithContainers(
             List<DeezerSearch.DeezerArtist> artists, List<MusicSearchEntry> flat) {
@@ -61,33 +61,88 @@ public final class GetMusicSearch {
             else if (e.source == MusicSearchEntry.Source.REACH) reachTracks.add(e);
         }
 
-        List<MusicSearchEntry> out = new ArrayList<MusicSearchEntry>();
+        List<MusicSearchEntry> artistRows = new ArrayList<MusicSearchEntry>();
         if (artists != null) {
             for (DeezerSearch.DeezerArtist a : artists) {
                 if (a == null || a.id <= 0 || a.name.isEmpty()) continue;
-                out.add(MusicSearchEntry.deezerArtist(a.id, a.name));
+                artistRows.add(MusicSearchEntry.deezerArtist(a.id, a.name));
             }
         }
 
+        List<MusicSearchEntry> albumRows = groupDeezerAlbums(deezerTracks);
+        List<MusicSearchEntry> folderRows = groupReachFolders(reachTracks);
+        Collections.sort(albumRows, containerLabelOrder());
+        Collections.sort(folderRows, containerLabelOrder());
+
         List<MusicSearchEntry> containers = new ArrayList<MusicSearchEntry>();
-        containers.addAll(groupDeezerAlbums(deezerTracks));
-        containers.addAll(groupReachFolders(reachTracks));
-        Collections.sort(containers, new Comparator<MusicSearchEntry>() {
+        containers.addAll(albumRows);
+        containers.addAll(folderRows);
+
+        Set<String> deezerKeys = deezerDedupeKeysFromEntries(deezerTracks);
+        List<MusicSearchEntry> trackRows = new ArrayList<MusicSearchEntry>();
+        trackRows.addAll(collectUngroupedDeezerTracks(deezerTracks));
+        for (MusicSearchEntry e : reachTracks) {
+            if (GetMusicSearch.reachMatchesDeezer(e.reach, deezerKeys)) continue;
+            if (!isReachInFolderContainer(e, containers)) trackRows.add(e);
+        }
+
+        List<List<MusicSearchEntry>> buckets = new ArrayList<List<MusicSearchEntry>>();
+        buckets.add(artistRows);
+        buckets.add(albumRows);
+        buckets.add(folderRows);
+        buckets.add(trackRows);
+        return interleaveRoundRobin(buckets);
+    }
+
+    /** Organize Reach-only search hits into interleaved folder and track rows. */
+    public static List<MusicSearchEntry> organizeReachResults(List<SoulseekClient.Result> reach) {
+        List<MusicSearchEntry> flat = new ArrayList<MusicSearchEntry>();
+        if (reach != null) {
+            for (SoulseekClient.Result r : reach) {
+                if (r != null) flat.add(MusicSearchEntry.reach(r));
+            }
+        }
+        return organizeWithContainers(null, flat);
+    }
+
+    /** Organize Deezer-only search hits into interleaved artist, album, and track rows. */
+    public static List<MusicSearchEntry> organizeDeezerResults(
+            List<DeezerSearch.DeezerArtist> artists, List<DeezerResult> tracks) {
+        List<MusicSearchEntry> flat = new ArrayList<MusicSearchEntry>();
+        if (tracks != null) {
+            for (DeezerResult r : tracks) {
+                if (r != null) flat.add(MusicSearchEntry.deezer(r));
+            }
+        }
+        return organizeWithContainers(artists, flat);
+    }
+
+    /** Round-robin merge: one row from each non-empty bucket per pass (A,B,C,D,A,B,…). */
+    static List<MusicSearchEntry> interleaveRoundRobin(List<List<MusicSearchEntry>> buckets) {
+        List<MusicSearchEntry> out = new ArrayList<MusicSearchEntry>();
+        if (buckets == null || buckets.isEmpty()) return out;
+        int n = buckets.size();
+        int[] idx = new int[n];
+        boolean more = true;
+        while (more) {
+            more = false;
+            for (int i = 0; i < n; i++) {
+                List<MusicSearchEntry> bucket = buckets.get(i);
+                if (bucket == null || idx[i] >= bucket.size()) continue;
+                out.add(bucket.get(idx[i]++));
+                more = true;
+            }
+        }
+        return out;
+    }
+
+    private static Comparator<MusicSearchEntry> containerLabelOrder() {
+        return new Comparator<MusicSearchEntry>() {
             @Override
             public int compare(MusicSearchEntry a, MusicSearchEntry b) {
                 return a.containerLabel.compareToIgnoreCase(b.containerLabel);
             }
-        });
-        out.addAll(containers);
-
-        Set<String> deezerKeys = deezerDedupeKeysFromEntries(deezerTracks);
-        List<MusicSearchEntry> looseDeezer = collectUngroupedDeezerTracks(deezerTracks);
-        out.addAll(looseDeezer);
-        for (MusicSearchEntry e : reachTracks) {
-            if (GetMusicSearch.reachMatchesDeezer(e.reach, deezerKeys)) continue;
-            if (!isReachInFolderContainer(e, containers)) out.add(e);
-        }
-        return out;
+        };
     }
 
     /** Backward-compatible wrapper when no artist search results. */

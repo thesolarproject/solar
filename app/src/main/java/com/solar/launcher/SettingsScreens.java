@@ -5,6 +5,7 @@ public final class SettingsScreens {
     public static final String APPEARANCE = "settings.appearance";
     public static final String THEMES = "settings.themes";
     public static final String THEME_PICKER = "settings.theme_picker";
+    public static final String REACH = "settings.reach";
     public static final String SOULSEEK = "settings.soulseek";
     public static final String SOULSEEK_CONNECTION = "settings.soulseek.connection";
     public static final String SOULSEEK_ABOUT = "settings.soulseek.about";
@@ -21,6 +22,7 @@ public final class SettingsScreens {
     public static final String DEEZER_ACCOUNT = "settings.deezer.account";
     public static final String DEEZER_CONNECTION = "settings.deezer.connection";
     public static final String ABOUT = "settings.about";
+    public static final String DEBUG = "settings.debug";
     public static final String SYSTEM_UPDATE = "settings.system_update";
     public static final String HOME = "settings.home";
     public static final String HOME_ARRANGE = "settings.home.arrange";
@@ -41,6 +43,7 @@ public final class SettingsScreens {
         if (APPEARANCE.equals(key)) return R.string.settings_sub_appearance;
         if (THEMES.equals(key)) return R.string.settings_sub_themes;
         if (THEME_PICKER.equals(key)) return R.string.settings_sub_theme_picker;
+        if (REACH.equals(key)) return R.string.settings_sub_reach;
         if (SOULSEEK.equals(key)) return R.string.settings_sub_soulseek;
         if (SOULSEEK_CONNECTION.equals(key)) return R.string.settings_sub_soulseek_connection;
         if (SOULSEEK_ABOUT.equals(key)) return R.string.settings_sub_soulseek_about;
@@ -57,6 +60,7 @@ public final class SettingsScreens {
         if (DEEZER_ACCOUNT.equals(key)) return R.string.settings_sub_deezer_account;
         if (DEEZER_CONNECTION.equals(key)) return R.string.settings_sub_deezer_connection;
         if (ABOUT.equals(key)) return R.string.settings_sub_about;
+        if (DEBUG.equals(key)) return R.string.settings_sub_debug;
         if (SYSTEM_UPDATE.equals(key)) return R.string.settings_sub_system_update;
         if (HOME.equals(key)) return R.string.settings_sub_home;
         if (HOME_ARRANGE.equals(key)) return R.string.settings_sub_home_arrange;
@@ -70,6 +74,10 @@ public final class SettingsScreens {
         if (THEME_VARIANT.equals(key)) return R.string.settings_sub_theme_variant;
         if (LIBRARY_BROWSE.equals(key)) return R.string.settings_sub_library_browse;
         return 0;
+    }
+
+    public static boolean isReach(String key) {
+        return REACH.equals(key);
     }
 
     public static boolean isSoulseek(String key) {

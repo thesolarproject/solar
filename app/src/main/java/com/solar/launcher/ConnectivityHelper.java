@@ -133,7 +133,9 @@ public final class ConnectivityHelper {
     /** Get Music home shortcut: Deezer and/or Reach when configured and reachable. */
     public static boolean isGetMusicShortcutAvailable(SharedPreferences prefs) {
         if (prefs != null) {
-            return GetMusicSources.anyAvailable(prefs, reachEnabled, deezerEnabled);
+            return GetMusicSources.anyAvailable(prefs,
+                    ReachPolicy.isSoulseekActive(prefs),
+                    ReachPolicy.isDeezerActive(prefs));
         }
         return (deezerEnabled && deezerLoginOk)
                 || (reachEnabled && reachLoginOk && reachPeerOk);

@@ -33,9 +33,10 @@
     <string name="settings_sub_theme_picker">설정: 테마</string>
     <string name="settings_status_bar_match_font">상태 표시줄을 테마 글꼴색과 맞춤</string>
     <string name="settings_sub_themes">설정: 테마 받기</string>
-    <string name="settings_sub_soulseek">설정: Soulseek</string>
-    <string name="settings_sub_soulseek_connection">설정: Soulseek / 연결</string>
-    <string name="settings_sub_soulseek_about">설정: Soulseek / 정보</string>
+    <string name="settings_sub_reach">설정: Reach</string>
+    <string name="settings_sub_soulseek">설정: Reach / Soulseek</string>
+    <string name="settings_sub_soulseek_connection">설정: Reach / Soulseek / 연결</string>
+    <string name="settings_sub_soulseek_about">설정: Reach / Soulseek / 정보</string>
     <string name="settings_sub_system_update">설정: 시스템 업데이트</string>
     <string name="settings_sub_about">설정: 정보</string>
     <string name="settings_sub_home">설정: 홈 화면</string>
@@ -192,7 +193,8 @@
     <string name="settings_power_off">전원 끄기 (종료)</string>
     <string name="settings_web_server">Wi‑Fi 전송</string>
     <string name="settings_wifi_setup">Wi-Fi 설정</string>
-    <string name="settings_soulseek">Reach</string>
+    <string name="settings_reach">Reach</string>
+    <string name="settings_soulseek">Soulseek</string>
     <string name="settings_auto_fetch">앨범 아트 자동 검색</string>
     <string name="settings_system_update">시스템 업데이트</string>
     <string name="settings_app_version">앱 버전</string>
@@ -400,6 +402,7 @@
     <string name="soulseek_account_saved">Soulseek 계정이 저장되었습니다.</string>
     <string name="soulseek_downloading">다운로드 중 %1$s (%2$d%%)</string>
     <string name="soulseek_searching">검색 중…</string>
+    <string name="soulseek_widening_search">검색 범위 확장 중…</string>
     <string name="soulseek_more_results">+%1$d개 더 (처음 %2$d개 표시)</string>
     <string name="soulseek_show_more">더 보기 (%1$d/%2$d)</string>
     <string name="soulseek_add_to_queue">대기열에 추가</string>

@@ -1,5 +1,7 @@
 package com.solar.launcher.theme;
 
+import com.solar.launcher.HomeMenuConfig;
+
 import android.content.Context;
 import android.content.res.AssetManager;
 import android.os.Environment;
@@ -83,10 +85,35 @@ public class ThemeManager {
         return themesRootPath;
     }
 
+    /**
+     * Ensures themes root exists and is writable; falls back to app filesDir when SD is missing.
+     * ponytail: downloadTheme mkdirs failed on Y1 when /storage/sdcard0/Themes was absent.
+     */
+    public static boolean ensureThemesRootReady(Context ctx) {
+        Context app = ctx != null ? ctx.getApplicationContext() : assetContext;
+        if (app != null) {
+            assetContext = app;
+            themesRootPath = resolveThemesRoot(app);
+        }
+        File root = new File(themesRootPath);
+        if (root.isDirectory() && root.canWrite()) {
+            new File(root, ".cache/covers").mkdirs();
+            return true;
+        }
+        if (!root.mkdirs() || !root.canWrite()) {
+            if (app == null) return false;
+            themesRootPath = new File(app.getFilesDir(), "Themes").getAbsolutePath();
+            root = new File(themesRootPath);
+            if (!root.mkdirs() && !root.isDirectory()) return false;
+        }
+        new File(root, ".cache/covers").mkdirs();
+        return root.canWrite();
+    }
+
     /** Extract bundled Default → themes root; load in-memory fallback if copy fails. */
     public static void ensureBundledDefault(Context ctx) {
         assetContext = ctx.getApplicationContext();
-        themesRootPath = resolveThemesRoot(ctx);
+        ensureThemesRootReady(ctx);
         try {
             File dest = new File(themesRootPath, BUILTIN_DEFAULT_FOLDER);
             File config = new File(dest, "config.json");
@@ -504,6 +531,7 @@ public class ThemeManager {
     // --- colors ---
 
     public static int getTextColorPrimary() {
+        if (ActiveThemeEngine.isJjMode()) return JjThemeManager.getTextColorPrimary();
         ThemeEntry t = getCurrentTheme();
         JSONObject item = t.root.optJSONObject("itemConfig");
         if (item != null) {
@@ -519,6 +547,7 @@ public class ThemeManager {
     }
 
     public static int getTextColorSecondary() {
+        if (ActiveThemeEngine.isJjMode()) return JjThemeManager.getTextColorSecondary();
         JSONObject dialog = getCurrentTheme().root.optJSONObject("dialogConfig");
         if (dialog != null) {
             int c = parseColorOpt(dialog, "dialogTextColor");
@@ -528,6 +557,7 @@ public class ThemeManager {
     }
 
     public static int getOverlayBackgroundColor() {
+        if (ActiveThemeEngine.isJjMode()) return JjThemeManager.getOverlayBackgroundColor();
         JSONObject menu = getCurrentTheme().root.optJSONObject("menuConfig");
         if (menu != null) {
             int c = parseColorOpt(menu, "menuBackgroundColor");
@@ -546,6 +576,7 @@ public class ThemeManager {
 
     /** ponytail: statusConfig.statusBarColor with alpha; dark fallback when unset on non-Y1 themes */
     public static int getStatusBarBackgroundColor() {
+        if (ActiveThemeEngine.isJjMode()) return JjThemeManager.getStatusBarBackgroundColor();
         JSONObject status = getCurrentTheme().root.optJSONObject("statusConfig");
         if (status != null) {
             int c = parseColorOpt(status, "statusBarColor");
@@ -595,6 +626,7 @@ public class ThemeManager {
 
     /** ponytail: menuBackgroundColor is overlay tint only — never an unselected row fill on Y1 themes */
     public static int getListButtonNormalBg() {
+        if (ActiveThemeEngine.isJjMode()) return JjThemeManager.getListButtonNormalBg();
         if (hasY1Blocks(getCurrentTheme().root)) return 0x00000000;
         JSONObject menu = getCurrentTheme().root.optJSONObject("menuConfig");
         if (menu != null) {
@@ -620,10 +652,12 @@ public class ThemeManager {
     }
 
     public static int getListButtonFocusedBg() {
+        if (ActiveThemeEngine.isJjMode()) return JjThemeManager.getListButtonFocusedBg();
         return getRowSelectionFillColor();
     }
 
     public static int getListButtonFocusedTextColor() {
+        if (ActiveThemeEngine.isJjMode()) return JjThemeManager.getListButtonFocusedTextColor();
         JSONObject item = getCurrentTheme().root.optJSONObject("itemConfig");
         if (item != null) {
             int c = parseColorOpt(item, "itemSelectedTextColor");
@@ -958,6 +992,7 @@ public class ThemeManager {
     }
 
     public static int getButtonRadius() {
+        if (ActiveThemeEngine.isJjMode()) return JjThemeManager.getButtonRadius();
         ThemeEntry t = getCurrentTheme();
         JSONObject solar = solarBlock(t.root);
         if (solar != null && solar.has("button_radius")) return solar.optInt("button_radius", 10);
@@ -1069,6 +1104,7 @@ public class ThemeManager {
     }
 
     public static Typeface getCustomFont() {
+        if (ActiveThemeEngine.isJjMode()) return JjThemeManager.getCustomFont();
         ThemeEntry t = getCurrentTheme();
         String fontKey = t.folderPath;
         String fontFile = t.root.optString("fontFamily", "");
@@ -1246,12 +1282,103 @@ public class ThemeManager {
         return BitmapFactory.decodeResource(context.getResources(), defaultResId);
     }
 
-    /** solarConfig key for a Solar-only app label, e.g. Podcasts → appPodcasts, PC Upload → appPC_Upload */
+    /**
+     * Home shortcut icon from the active theme only: {@code solarConfig.app*} →
+     * {@code homePageConfig} (stock or explicit Solar fallback). No drawable or cross-theme assets.
+     */
+    public static Bitmap getHomeMenuIcon(Context context, HomeMenuConfig.Entry entry) {
+        if (context == null || entry == null) return null;
+        if (HomeMenuConfig.ID_THEMES.equals(entry.id)
+                || HomeMenuConfig.ID_GET_THEMES.equals(entry.id)) {
+            Bitmap themes = getSolarAppIcon("Themes");
+            if (themes != null) return themes;
+            return getThemeSettingBitmap("theme");
+        }
+        String enLabel = entry.englishLabel(context);
+        Bitmap solar = getSolarAppIcon(enLabel);
+        if (solar != null) return solar;
+        if (entry.solarAppName != null && !entry.solarAppName.equals(enLabel)) {
+            solar = getSolarAppIcon(entry.solarAppName);
+            if (solar != null) return solar;
+        }
+        if (entry.stockIconKey != null) {
+            Bitmap stock = getThemeHomeBitmap(entry.stockIconKey);
+            if (stock != null) return stock;
+        }
+        String fallbackKey = HomeMenuConfig.y1HomeIconFallbackKey(entry.id);
+        if (fallbackKey != null) return getThemeHomeBitmap(fallbackKey);
+        return null;
+    }
+
+    /** {@code homePageConfig} asset from active theme only; null when unset or missing file. */
+    public static Bitmap getThemeHomeBitmap(String y1Key) {
+        if (y1Key == null || y1Key.isEmpty()) return null;
+        JSONObject home = getCurrentTheme().root.optJSONObject("homePageConfig");
+        if (home == null) return null;
+        String path = home.optString(y1Key, "").trim();
+        if (path.isEmpty()) return null;
+        return getThemeBitmapFromActiveThemeOnly(path);
+    }
+
+    /** {@code settingConfig} asset from active theme only. */
+    public static Bitmap getThemeSettingBitmap(String key) {
+        if (key == null || key.isEmpty()) return null;
+        JSONObject setting = getCurrentTheme().root.optJSONObject("settingConfig");
+        if (setting == null) return null;
+        String path = setting.optString(key, "").trim();
+        if (path.isEmpty()) return null;
+        return getThemeBitmapFromActiveThemeOnly(path);
+    }
+
+    /** Decode a theme asset path without bundled-default or Android drawable fallbacks. */
+    static Bitmap getThemeBitmapFromActiveThemeOnly(String relativePath) {
+        if (relativePath == null || relativePath.isEmpty()) return null;
+        ThemeEntry t = getCurrentTheme();
+        String cacheKey = t.folderPath + ":only:" + relativePath;
+        if (bitmapCache.containsKey(cacheKey)) return bitmapCache.get(cacheKey);
+        Bitmap bmp = decodeThemeBitmapForEntry(t, relativePath, 0);
+        if (bmp != null) bitmapCache.put(cacheKey, bmp);
+        return bmp;
+    }
+
+    /**
+     * Settings right-pane icon: {@code solarConfig.settings*} (English label) → Reach extras →
+     * {@code solarConfig.app*} → {@code settingConfig} → home shortcut preview.
+     */
+    public static Bitmap getSettingsRowIcon(Context context, String rowKey, String englishLabel,
+            String soulseekSolarKey, String settingIconKey, String solarAppName) {
+        Bitmap icon = getSolarSettingsIcon(englishLabel);
+        if (icon == null && soulseekSolarKey != null) {
+            icon = getSolarConfigIcon(soulseekSolarKey);
+        }
+        if (icon == null && solarAppName != null) {
+            icon = getSolarAppIcon(solarAppName);
+        }
+        if (icon == null && settingIconKey != null) {
+            icon = getThemeSettingBitmap(settingIconKey);
+        }
+        if (icon == null && rowKey != null && rowKey.startsWith("home.shortcut.")) {
+            HomeMenuConfig.Entry e = HomeMenuConfig.find(
+                    rowKey.substring("home.shortcut.".length()));
+            if (e != null) icon = getHomeMenuIcon(context, e);
+        }
+        return icon;
+    }
+
+    /** solarConfig key for a Solar-only app label, e.g. Podcasts → appPodcasts, Get Music → appGet_Music */
     public static String solarAppConfigKey(String appName) {
         if (appName == null) return null;
         String suffix = appName.replaceAll("[^a-zA-Z0-9]+", "_").replaceAll("^_+|_+$", "");
         if (suffix.isEmpty()) return null;
         return "app" + suffix;
+    }
+
+    /** solarConfig key for a settings row label, e.g. About → settingsAbout */
+    public static String solarSettingsConfigKey(String settingsLabel) {
+        if (settingsLabel == null) return null;
+        String suffix = settingsLabel.replaceAll("[^a-zA-Z0-9]+", "_").replaceAll("^_+|_+$", "");
+        if (suffix.isEmpty()) return null;
+        return "settings" + suffix;
     }
 
     /** Legacy key before underscores replaced stripped separators (appPCUpload). */
@@ -1277,7 +1404,8 @@ public class ThemeManager {
      * App labels use {@link #solarAppConfigKey}: e.g. "PC Upload" → {@code appPC_Upload}.
      */
     public static Bitmap getSolarConfigIcon(String key) {
-        JSONObject solar = solarBlock();
+        // ponytail: icons are per-theme only — never merge bundled Aura solarConfig into third-party themes.
+        JSONObject solar = solarBlock(getCurrentTheme().root);
         if (solar == null || key == null || key.isEmpty()) return null;
         String path = solar.optString(key, "").trim();
         if (path.isEmpty()) return null;
@@ -1289,7 +1417,7 @@ public class ThemeManager {
         if (f != null) {
             bmp = decodeBitmapFileMaxSide(f.getAbsolutePath(), SOLAR_CONFIG_ICON_MAX_PX);
         }
-        if (bmp == null) {
+        if (bmp == null && isBuiltInDefault(t)) {
             bmp = decodeBundledThemeAsset(path, SOLAR_CONFIG_ICON_MAX_PX);
         }
         if (bmp != null) bitmapCache.put(cacheKey, bmp);
@@ -1298,31 +1426,30 @@ public class ThemeManager {
 
     /** solarConfig app{Name} — theme asset for Solar-only apps; null if unset */
     public static Bitmap getSolarAppIcon(String appName) {
-        JSONObject solar = solarBlock();
-        if (solar == null) return null;
         String key = solarAppConfigKey(appName);
         if (key == null) return null;
-        String path = solar.optString(key, "").trim();
-        if (path.isEmpty()) {
-            String legacy = solarAppConfigKeyLegacy(appName);
-            if (legacy != null && !legacy.equals(key)) {
-                path = solar.optString(legacy, "").trim();
-            }
+        Bitmap bmp = getSolarConfigIcon(key);
+        if (bmp != null) return bmp;
+        String legacy = solarAppConfigKeyLegacy(appName);
+        if (legacy != null && !legacy.equals(key)) {
+            return getSolarConfigIcon(legacy);
         }
-        if (path.isEmpty()) return null;
-        return getThemeBitmap(path);
+        return null;
+    }
+
+    /** solarConfig settings{Name} — right-pane icon for settings rows; null if unset */
+    public static Bitmap getSolarSettingsIcon(String settingsLabel) {
+        String key = solarSettingsConfigKey(settingsLabel);
+        return key != null ? getSolarConfigIcon(key) : null;
     }
 
     /**
-     * Home preview for Solar-only shortcuts: {@code solarConfig.app{Name}} when set;
-     * Podcasts falls back to stock {@code homePageConfig.audiobooks}.
+     * @deprecated use {@link #getHomeMenuIcon(Context, HomeMenuConfig.Entry)} — theme assets only.
      */
     public static Bitmap getSolarAppHomeIcon(Context context, String appName, int defaultResId) {
         Bitmap solar = getSolarAppIcon(appName);
         if (solar != null) return solar;
-        if ("Podcasts".equals(appName)) {
-            return getHomeIcon(context, "audiobooks", defaultResId);
-        }
+        if ("Podcasts".equals(appName)) return getThemeHomeBitmap("audiobooks");
         return null;
     }
 
@@ -1663,9 +1790,12 @@ public class ThemeManager {
     public static Bitmap getScaledThemeCover(ThemeEntry entry, int heightPx) {
         Bitmap cover = getThemeCover(entry);
         if (cover == null || heightPx <= 0) return null;
+        if (cover.getHeight() <= heightPx) return cover;
         int w = (int) (cover.getWidth() * (heightPx / (float) cover.getHeight()));
         if (w < 1) w = 1;
-        return Bitmap.createScaledBitmap(cover, w, heightPx, true);
+        Bitmap scaled = Bitmap.createScaledBitmap(cover, w, heightPx, true);
+        if (scaled != cover && !cover.isRecycled()) cover.recycle();
+        return scaled;
     }
 
     public static int getItemTextColorSelected() {
@@ -1854,8 +1984,9 @@ public class ThemeManager {
             availableThemes.set(0, new ThemeEntry("/tmp", "t", "t", root));
             if (!isHighContrastTextEnabled()) throw new AssertionError("highContrastText");
             if (!"appPodcasts".equals(solarAppConfigKey("Podcasts"))) throw new AssertionError("appPodcasts key");
-            if (!"appSoulseek".equals(solarAppConfigKey("Soulseek"))) throw new AssertionError("appSoulseek key");
+            if (!"appGet_Music".equals(solarAppConfigKey("Get Music"))) throw new AssertionError("appGet_Music key");
             if (!"appPC_Upload".equals(solarAppConfigKey("PC Upload"))) throw new AssertionError("appPC_Upload key");
+            if (!"settingsAbout".equals(solarSettingsConfigKey("About"))) throw new AssertionError("settingsAbout key");
             JSONObject ipod = new JSONObject();
             ipod.put("menuConfig", new JSONObject()
                     .put("menuBackgroundColor", "#000000")

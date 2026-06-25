@@ -4,6 +4,7 @@ import org.junit.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 public class SolarUpdateClientTest {
     @Test
@@ -32,9 +33,11 @@ public class SolarUpdateClientTest {
         String variant = SolarUpdateClient.deviceVariant();
         List<SolarUpdateClient.ReleaseInfo> many = new ArrayList<SolarUpdateClient.ReleaseInfo>();
         for (int i = 1; i <= 30; i++) {
+            String day = String.format(Locale.US, "%02d", (i % 28) + 1);
+            String tag = String.format(Locale.US, "nightly-202406%s-%04d", day, 1000 + i);
             many.add(new SolarUpdateClient.ReleaseInfo(
-                    "nightly-" + i, "nightly-" + i, i,
-                    "https://x/solar-" + variant + "-nightly-" + i + ".apk", true));
+                    tag, tag, 1000 + i,
+                    "https://x/solar-" + variant + "-" + tag + ".apk", true));
         }
         List<SolarUpdateClient.ReleaseInfo> picker = SolarUpdateClient.releasesForPicker(
                 many, 4, "0.2.1", SolarUpdateClient.MAX_PICKER_RELEASES);
@@ -42,8 +45,8 @@ public class SolarUpdateClientTest {
             throw new AssertionError("expected cap " + SolarUpdateClient.MAX_PICKER_RELEASES
                     + " got " + picker.size());
         }
-        if (!"nightly-30".equals(picker.get(0).listLabel())) {
-            throw new AssertionError("newest nightly first");
+        if (!picker.get(0).tag.contains("202406")) {
+            throw new AssertionError("newest timestamp nightly first");
         }
     }
 }

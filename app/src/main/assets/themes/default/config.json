@@ -11,7 +11,10 @@
   "globalWallpaper": "global_bg001_YS.png",
   "fontFamily": "opensans-condbold.ttf",
   "solarConfig": {
-    "appAbout": "square_full_logo_colour.png"
+    "settingsAbout": "square_full_logo_colour.png",
+    "settingsRockbox": "Music_YS.png",
+    "appGet_Music": "Music_YS.png",
+    "appPodcasts": "Audiobooks_YS.png"
   },
   "itemConfig": {
     "itemTextColor": "#ffffff",

@@ -19,8 +19,10 @@ public final class RowKeys {
     public static final String SCREEN_TIMEOUT = "settings.screen_timeout";
     public static final String FULL_WIDTH = "settings.full_width";
     public static final String POWER_OFF = "settings.power_off";
+    public static final String SWITCH_ROCKBOX = "settings.switch_rockbox";
     public static final String WEB_SERVER = "settings.web_server";
     public static final String WIFI_SETUP = "settings.wifi_setup";
+    public static final String REACH = "settings.reach";
     public static final String SOULSEEK = "settings.soulseek";
     public static final String DEEZER = "settings.deezer";
     public static final String AUTO_FETCH = "settings.auto_fetch";
@@ -34,6 +36,8 @@ public final class RowKeys {
     public static final String LIB_ALBUM_SUB = "library.album_sub";
     public static final String LIB_GUEST_SUB = "library.guest_sub";
     public static final String ABOUT = "settings.about";
+    public static final String DEBUG = "settings.debug";
+    public static final String DEBUG_JJ_THEMES = "settings.debug.jj_themes";
     public static final String SYSTEM_UPDATE = "settings.system_update";
     public static final String BLUETOOTH_SETUP = "settings.bluetooth_setup";
     public static final String BRIGHTNESS = "settings.brightness";
@@ -53,6 +57,7 @@ public final class RowKeys {
     public static final String SOULSEEK_HIDE_HIGH_BITRATE = "soulseek.hide_high_bitrate";
     public static final String SOULSEEK_SHARING = "soulseek.sharing";
     public static final String SOULSEEK_REACH_ENABLED = "soulseek.reach_enabled";
+    public static final String SOULSEEK_ENABLED = "soulseek.enabled";
     public static final String SOULSEEK_INCLUDE_GET_MUSIC = "soulseek.include_get_music";
     public static final String SOULSEEK_MESSAGING = "soulseek.messaging";
     public static final String SOULSEEK_FIND_USER = "soulseek.find_user";
@@ -116,8 +121,10 @@ public final class RowKeys {
         if (SCREEN_TIMEOUT.equals(rowKey)) return R.string.settings_screen_timeout;
         if (FULL_WIDTH.equals(rowKey)) return R.string.settings_full_width_menus;
         if (POWER_OFF.equals(rowKey)) return R.string.settings_power_off;
+        if (SWITCH_ROCKBOX.equals(rowKey)) return R.string.settings_switch_rockbox;
         if (WEB_SERVER.equals(rowKey)) return R.string.settings_web_server;
         if (WIFI_SETUP.equals(rowKey)) return R.string.settings_wifi_setup;
+        if (REACH.equals(rowKey)) return R.string.settings_reach;
         if (SOULSEEK.equals(rowKey)) return R.string.settings_soulseek;
         if (DEEZER.equals(rowKey)) return R.string.settings_deezer;
         if (AUTO_FETCH.equals(rowKey)) return R.string.settings_auto_fetch;
@@ -150,6 +157,7 @@ public final class RowKeys {
         if (SOULSEEK_HIDE_HIGH_BITRATE.equals(rowKey)) return R.string.soulseek_hide_high_bitrate;
         if (SOULSEEK_SHARING.equals(rowKey)) return R.string.soulseek_share_library;
         if (SOULSEEK_REACH_ENABLED.equals(rowKey)) return R.string.soulseek_reach_enabled;
+        if (SOULSEEK_ENABLED.equals(rowKey)) return R.string.soulseek_enabled;
         if (SOULSEEK_INCLUDE_GET_MUSIC.equals(rowKey)) return R.string.get_music_include_reach;
         if (SOULSEEK_MESSAGING.equals(rowKey)) return R.string.soulseek_allow_messaging;
         if (SOULSEEK_FIND_USER.equals(rowKey)) return R.string.soulseek_find_user;

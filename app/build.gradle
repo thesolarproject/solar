@@ -15,7 +15,16 @@ tasks.register("ensurePlatformKeystore") {
     }
 }
 
-tasks.named("preBuild").configure { dependsOn("ensurePlatformKeystore") }
+tasks.register("syncY1Assets") {
+    doLast {
+        exec {
+            workingDir rootProject.projectDir
+            commandLine "bash", "solar-rom/scripts/sync-y1-assets.sh"
+        }
+    }
+}
+
+tasks.named("preBuild").configure { dependsOn("ensurePlatformKeystore", "syncY1Assets") }
 
 android {
     namespace 'com.solar.launcher'
@@ -34,8 +43,8 @@ android {
         applicationId "com.solar.launcher"
         minSdk 17
         targetSdk 35
-        versionCode 75
-        versionName "0.4-dev75"
+        versionCode 3408834
+        versionName "nightly-20260625-0554"
         buildConfigField "boolean", "FEATURE_OTA_UPDATE", "true"
         buildConfigField "String", "OTA_UPDATES_URL", "\"https://thesolarproject.github.io/solar-update/updates.xml\""
         def podcastIndexKey = project.findProperty("PODCAST_INDEX_API_KEY") ?: ""

@@ -15,6 +15,8 @@ import android.widget.Toast;
 import com.solar.launcher.ConnectivityHelper;
 import com.solar.launcher.DebugAgentLog;
 import com.solar.launcher.FocusScrollHelper;
+import com.solar.launcher.GetMusicSearch;
+import com.solar.launcher.MusicSearchEntry;
 import com.solar.launcher.R;
 import com.solar.launcher.net.TlsHelper;
 import com.solar.launcher.theme.ThemeManager;
@@ -92,6 +94,12 @@ public final class DeezerScreen {
         void prefetchDeezerCover(File track);
         void onDeezerStreamDownloadFailed();
         void launchGetMusicSearchFromSuggestion(String q, boolean openKeyboard);
+        /** True when Deezer search was opened from Settings (back label + restore). */
+        boolean deezerOpenedFromSettings();
+        /** Multi-track album save/queue chain; return true to stay on download screen. */
+        boolean onDeezerBatchTransferStep(DeezerResult finished);
+        /** Suppress per-track save/queue toasts while batching an album. */
+        boolean isDeezerAlbumBatchTransfer();
     }
 
     private final Host host;
@@ -105,6 +113,10 @@ public final class DeezerScreen {
     private boolean searchInProgress;
     private int searchGen;
     private final List<DeezerResult> results = new ArrayList<DeezerResult>();
+    private final List<DeezerSearch.DeezerArtist> searchArtists = new ArrayList<DeezerSearch.DeezerArtist>();
+    private final List<MusicSearchEntry> organizedResults = new ArrayList<MusicSearchEntry>();
+    private MusicSearchEntry browseContainer = null;
+    private int containerLoadGen;
     private int resultsVisible = PAGE_SIZE;
     private DeezerResult actionResult;
     private DeezerResult activeDownload;
@@ -141,6 +153,9 @@ public final class DeezerScreen {
         activeDownload = null;
         downloadFailed = false;
         results.clear();
+        searchArtists.clear();
+        organizedResults.clear();
+        browseContainer = null;
         lastQuery = "";
         uiMode = UI_SEARCH;
     }
@@ -186,7 +201,9 @@ public final class DeezerScreen {
         LinearLayout container = host.containerBrowserItems();
         container.removeAllViews();
 
-        Button back = host.createListButton(host.string(R.string.deezer_back_home));
+        Button back = host.createListButton(host.string(
+                host.deezerOpenedFromSettings() ? R.string.deezer_back_settings
+                        : R.string.deezer_back_home));
         back.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 host.clickFeedback();
@@ -201,7 +218,6 @@ public final class DeezerScreen {
         }
 
         String typeLabel = host.string(R.string.deezer_type_search);
-        if (!lastQuery.isEmpty()) typeLabel += " (" + lastQuery + ")";
         Button typeSearch = host.createListButton(typeLabel);
         typeSearch.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
@@ -242,6 +258,9 @@ public final class DeezerScreen {
         searchInProgress = true;
         resultsVisible = PAGE_SIZE;
         results.clear();
+        searchArtists.clear();
+        organizedResults.clear();
+        browseContainer = null;
         final int gen = ++searchGen;
         buildResultsShell();
         host.runOnBg(new Runnable() {
@@ -249,6 +268,7 @@ public final class DeezerScreen {
             public void run() {
                 try {
                     if (!client.isSessionValid()) client.initSession();
+                    final List<DeezerSearch.DeezerArtist> foundArtists = search.searchArtists(lastQuery);
                     final List<DeezerResult> found = search.searchTracks(lastQuery);
                     host.runOnUi(new Runnable() {
                         @Override public void run() {
@@ -256,6 +276,11 @@ public final class DeezerScreen {
                             searchInProgress = false;
                             results.clear();
                             results.addAll(found);
+                            searchArtists.clear();
+                            searchArtists.addAll(foundArtists);
+                            organizedResults.clear();
+                            organizedResults.addAll(
+                                    GetMusicSearch.organizeDeezerResults(searchArtists, results));
                             buildResultsUi();
                         }
                     });
@@ -265,6 +290,8 @@ public final class DeezerScreen {
                             if (gen != searchGen) return;
                             searchInProgress = false;
                             results.clear();
+                            searchArtists.clear();
+                            organizedResults.clear();
                             buildResultsUi();
                             if (searchStatusRow != null) {
                                 searchStatusRow.setText(host.string(R.string.deezer_search_error,
@@ -304,25 +331,26 @@ public final class DeezerScreen {
     public void buildResultsUi() {
         uiMode = UI_RESULTS;
         LinearLayout container = host.containerBrowserItems();
-        while (container.getChildCount() > 2) container.removeViewAt(2);
+        int headerRows = browseContainer != null ? 1 : 2;
+        while (container.getChildCount() > headerRows) container.removeViewAt(headerRows);
+        final List<MusicSearchEntry> display = resultsForDisplay();
         if (searchStatusRow != null) {
             if (searchInProgress) {
                 searchStatusRow.setText(host.string(R.string.deezer_searching));
-            } else if (results.isEmpty()) {
+            } else if (display.isEmpty()) {
                 searchStatusRow.setText(host.string(R.string.deezer_no_results));
             } else {
                 container.removeView(searchStatusRow);
                 searchStatusRow = null;
             }
         }
-        int end = Math.min(resultsVisible, results.size());
+        int end = Math.min(resultsVisible, display.size());
         for (int i = 0; i < end; i++) {
-            final DeezerResult r = results.get(i);
-            container.addView(makeResultButton(r));
+            container.addView(makeEntryButton(display.get(i)));
         }
-        if (results.size() > resultsVisible) {
+        if (display.size() > resultsVisible) {
             Button more = host.createListButton(host.string(R.string.deezer_show_more,
-                    results.size() - resultsVisible));
+                    display.size() - resultsVisible));
             more.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View v) {
                     host.clickFeedback();
@@ -332,6 +360,147 @@ public final class DeezerScreen {
             });
             container.addView(more);
         }
+    }
+
+    private List<MusicSearchEntry> resultsForDisplay() {
+        if (browseContainer != null) return browseContainer.children;
+        if (!organizedResults.isEmpty()) return organizedResults;
+        List<MusicSearchEntry> flat = new ArrayList<MusicSearchEntry>();
+        for (DeezerResult r : results) {
+            if (r != null) flat.add(MusicSearchEntry.deezer(r));
+        }
+        return flat;
+    }
+
+    private Button makeEntryButton(final MusicSearchEntry e) {
+        if (e.isContainer()) {
+            return makeContainerButton(e);
+        }
+        if (e.deezer != null) {
+            return makeResultButton(e.deezer);
+        }
+        return host.createListButton("");
+    }
+
+    private Button makeContainerButton(final MusicSearchEntry container) {
+        String label;
+        if (container.kind == MusicSearchEntry.RowKind.DEEZER_ARTIST) {
+            label = host.string(R.string.get_music_artist_row, container.containerLabel);
+        } else if (container.kind == MusicSearchEntry.RowKind.DEEZER_ALBUM) {
+            label = GetMusicSearch.formatDeezerReleaseLabel(
+                    container.deezerRecordType, container.containerLabel);
+            if (!container.children.isEmpty()) {
+                label += " · " + host.string(R.string.get_music_container_tracks,
+                        container.children.size());
+            }
+        } else {
+            label = host.string(R.string.get_music_folder_row, container.containerLabel);
+        }
+        final Button b = host.createListButton(label);
+        b.setTag(container);
+        styleResultButton(b);
+        b.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                host.clickFeedback();
+                if (!host.requireInternet(R.string.deezer_wifi_required)) return;
+                openContainer(container);
+            }
+        });
+        return b;
+    }
+
+    private void openContainer(final MusicSearchEntry container) {
+        if (container == null || !container.isContainer()) return;
+        if (container.needsLazyLoad()) {
+            beginLazyContainerLoad(container);
+            return;
+        }
+        browseContainer = container;
+        resultsVisible = PAGE_SIZE;
+        LinearLayout list = host.containerBrowserItems();
+        list.removeAllViews();
+        Button back = host.createListButton(host.string(R.string.get_music_back_containers));
+        back.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                host.clickFeedback();
+                browseContainer = null;
+                buildResultsShell();
+                if (host.tvBrowserPath() != null) {
+                    host.tvBrowserPath().setText(host.string(R.string.path_deezer_results, lastQuery));
+                }
+                buildResultsUi();
+            }
+        });
+        list.addView(back);
+        buildResultsUi();
+        if (list.getChildCount() > 0) list.getChildAt(0).requestFocus();
+    }
+
+    private void beginLazyContainerLoad(final MusicSearchEntry container) {
+        containerLoadGen++;
+        final int gen = containerLoadGen;
+        browseContainer = container;
+        LinearLayout list = host.containerBrowserItems();
+        list.removeAllViews();
+        Button back = host.createListButton(host.string(R.string.get_music_back_containers));
+        back.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                host.clickFeedback();
+                browseContainer = null;
+                buildResultsUi();
+            }
+        });
+        list.addView(back);
+        Button loading = host.createListButton(host.string(R.string.get_music_loading_container));
+        loading.setEnabled(false);
+        list.addView(loading);
+        host.runOnBg(new Runnable() {
+            @Override public void run() {
+                List<MusicSearchEntry> children = new ArrayList<MusicSearchEntry>();
+                try {
+                    if (container.kind == MusicSearchEntry.RowKind.DEEZER_ARTIST) {
+                        List<DeezerSearch.DeezerAlbum> albums =
+                                search.listArtistAlbums(container.deezerContainerId);
+                        java.util.Collections.sort(albums, new java.util.Comparator<DeezerSearch.DeezerAlbum>() {
+                            @Override
+                            public int compare(DeezerSearch.DeezerAlbum a, DeezerSearch.DeezerAlbum b) {
+                                int ta = recordTypeOrder(a.recordType);
+                                int tb = recordTypeOrder(b.recordType);
+                                if (ta != tb) return ta - tb;
+                                return a.title.compareToIgnoreCase(b.title);
+                            }
+                        });
+                        for (DeezerSearch.DeezerAlbum a : albums) {
+                            if (a == null || a.id <= 0) continue;
+                            children.add(MusicSearchEntry.deezerAlbumBrowse(
+                                    a.id, a.title, a.recordType, null));
+                        }
+                    } else if (container.kind == MusicSearchEntry.RowKind.DEEZER_ALBUM) {
+                        List<DeezerResult> tracks = search.listAlbumTracks(container.deezerContainerId);
+                        for (DeezerResult t : tracks) {
+                            if (t != null) children.add(MusicSearchEntry.deezer(t));
+                        }
+                    }
+                } catch (Exception ignored) {}
+                final List<MusicSearchEntry> loaded = children;
+                host.runOnUi(new Runnable() {
+                    @Override public void run() {
+                        if (gen != containerLoadGen) return;
+                        browseContainer = MusicSearchEntry.withChildren(container, loaded);
+                        openContainer(browseContainer);
+                    }
+                });
+            }
+        });
+    }
+
+    private static int recordTypeOrder(String recordType) {
+        if (recordType == null) return 0;
+        String t = recordType.toLowerCase(Locale.US);
+        if ("album".equals(t)) return 0;
+        if ("ep".equals(t)) return 1;
+        if ("single".equals(t)) return 2;
+        return 3;
     }
 
     private Button makeResultButton(final DeezerResult r) {
@@ -410,7 +579,14 @@ public final class DeezerScreen {
             if (host.getMusicEmbedded()) host.onGetMusicBackToResults();
             else popToResults();
         } else if (uiMode == UI_RESULTS) {
-            if (host.getMusicEmbedded()) host.onGetMusicBackToSearch();
+            if (browseContainer != null) {
+                browseContainer = null;
+                buildResultsShell();
+                if (host.tvBrowserPath() != null) {
+                    host.tvBrowserPath().setText(host.string(R.string.path_deezer_results, lastQuery));
+                }
+                buildResultsUi();
+            } else if (host.getMusicEmbedded()) host.onGetMusicBackToSearch();
             else buildSearchUi();
         } else if (uiMode == UI_SEARCH) {
             if (host.getMusicEmbedded()) host.onGetMusicBackToSearch();
@@ -549,7 +725,9 @@ public final class DeezerScreen {
                             host.playDeezerPartial(destFile, meta, r.id);
                         } else if (pendingAction == ACTION_QUEUE) {
                             host.queueDeezerPartial(destFile, meta, r.id);
-                            Toast.makeText(host.context(), host.string(R.string.deezer_queued), Toast.LENGTH_SHORT).show();
+                            if (!host.isDeezerAlbumBatchTransfer()) {
+                                Toast.makeText(host.context(), host.string(R.string.deezer_queued), Toast.LENGTH_SHORT).show();
+                            }
                         }
                     }
                 });
@@ -567,12 +745,16 @@ public final class DeezerScreen {
                         activeDownload = null;
                         if (pendingAction == ACTION_SAVE) {
                             host.scanMediaLibraryAsync();
-                            Toast.makeText(host.context(), host.string(R.string.deezer_saved), Toast.LENGTH_SHORT).show();
+                            if (!host.isDeezerAlbumBatchTransfer()) {
+                                Toast.makeText(host.context(), host.string(R.string.deezer_saved), Toast.LENGTH_SHORT).show();
+                            }
                             afterDownloadComplete(r);
                         } else if (pendingAction == ACTION_QUEUE && growingFile != null) {
                             host.replaceDeezerInQueue(growingFile, destFile, r.displayTitle());
                             host.persistPlaybackQueue();
-                            Toast.makeText(host.context(), host.string(R.string.deezer_queued), Toast.LENGTH_SHORT).show();
+                            if (!host.isDeezerAlbumBatchTransfer()) {
+                                Toast.makeText(host.context(), host.string(R.string.deezer_queued), Toast.LENGTH_SHORT).show();
+                            }
                             afterDownloadComplete(r);
                         } else if (pendingAction == ACTION_PLAY) {
                             if (growingFile != null && !growingFile.equals(destFile)) {
@@ -624,6 +806,7 @@ public final class DeezerScreen {
     }
 
     private void afterDownloadComplete(DeezerResult r) {
+        if (host.onDeezerBatchTransferStep(r)) return;
         if (host.getMusicEmbedded()) {
             host.onGetMusicBackToResults();
         } else {

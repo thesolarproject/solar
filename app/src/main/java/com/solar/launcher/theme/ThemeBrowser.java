@@ -380,11 +380,8 @@ public final class ThemeBrowser {
         out.add(Row.filter(t.filterTitle, t.sortSubtitle));
 
         boolean catalogReady = catalog != null && catalogAvailable && !catalogLoading;
+        // ponytail: online row build touches disk — caller must pass themeBrowserOnlineRows from a worker thread
         List<Row> onlineRows = onlineRowsPrebuilt;
-        if (onlineRows == null && catalogReady
-                && filter != FILTER_INSTALLED && filter != FILTER_UPDATES) {
-            onlineRows = buildOnlineRows(catalog, installed, filter, sort);
-        }
 
         if (catalogLoading && (onlineRows == null || onlineRows.isEmpty())) {
             out.add(Row.status(t.loading));

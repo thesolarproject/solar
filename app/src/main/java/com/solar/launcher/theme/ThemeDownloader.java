@@ -584,14 +584,19 @@ public class ThemeDownloader {
     }
 
     static File resolveAssetFile(File themesRoot, File themeDir, String catalogFolder, String galleryRel) {
+        if (galleryRel == null || galleryRel.isEmpty() || themeDir == null) return null;
+        // ponytail: never load sibling theme assets from themesRoot — active theme folder only.
+        if (galleryRel.contains("..")) return null;
         if (catalogFolder != null && !catalogFolder.isEmpty()
                 && galleryRel.startsWith(catalogFolder + "/")) {
-            return new File(themeDir, galleryRel.substring(catalogFolder.length() + 1));
+            File f = new File(themeDir, galleryRel.substring(catalogFolder.length() + 1));
+            return f.isFile() ? f : null;
         }
-        if (catalogFolder == null || catalogFolder.isEmpty()) {
-            return new File(themeDir, galleryRel);
-        }
-        return new File(themesRoot, galleryRel);
+        File exact = new File(themeDir, galleryRel);
+        if (exact.isFile()) return exact;
+        String name = new File(galleryRel.replace('\\', '/')).getName();
+        File byName = new File(themeDir, name);
+        return byName.isFile() ? byName : null;
     }
 
     public static Set<String> missingAssets(String folderName) throws Exception {
@@ -823,6 +828,21 @@ public class ThemeDownloader {
         return loadCoverBitmap(entry, null, maxHeightPx);
     }
 
+    /** Preview-only: disk cache — never hits the network (avoids OOM when scrolling the catalog). */
+    public static Bitmap loadCachedCoverBitmap(CatalogEntry entry, ThemeVariant variant, int maxHeightPx) {
+        String cacheKey = entry.folder;
+        if (variant != null && !variant.gallerySubpath.isEmpty()) {
+            cacheKey = entry.folder + "__" + variant.gallerySubpath.replace('/', '_');
+        }
+        File cache = coverCacheFile(cacheKey);
+        if (!cache.isFile() || cache.length() <= 0) return null;
+        try {
+            return scaleBitmap(BitmapFactory.decodeFile(cache.getAbsolutePath()), maxHeightPx);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     public static Bitmap loadCoverBitmap(CatalogEntry entry, ThemeVariant variant, int maxHeightPx) {
         String cacheKey = entry.folder;
         String url = entry.coverUrl();
@@ -871,6 +891,9 @@ public class ThemeDownloader {
             return;
         }
         beginSession("download", entry.folder + " (" + entry.name + ")");
+        if (!ThemeManager.ensureThemesRootReady(null)) {
+            throw new Exception("Cannot create themes folder under " + ThemeManager.themesRoot());
+        }
         File dest = entry.themeDir();
         try {
             if (!dest.exists() && !dest.mkdirs()) {
@@ -955,6 +978,9 @@ public class ThemeDownloader {
         }
 
         beginSession("downloadVariant", installFolder + " (" + displayName + ")");
+        if (!ThemeManager.ensureThemesRootReady(null)) {
+            throw new Exception("Cannot create themes folder under " + ThemeManager.themesRoot());
+        }
         File dest = new File(ThemeManager.themesRoot(), installFolder);
         try {
             if (!dest.exists() && !dest.mkdirs()) {

@@ -131,6 +131,8 @@ public final class ThemedContextMenu {
     private QueueRowSpec[] queueRows = new QueueRowSpec[0];
     private int queueMoveFrom = -1;
     private boolean volumeOnlyMode;
+    /** Non-interactive status line (e.g. launcher switch in progress) — no list, no slider. */
+    private boolean hintOnlyMode;
     /** Volume/brightness tab — quick bar + one slider only; list hidden until user leaves. */
     private boolean mediaSliderExclusive = false;
     private boolean optionsListVisible = true;
@@ -215,7 +217,15 @@ public final class ThemedContextMenu {
 
     /** Context modal top bar always includes Back (unless dialog-style confirm). */
     private boolean shouldShowContextBackChip() {
-        return !dialogStyle && !volumeOnlyMode;
+        return !dialogStyle && !volumeOnlyMode && !hintOnlyMode;
+    }
+
+    public boolean isDialogStyle() {
+        return dialogStyle;
+    }
+
+    public boolean isHintOnlyMode() {
+        return hintOnlyMode;
     }
 
     private void ensureContextTitleBar(boolean hasQuick) {
@@ -1281,6 +1291,17 @@ public final class ThemedContextMenu {
                     LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
             titleRowLp.bottomMargin = labels.length > 0 ? (int) (4 * density) : 0;
             panel.addView(titleRow, titleRowLp);
+        } else if (title != null && title.length() > 0) {
+            TextView tit = new TextView(activity);
+            tit.setText(title);
+            tit.setTypeface(ThemeManager.getCustomFont());
+            tit.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                    activity.getResources().getDimension(R.dimen.y1_menu_text_size) * 0.95f);
+            ThemeManager.applyThemedTextStyle(tit,
+                    ThemeManager.ensureReadableOnBackground(ThemeManager.getDialogTextColor(), panelBgColor));
+            tit.setPadding(0, 0, 0, (int) (4 * density));
+            panel.addView(tit, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         }
 
         if (subtitle != null && subtitle.length() > 0 && dialogStyle) {
@@ -2322,10 +2343,59 @@ public final class ThemedContextMenu {
         scrollQueueRowToViewportSlotImmediate(index);
     }
 
+    /** Compact hint overlay — same chrome as volume-only, without slider (launcher switch wait). */
+    public void showHintOnly(ViewGroup root, String hintText, int rowHeightPx, int panelWidthPx) {
+        dismiss();
+        hintOnlyMode = true;
+        volumeOnlyMode = false;
+        dialogStyle = false;
+        queueMode = false;
+        labels = new String[0];
+        quickItems = new QuickItem[0];
+        this.rowHeightPx = rowHeightPx;
+        this.panelWidthPx = panelWidthPx;
+        this.menuRows = false;
+        this.panelBgColor = ThemeManager.getContextMenuPanelColor();
+
+        overlay = new FrameLayout(activity);
+        overlay.setBackgroundColor(0x99000000);
+        overlay.setClickable(true);
+        overlay.setFocusable(true);
+
+        panel = new LinearLayout(activity);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        float density = activity.getResources().getDisplayMetrics().density;
+        int padH = (int) (8 * density);
+        panel.setPadding(padH, (int) (8 * density), padH, (int) (6 * density));
+        panel.setBackground(buildPanelBackground());
+
+        if (hintText != null && hintText.length() > 0) {
+            TextView hint = new TextView(activity);
+            hint.setText(hintText);
+            hint.setTypeface(ThemeManager.getCustomFont());
+            hint.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                    activity.getResources().getDimension(R.dimen.y1_menu_text_size) * 0.82f);
+            hint.setGravity(Gravity.CENTER);
+            ThemeManager.applyThemedTextStyle(hint,
+                    ThemeManager.contextMenuMutedText(ThemeManager.getHintTextColor()));
+            panel.addView(hint, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        }
+
+        FrameLayout.LayoutParams panelLp = new FrameLayout.LayoutParams(panelWidthPx,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        panelLp.gravity = Gravity.CENTER;
+        overlay.addView(panel, panelLp);
+        root.addView(overlay, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        focusZone = FocusZone.TIER_CONTENT;
+    }
+
     /** Compact volume overlay — hint line, no quick toggles or list. */
     public void showVolumeOnly(ViewGroup root, String hintText, String sliderTitle, int max, int value,
             int rowHeightPx, int panelWidthPx) {
         dismiss();
+        hintOnlyMode = false;
         volumeOnlyMode = true;
         queueMode = false;
         labels = new String[0];
@@ -2739,6 +2809,8 @@ public final class ThemedContextMenu {
         exitQueueMoveRibbon();
         clearQueueConfirm();
         volumeOnlyMode = false;
+        hintOnlyMode = false;
+        dialogStyle = false;
         mediaSliderExclusive = false;
         optionsListVisible = true;
         submenuTierOpen = false;
@@ -2834,10 +2906,7 @@ public final class ThemedContextMenu {
             return;
         }
         if (focusZone == FocusZone.QUICK_BAR) {
-            if (delta > 0 && labels != null && labels.length > 0) {
-                enterListFromQuickBar();
-                return;
-            }
+            // ponytail: only enter the list from the last visible quick chip (moveQuickFocus), not on every wheel tick.
             moveQuickFocus(delta);
             return;
         }
@@ -2882,6 +2951,11 @@ public final class ThemedContextMenu {
             }
             scrollFocusIntoView();
         }
+    }
+
+    /** Wheel / track keys on the horizontal quick-bar row (Wi‑Fi, BT, queue, …). */
+    public void moveQuickBarFocus(int delta) {
+        moveQuickFocus(delta);
     }
 
     private void moveQuickFocus(int delta) {

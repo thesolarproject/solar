@@ -16,6 +16,7 @@ public final class SoulseekAccount {
     public static final String PREF_PASS = "soulseek_pass";
     public static final String PREF_CUSTOM = "soulseek_custom";
     public static final String PREF_REACH_ENABLED = "soulseek_reach_enabled";
+    public static final String PREF_SOULSEEK_ENABLED = "soulseek_enabled";
     public static final String PREF_MESSAGING_ENABLED = "soulseek_messaging_enabled";
     /** @deprecated migrated to {@link #PREF_HIDE_HIGH_BITRATE} */
     public static final String PREF_HIDE_FLAC = "soulseek_hide_flac";

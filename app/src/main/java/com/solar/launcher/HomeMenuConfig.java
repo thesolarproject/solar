@@ -3,6 +3,8 @@ package com.solar.launcher;
 import android.content.Context;
 import android.content.SharedPreferences;
 
+import com.solar.launcher.theme.SolarTheming;
+
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -147,6 +149,11 @@ public final class HomeMenuConfig {
             this.defaultResId = defaultResId;
             this.solarAppName = solarAppName;
             this.required = required;
+        }
+
+        /** English menu title — stable input for {@code solarConfig.app*} keys. */
+        public String englishLabel(Context context) {
+            return SolarTheming.englishString(context, labelResId);
         }
     }
 

@@ -1,0 +1,138 @@
+#!/system/bin/sh
+# Solar Y1 button script (patched from rockbox-y1).
+# 1. Restart Rockbox when prev+next held 10s while Rockbox is running.
+# 2. Back+Play held 10s toggles Solar ↔ Rockbox (no full restart, unified keymap).
+
+BOOT_COMPLETED=0
+while [ "$BOOT_COMPLETED" -ne 1 ]; do
+    BOOT_COMPLETED=$(getprop sys.boot_completed)
+    sleep 1
+done
+
+settings put system sound_effects_enabled 0
+
+# Seed launcher switch scripts on every boot (overwrite stale /data copies).
+if [ -f /system/etc/solar/switch-to-stock.sh ]; then
+    cp /system/etc/solar/switch-to-stock.sh /data/data/
+    chmod 755 /data/data/switch-to-stock.sh
+fi
+if [ -f /system/etc/solar/switch-to-rockbox.sh ]; then
+    cp /system/etc/solar/switch-to-rockbox.sh /data/data/
+    chmod 755 /data/data/switch-to-rockbox.sh
+fi
+
+DEVICE="/dev/input/event2"
+MAX_HOLD=10
+MAX_HOLD_DUAL_BOOT=10
+
+if [ ! -e "$DEVICE" ]; then
+    exit 1
+fi
+
+reverse_bytes() {
+    hex="$1"
+    echo "$hex" | sed 's/../& /g' | awk '{for(i=NF;i>0;i--)printf $i; print ""}'
+}
+
+left_down=0
+right_down=0
+menu_down=0
+play_down=0
+press_start_sec=0
+press_start_sec_dual_boot=0
+
+package_rb="org.rockbox"
+package_solar="com.solar.launcher"
+
+restart_rockbox() {
+    am force-stop org.rockbox
+    am start -n org.rockbox/.RockboxActivity
+}
+
+# Back+Play 10s: switch to the other launcher (whichever is currently disabled).
+launcher_handoff() {
+    if pm list packages -d | grep -q "$package_solar"; then
+        echo "Solar disabled — switching to Solar."
+        sh /data/data/switch-to-stock.sh
+    elif pm list packages -d | grep -q "$package_rb"; then
+        echo "Rockbox disabled — switching to Rockbox."
+        sh /data/data/switch-to-stock.sh --rockbox
+    fi
+}
+
+while true; do
+    if dumpsys power | grep -q "mScreenOn=true"; then
+        event_bytes=$(dd if="$DEVICE" bs=16 count=1 2>/dev/null | xxd -p)
+        [ -z "$event_bytes" ] && break
+
+        sec_hex=$(reverse_bytes ${event_bytes:0:8})
+        sec=$((0x$sec_hex))
+
+        type_hex=$(reverse_bytes ${event_bytes:16:4})
+        value_hex=$(reverse_bytes ${event_bytes:24:8})
+        code_hex=$(reverse_bytes ${event_bytes:20:4})
+
+        type=$((0x$type_hex))
+        value=$((0x$value_hex))
+        code=$((0x$code_hex))
+
+        if [ "$type" -eq 1 ]; then
+            case "$code" in
+                164)
+                    play_down=$value
+                    left_down=0
+                    right_down=0
+                    ;;
+                158)
+                    menu_down=$value
+                    left_down=0
+                    right_down=0
+                    ;;
+                105)
+                    left_down=$value
+                    play_down=0
+                    menu_down=0
+                    ;;
+                106)
+                    right_down=$value
+                    play_down=0
+                    menu_down=0
+                    ;;
+                *)
+                    play_down=0
+                    menu_down=0
+                    left_down=0
+                    right_down=0
+                    ;;
+            esac
+
+            if [ "$left_down" -eq 1 ] && [ "$right_down" -eq 1 ] && [ "$press_start_sec" -eq 0 ]; then
+                press_start_sec=$sec
+            fi
+
+            if [ "$menu_down" -eq 1 ] && [ "$play_down" -eq 1 ] && [ "$press_start_sec_dual_boot" -eq 0 ]; then
+                press_start_sec_dual_boot=$sec
+            fi
+
+            if [ "$press_start_sec" -ne 0 ]; then
+                if [ "$left_down" -eq 0 ] || [ "$right_down" -eq 0 ]; then
+                    hold_time=$((sec - press_start_sec))
+                    if [ "$hold_time" -ge "$MAX_HOLD" ] && pm list packages -e | grep -q "$package_rb"; then
+                        restart_rockbox
+                    fi
+                    press_start_sec=0
+                fi
+            fi
+
+            if [ "$press_start_sec_dual_boot" -ne 0 ]; then
+                if [ "$menu_down" -eq 0 ] || [ "$play_down" -eq 0 ]; then
+                    hold_time=$((sec - press_start_sec_dual_boot))
+                    if [ "$hold_time" -ge "$MAX_HOLD_DUAL_BOOT" ]; then
+                        launcher_handoff
+                    fi
+                    press_start_sec_dual_boot=0
+                fi
+            fi
+        fi
+    fi
+done

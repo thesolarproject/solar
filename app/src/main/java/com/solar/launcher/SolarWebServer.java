@@ -350,14 +350,14 @@ public class SolarWebServer extends Thread {
             SharedPreferences prefs = context.getSharedPreferences(
                     DeezerAccount.PREFS_NAME, Context.MODE_PRIVATE);
             boolean hasArl = DeezerAccount.hasArl(prefs);
-            String user = DeezerAccount.displayUser(prefs);
             String quality = DeezerAccount.loadQuality(prefs);
-            String status = hasArl
-                    ? ("Configured" + (user.isEmpty() ? "" : " — " + user))
-                    : "Not configured";
+            String status = hasArl ? "Logged in" : "Not configured";
             String msgHtml = message != null
                     ? "<p style='color:" + (message.startsWith("✅") ? "#0f0" : "#f66") + "'>"
                     + htmlEscape(message) + "</p>" : "";
+            String demoNote = DeezerAccount.isUsingDemoArl(prefs)
+                    ? "<p style='color:#aaa;font-size:14px'>" + htmlEscape(
+                    context.getString(R.string.deezer_demo_account_web_note)) + "</p>" : "";
             String instructions =
                     "<div class='box' style='text-align:left;font-size:14px;line-height:1.5'>" +
                     "<p><b>What is the arl?</b> After you log in at deezer.com, your browser stores an " +
@@ -393,6 +393,7 @@ public class SolarWebServer extends Thread {
                     "code{background:#333;padding:2px 4px;border-radius:3px;}" +
                     "a{color:#0ff;}</style></head><body>" +
                     "<h2>🎵 Deezer Account</h2>" +
+                    demoNote +
                     instructions +
                     "<div class='box'><p>Status: <b>" + htmlEscape(status) + "</b></p>" +
                     msgHtml +

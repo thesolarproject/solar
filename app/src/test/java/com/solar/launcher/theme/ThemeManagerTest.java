@@ -1,5 +1,7 @@
 package com.solar.launcher.theme;
 
+import com.solar.launcher.HomeMenuConfig;
+
 import org.json.JSONObject;
 import org.junit.Test;
 
@@ -88,6 +90,24 @@ public class ThemeManagerTest {
     }
 
     @Test
+    public void getMusicHomeIconUsesSolarConfigKey() throws Exception {
+        if (!"appGet_Music".equals(ThemeManager.solarAppConfigKey("Get Music"))) {
+            throw new AssertionError("Get Music key");
+        }
+        HomeMenuConfig.Entry e = HomeMenuConfig.find(HomeMenuConfig.ID_SOULSEEK);
+        if (e == null || !"Get Music".equals(e.solarAppName)) {
+            throw new AssertionError("soulseek home entry should use Get Music solarAppName");
+        }
+    }
+
+    @Test
+    public void settingsAboutUsesSolarConfigKey() {
+        if (!"settingsAbout".equals(ThemeManager.solarSettingsConfigKey("About"))) {
+            throw new AssertionError("settingsAbout key");
+        }
+    }
+
+    @Test
     public void podcastsHomeIconPrefersSolarConfig() throws Exception {
         JSONObject root = new JSONObject();
         root.put("homePageConfig", new JSONObject().put("audiobooks", "Audiobooks_YS.png"));
@@ -108,7 +128,56 @@ public class ThemeManagerTest {
     }
 
     @Test
+    public void solarAppIconNotMergedFromOtherThemes() throws Exception {
+        JSONObject club = new JSONObject();
+        club.put("theme_info", new JSONObject().put("title", "Club Penguin"));
+        ThemeManager.availableThemes.clear();
+        ThemeManager.availableThemes.add(new ThemeManager.ThemeEntry(
+                "/tmp/club", "Club", "Club Penguin", club));
+        ThemeManager.setThemeIndex(0);
+        if (ThemeManager.getSolarAppIcon("Get Music") != null) {
+            throw new AssertionError("third-party theme must not inherit bundled appGet_Music");
+        }
+        if (ThemeManager.getSolarAppHomeIcon(null, "Get Music", 0) != null) {
+            throw new AssertionError("no right-pane icon when theme omits solarConfig");
+        }
+    }
+
+    @Test
+    public void getMusicFallbackFromSameTheme() throws Exception {
+        JSONObject root = new JSONObject();
+        root.put("homePageConfig", new JSONObject().put("music", "theme_music.png"));
+        ThemeManager.availableThemes.clear();
+        ThemeManager.availableThemes.add(new ThemeManager.ThemeEntry("/tmp", "t", "t", root));
+        ThemeManager.setThemeIndex(0);
+        HomeMenuConfig.Entry e = HomeMenuConfig.find(HomeMenuConfig.ID_SOULSEEK);
+        if (ThemeManager.getHomeMenuIcon(null, e) != null) {
+            throw new AssertionError("no file on disk — expect null bitmap");
+        }
+        if (!"music".equals(HomeMenuConfig.y1HomeIconFallbackKey(HomeMenuConfig.ID_SOULSEEK))) {
+            throw new AssertionError("get music fallback key");
+        }
+        if (HomeMenuConfig.y1HomeIconFallbackKey(HomeMenuConfig.ID_PC_UPLOAD) != null) {
+            throw new AssertionError("pc upload must not fallback");
+        }
+    }
+
+    @Test
+    public void appMusicOverridesStock() throws Exception {
+        JSONObject root = new JSONObject();
+        root.put("homePageConfig", new JSONObject().put("music", "stock_music.png"));
+        root.put("solarConfig", new JSONObject().put("appMusic", "solar_music.png"));
+        ThemeManager.availableThemes.clear();
+        ThemeManager.availableThemes.add(new ThemeManager.ThemeEntry("/tmp", "t", "t", root));
+        ThemeManager.setThemeIndex(0);
+        if (!ThemeManager.hasThemeSolarConfigKey("appMusic")) {
+            throw new AssertionError("appMusic set");
+        }
+    }
+
+    @Test
     public void selfCheck() {
+        com.solar.launcher.theme.SolarTheming.selfCheck();
         ThemeManager.selfCheck();
     }
 }

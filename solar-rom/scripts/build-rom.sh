@@ -86,6 +86,55 @@ die() {
     exit 1
 }
 
+# Y1 rockbox bases unpack flat; Y2 ATA ships images under a versioned subfolder.
+normalize_firmware_layout() {
+    if [ -f "$BASE_DIR/system.img" ]; then
+        return 0
+    fi
+    local fw_sub
+    fw_sub=$(find "$BASE_DIR" -mindepth 1 -maxdepth 3 -name system.img -printf '%h\n' 2>/dev/null | head -1)
+    if [ -z "$fw_sub" ] || [ "$fw_sub" = "$BASE_DIR" ]; then
+        die "base firmware missing system.img (expected flat zip or single subfolder)"
+    fi
+    echo "==> Normalizing nested base firmware layout ($(basename "$fw_sub") -> base)"
+    shopt -s dotglob nullglob
+    mv "$fw_sub"/* "$BASE_DIR/"
+    shopt -u dotglob nullglob
+    rmdir "$fw_sub" 2>/dev/null || true
+}
+
+# Y2 ships Android sparse images; loop mount needs raw ext4 (Y1 bases are already raw).
+is_sparse_android_image() {
+    local img="$1"
+    local magic
+    magic=$(dd if="$img" bs=1 count=4 2>/dev/null | od -An -tx1 | tr -d ' \n')
+    [ "$magic" = "3aff26ed" ]
+}
+
+prepare_image_for_mount() {
+    local img="$1"
+    if is_sparse_android_image "$img"; then
+        require_cmd simg2img
+        local raw="${img%.img}.mount.raw"
+        echo "==> Converting sparse $(basename "$img") to raw for loop mount" >&2
+        simg2img "$img" "$raw"
+        printf '%s\n' "$raw"
+    else
+        printf '%s\n' "$img"
+    fi
+}
+
+finalize_image_after_mount() {
+    local shipped_path="$1"
+    local mount_src="$2"
+    if [ "$mount_src" != "$shipped_path" ]; then
+        require_cmd img2simg
+        echo "==> Repacking $(basename "$shipped_path") to Android sparse"
+        img2simg "$mount_src" "$shipped_path"
+        rm -f "$mount_src"
+    fi
+}
+
 require_cmd() {
     command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
@@ -163,6 +212,47 @@ download_solar_apk() {
     curl -fsSL -o "$dest" "$apk_url"
 }
 
+SOLAR_SYS="$REPO_ROOT/solar-rom/system"
+
+install_solar_boot_assets() {
+    local base_dir="$1"
+    local sys_mount="$2"
+
+    if [ -f "$SOLAR_SYS/media/bootanimation.zip" ]; then
+        echo "==> Install Solar boot animation (system/media/bootanimation.zip)"
+        sudo mkdir -p "$sys_mount/media"
+        sudo cp "$SOLAR_SYS/media/bootanimation.zip" "$sys_mount/media/bootanimation.zip"
+        sudo chmod 644 "$sys_mount/media/bootanimation.zip"
+        sudo chown root:root "$sys_mount/media/bootanimation.zip"
+    else
+        die "missing $SOLAR_SYS/media/bootanimation.zip"
+    fi
+
+    if [ -f "$SOLAR_SYS/bin/bootanimation" ]; then
+        echo "==> Install Solar bootanimation binary (system/bin/bootanimation)"
+        sudo mkdir -p "$sys_mount/bin"
+        sudo cp "$SOLAR_SYS/bin/bootanimation" "$sys_mount/bin/bootanimation"
+        sudo chmod 755 "$sys_mount/bin/bootanimation"
+        sudo chown root:root "$sys_mount/bin/bootanimation"
+    else
+        die "missing $SOLAR_SYS/bin/bootanimation"
+    fi
+
+    if [ -f "$SOLAR_SYS/boot.img" ]; then
+        echo "==> Replace boot.img in ROM archive"
+        cp "$SOLAR_SYS/boot.img" "$base_dir/boot.img"
+    else
+        die "missing $SOLAR_SYS/boot.img"
+    fi
+
+    if [ -f "$SOLAR_SYS/logo.bin" ]; then
+        echo "==> Replace logo.bin in ROM archive"
+        cp "$SOLAR_SYS/logo.bin" "$base_dir/logo.bin"
+    else
+        die "missing $SOLAR_SYS/logo.bin"
+    fi
+}
+
 audit_rom_contents() {
     local base_dir="$1"
     local sys_mount="$2"
@@ -180,6 +270,11 @@ audit_rom_contents() {
 
     if find "$sys_mount/app" "$sys_mount/priv-app" -iname '*innioasis*' 2>/dev/null | grep -q .; then
         echo "audit fail: stock launcher APK still present under /system/app" >&2
+        errors=$((errors + 1))
+    fi
+
+    if [ "$TYPE" = "y2" ] && find "$sys_mount/priv-app" -iname '*factorylauncher*' 2>/dev/null | grep -q .; then
+        echo "audit fail: stock Y2 factory launcher still present in /system/priv-app" >&2
         errors=$((errors + 1))
     fi
 
@@ -203,21 +298,89 @@ audit_rom_contents() {
         errors=$((errors + 1))
     fi
 
-    if [ -f "$sys_mount/etc/init.d/99Y1ButtonScript" ] || [ -f "$sys_mount/etc/init.d/99Y1LauncherInit.sh" ]; then
-        echo "audit fail: legacy init.d scripts still present" >&2
+    if [ -f "$sys_mount/etc/init.d/99Y1LauncherInit.sh" ]; then
+        echo "audit fail: legacy 99Y1LauncherInit.sh still present" >&2
         errors=$((errors + 1))
     fi
 
+    if [ ! -f "$sys_mount/app/org.rockbox.apk" ]; then
+        echo "audit fail: org.rockbox.apk missing (launcher switch requires Rockbox)" >&2
+        errors=$((errors + 1))
+    fi
+
+    if [ ! -f "$sys_mount/lib/librockbox.so" ]; then
+        echo "audit fail: librockbox.so missing" >&2
+        errors=$((errors + 1))
+    fi
+
+    # ponytail: codec plugins ship inside org.rockbox.apk (lib/armeabi/*.so) — must survive ROM build.
     if [ -f "$sys_mount/app/org.rockbox.apk" ]; then
-        echo "audit fail: org.rockbox.apk still present" >&2
+        rb_so_count=$(unzip -l "$sys_mount/app/org.rockbox.apk" 2>/dev/null \
+            | grep -c 'lib/armeabi/.*\.so' || true)
+        if [ "${rb_so_count:-0}" -lt 35 ]; then
+            echo "audit fail: org.rockbox.apk has ${rb_so_count:-0} native libs (expected >=35 from rockbox-y1 base)" >&2
+            errors=$((errors + 1))
+        fi
+    fi
+
+    if [ ! -f "$sys_mount/etc/solar/switch-to-stock.sh" ]; then
+        echo "audit fail: /system/etc/solar/switch-to-stock.sh missing" >&2
+        errors=$((errors + 1))
+    elif grep -qiE '(^|[[:space:]]|/)reboot\b|reboot -p|/system/bin/reboot' \
+            "$sys_mount/etc/solar/switch-to-stock.sh" 2>/dev/null; then
+        echo "audit fail: switch-to-stock.sh must not reboot (unified keymap)" >&2
         errors=$((errors + 1))
     fi
 
-    if [ ! -f "$sys_mount/usr/keylayout/Generic.kl" ] || [ ! -f "$sys_mount/usr/keylayout/Stock.kl" ]; then
+    if [ ! -f "$sys_mount/etc/solar/sync-rockbox-libs.sh" ]; then
+        echo "audit fail: /system/etc/solar/sync-rockbox-libs.sh missing (Rockbox codec sync)" >&2
+        errors=$((errors + 1))
+    fi
+
+    if [ ! -f "$sys_mount/etc/solar/sync-y1-keymap.sh" ]; then
+        echo "audit fail: /system/etc/solar/sync-y1-keymap.sh missing (unified keymap sync)" >&2
+        errors=$((errors + 1))
+    elif [ ! -f "$sys_mount/etc/solar/Y1-Rockbox.kl" ]; then
+        echo "audit fail: /system/etc/solar/Y1-Rockbox.kl missing" >&2
+        errors=$((errors + 1))
+    fi
+
+    if [ ! -f "$sys_mount/etc/init.d/99Y1ButtonScript" ]; then
+        echo "audit fail: 99Y1ButtonScript missing (Back+Play Rockbox gesture)" >&2
+        errors=$((errors + 1))
+    fi
+
+    if [ ! -f "$sys_mount/usr/keylayout/Generic.kl" ] || [ ! -f "$sys_mount/usr/keylayout/Rockbox.kl" ]; then
         echo "audit fail: keylayout files missing" >&2
         errors=$((errors + 1))
-    elif ! cmp -s "$sys_mount/usr/keylayout/Generic.kl" "$sys_mount/usr/keylayout/Stock.kl"; then
-        echo "audit fail: Generic.kl is not identical to Stock.kl" >&2
+    elif ! cmp -s "$sys_mount/usr/keylayout/Generic.kl" "$sys_mount/usr/keylayout/Y1-Rockbox.kl"; then
+        echo "audit fail: Generic.kl is not identical to Y1-Rockbox.kl (Y1 wheel 126/127)" >&2
+        errors=$((errors + 1))
+    elif ! cmp -s "$sys_mount/usr/keylayout/Stock.kl" "$sys_mount/usr/keylayout/Y1-Rockbox.kl"; then
+        echo "audit fail: Stock.kl must match Y1-Rockbox.kl (unified keymap)" >&2
+        errors=$((errors + 1))
+    elif ! cmp -s "$sys_mount/usr/keylayout/Rockbox.kl" "$sys_mount/usr/keylayout/Y1-Rockbox.kl"; then
+        echo "audit fail: Rockbox.kl must match Y1-Rockbox.kl (unified keymap)" >&2
+        errors=$((errors + 1))
+    fi
+
+    if [ ! -f "$sys_mount/media/bootanimation.zip" ]; then
+        echo "audit fail: /system/media/bootanimation.zip missing" >&2
+        errors=$((errors + 1))
+    fi
+
+    if [ ! -f "$sys_mount/bin/bootanimation" ]; then
+        echo "audit fail: /system/bin/bootanimation missing" >&2
+        errors=$((errors + 1))
+    fi
+
+    if [ ! -f "$base_dir/boot.img" ]; then
+        echo "audit fail: boot.img missing from ROM archive" >&2
+        errors=$((errors + 1))
+    fi
+
+    if [ ! -f "$base_dir/logo.bin" ]; then
+        echo "audit fail: logo.bin missing from ROM archive" >&2
         errors=$((errors + 1))
     fi
 
@@ -231,8 +394,15 @@ audit_rom_contents() {
         errors=$((errors + 1))
     fi
 
-    if [ -d "$user_mount/org.rockbox" ]; then
-        echo "audit fail: /data/org.rockbox still present" >&2
+    if [ ! -f "$user_mount/data/switch-to-stock.sh" ]; then
+        echo "audit fail: userdata/data/switch-to-stock.sh missing (Rockbox launcher handoff)" >&2
+        errors=$((errors + 1))
+    elif ! cmp -s "$user_mount/data/switch-to-stock.sh" "$sys_mount/etc/solar/switch-to-stock.sh"; then
+        echo "audit fail: userdata switch-to-stock.sh must match /system/etc/solar copy" >&2
+        errors=$((errors + 1))
+    elif grep -qiE '(^|[[:space:]]|/)reboot\b|reboot -p|/system/bin/reboot' \
+            "$user_mount/data/switch-to-stock.sh" 2>/dev/null; then
+        echo "audit fail: userdata switch-to-stock.sh must not reboot" >&2
         errors=$((errors + 1))
     fi
 
@@ -269,11 +439,18 @@ fi
 echo "==> Downloading type-${TYPE} base firmware"
 curl -fsSL -o "$BASE_DIR/rom.zip" "$BASE_URL"
 unzip -q "$BASE_DIR/rom.zip" -d "$BASE_DIR"
+normalize_firmware_layout
+
+[ -f "$BASE_DIR/system.img" ] || die "system.img not found under $BASE_DIR after unzip"
+[ -f "$BASE_DIR/userdata.img" ] || die "userdata.img not found under $BASE_DIR after unzip"
+
+SYSTEM_MOUNT_SRC="$(prepare_image_for_mount "$BASE_DIR/system.img")"
+USERDATA_MOUNT_SRC="$(prepare_image_for_mount "$BASE_DIR/userdata.img")"
 
 echo "==> Mounting system.img and userdata.img"
 sudo modprobe loop 2>/dev/null || true
-sudo mount -t ext4 -o loop "$BASE_DIR/system.img" "$MOUNT_SYS"
-sudo mount -t ext4 -o loop "$BASE_DIR/userdata.img" "$MOUNT_USER"
+sudo mount -t ext4 -o loop "$SYSTEM_MOUNT_SRC" "$MOUNT_SYS"
+sudo mount -t ext4 -o loop "$USERDATA_MOUNT_SRC" "$MOUNT_USER"
 
 echo "==> Patching system partition"
 while IFS= read -r apk; do
@@ -282,19 +459,24 @@ while IFS= read -r apk; do
     sudo rm -f "$apk"
 done < <(find "$MOUNT_SYS/priv-app" -iname '*innioasis*' 2>/dev/null || true)
 
-for apk in "$MOUNT_SYS/app"/com.*.apk; do
-    [ -e "$apk" ] || continue
-    base=$(basename "$apk")
-    [ "$base" = "$SYSTEM_APK_NAME" ] && continue
-    echo "  removing system/app/$base"
-    sudo rm -f "$apk"
-done
+if [ "$TYPE" = "y2" ]; then
+    while IFS= read -r apk; do
+        [ -n "$apk" ] || continue
+        echo "  removing $apk"
+        sudo rm -f "$apk" "${apk%.apk}.odex"
+    done < <(find "$MOUNT_SYS/priv-app" -iname '*factorylauncher*' 2>/dev/null || true)
+else
+    for apk in "$MOUNT_SYS/app"/com.*.apk; do
+        [ -e "$apk" ] || continue
+        base=$(basename "$apk")
+        [ "$base" = "$SYSTEM_APK_NAME" ] && continue
+        echo "  removing system/app/$base"
+        sudo rm -f "$apk"
+    done
+fi
 
-sudo rm -f "$MOUNT_SYS/app/org.rockbox.apk"
-sudo rm -f "$MOUNT_SYS/lib/librockbox.so"
-sudo rm -f "$MOUNT_SYS/etc/init.d/99Y1ButtonScript"
+# Keep org.rockbox.apk + librockbox.so from base firmware for launcher switching.
 sudo rm -f "$MOUNT_SYS/etc/init.d/99Y1LauncherInit.sh"
-sudo rm -f "$MOUNT_SYS/etc/install-recovery.sh"
 
 sudo mkdir -p "$MOUNT_SYS/app" "$MOUNT_SYS/usr/keylayout"
 sudo cp "$STAGING_APK" "$MOUNT_SYS/app/$SYSTEM_APK_NAME"
@@ -315,13 +497,37 @@ sudo cp "$REPO_ROOT/solar-rom/system/99SolarInit.sh" "$MOUNT_SYS/etc/init.d/99So
 sudo chmod 755 "$MOUNT_SYS/etc/init.d/99SolarInit.sh"
 sudo chown root:root "$MOUNT_SYS/etc/init.d/99SolarInit.sh"
 
-sudo cp "$SCRIPT_DIR/Stock.kl" "$MOUNT_SYS/usr/keylayout/Stock.kl"
-sudo cp "$SCRIPT_DIR/Stock.kl" "$MOUNT_SYS/usr/keylayout/Generic.kl"
-sudo chmod 644 "$MOUNT_SYS/usr/keylayout/Stock.kl" "$MOUNT_SYS/usr/keylayout/Generic.kl"
-sudo chown root:root "$MOUNT_SYS/usr/keylayout/Stock.kl" "$MOUNT_SYS/usr/keylayout/Generic.kl"
+echo "==> Install launcher switch scripts + unified Rockbox keymap"
+sudo mkdir -p "$MOUNT_SYS/etc/solar"
+sudo cp "$SCRIPT_DIR/switch-to-stock.sh" "$MOUNT_SYS/etc/solar/switch-to-stock.sh"
+sudo cp "$SCRIPT_DIR/switch-to-rockbox.sh" "$MOUNT_SYS/etc/solar/switch-to-rockbox.sh"
+sudo cp "$SCRIPT_DIR/sync-rockbox-libs.sh" "$MOUNT_SYS/etc/solar/sync-rockbox-libs.sh"
+sudo cp "$SCRIPT_DIR/sync-y1-keymap.sh" "$MOUNT_SYS/etc/solar/sync-y1-keymap.sh"
+sudo cp "$SCRIPT_DIR/Y1-Rockbox.kl" "$MOUNT_SYS/etc/solar/Y1-Rockbox.kl"
+sudo chmod 755 "$MOUNT_SYS/etc/solar/switch-to-stock.sh" "$MOUNT_SYS/etc/solar/switch-to-rockbox.sh" \
+    "$MOUNT_SYS/etc/solar/sync-rockbox-libs.sh" "$MOUNT_SYS/etc/solar/sync-y1-keymap.sh"
+sudo chmod 644 "$MOUNT_SYS/etc/solar/Y1-Rockbox.kl"
+sudo chown root:root "$MOUNT_SYS/etc/solar/switch-to-stock.sh" "$MOUNT_SYS/etc/solar/switch-to-rockbox.sh" \
+    "$MOUNT_SYS/etc/solar/sync-rockbox-libs.sh" "$MOUNT_SYS/etc/solar/sync-y1-keymap.sh" \
+    "$MOUNT_SYS/etc/solar/Y1-Rockbox.kl"
+
+sudo cp "$REPO_ROOT/solar-rom/system/99Y1ButtonScript" "$MOUNT_SYS/etc/init.d/99Y1ButtonScript"
+sudo chmod 755 "$MOUNT_SYS/etc/init.d/99Y1ButtonScript"
+sudo chown root:root "$MOUNT_SYS/etc/init.d/99Y1ButtonScript"
+
+[ -f "$SCRIPT_DIR/Y1-Rockbox.kl" ] || die "missing $SCRIPT_DIR/Y1-Rockbox.kl"
+# ponytail: one unified map for Solar + Rockbox-y1 — wheel 105/106→126/127, side 165/163→88/87.
+for _kl in Stock.kl Rockbox.kl Y1-Rockbox.kl Generic.kl; do
+    sudo cp "$SCRIPT_DIR/Y1-Rockbox.kl" "$MOUNT_SYS/usr/keylayout/$_kl"
+done
+sudo chmod 644 "$MOUNT_SYS/usr/keylayout/Stock.kl" "$MOUNT_SYS/usr/keylayout/Rockbox.kl" \
+    "$MOUNT_SYS/usr/keylayout/Y1-Rockbox.kl" "$MOUNT_SYS/usr/keylayout/Generic.kl"
+sudo chown root:root "$MOUNT_SYS/usr/keylayout/Stock.kl" "$MOUNT_SYS/usr/keylayout/Rockbox.kl" \
+    "$MOUNT_SYS/usr/keylayout/Y1-Rockbox.kl" "$MOUNT_SYS/usr/keylayout/Generic.kl"
+
+install_solar_boot_assets "$BASE_DIR" "$MOUNT_SYS"
 
 echo "==> Patching userdata partition"
-sudo rm -rf "$MOUNT_USER/org.rockbox"
 while IFS= read -r apk; do
     [ -n "$apk" ] || continue
     echo "  removing userdata/$(basename "$apk")"
@@ -331,7 +537,15 @@ sudo rm -f "$MOUNT_USER/data/com.innioasis.y1.apk"
 sudo rm -f "$MOUNT_USER/data/com.innioasis.y2.apk"
 sudo rm -f "$MOUNT_USER"/*_launcher.apk
 sudo rm -f "$MOUNT_USER/data/*_launcher_initialized"
+sudo rm -f "$MOUNT_USER/data/.solar_rom_home_ready"
 sudo rm -f "$MOUNT_USER/data/initialized"
+
+echo "==> Seed Rockbox switch scripts in userdata (overwrite rockbox-y1 reboot/keylayout script)"
+sudo mkdir -p "$MOUNT_USER/data"
+sudo cp "$SCRIPT_DIR/switch-to-stock.sh" "$MOUNT_USER/data/switch-to-stock.sh"
+sudo cp "$SCRIPT_DIR/switch-to-rockbox.sh" "$MOUNT_USER/data/switch-to-rockbox.sh"
+sudo chmod 755 "$MOUNT_USER/data/switch-to-stock.sh" "$MOUNT_USER/data/switch-to-rockbox.sh"
+sudo chown root:root "$MOUNT_USER/data/switch-to-stock.sh" "$MOUNT_USER/data/switch-to-rockbox.sh"
 
 audit_rom_contents "$BASE_DIR" "$MOUNT_SYS" "$MOUNT_USER"
 
@@ -340,6 +554,9 @@ sudo umount "$MOUNT_SYS"
 sudo umount "$MOUNT_USER"
 MOUNT_SYS=""
 MOUNT_USER=""
+
+finalize_image_after_mount "$BASE_DIR/system.img" "$SYSTEM_MOUNT_SRC"
+finalize_image_after_mount "$BASE_DIR/userdata.img" "$USERDATA_MOUNT_SRC"
 
 rm -f "$BASE_DIR/rom.zip"
 rm -rf "$MOUNT_SYS" "$MOUNT_USER"

@@ -63,6 +63,8 @@ for path in sorted(glob.glob(os.path.join(out_dir, "solar-*.apk"))):
     if not tag:
         continue
     nightly = tag.startswith("nightly-")
+    if nightly and not ts_re.match(tag):
+        continue  # ponytail: legacy nightly-N no longer published
     if nightly:
         version_name = tag
         ts = ts_re.match(tag)
@@ -166,6 +168,27 @@ push_catalog() {
   git push "https://x-access-token:${PAT}@github.com/${UPDATE_REPO}.git" HEAD:main
 }
 
+purge_legacy_nightlies() {
+  echo "== Remove legacy nightly-N APKs from github.com/${UPDATE_REPO} =="
+  clone_update_repo "$WORK/repo"
+  python3 - "$WORK/repo" <<'PYLEG'
+import glob, os, re, sys
+dest = sys.argv[1]
+ts = re.compile(r"^nightly-\d{8}-\d{4}$")
+num = re.compile(r"^nightly-\d+$")
+removed = 0
+for path in glob.glob(os.path.join(dest, "solar-nightly-*.apk")):
+    tag = os.path.basename(path)[len("solar-"):-len(".apk")]
+    if num.match(tag) and not ts.match(tag):
+        os.remove(path)
+        removed += 1
+        print("removed", os.path.basename(path))
+print(f"removed {removed} legacy apk(s)")
+PYLEG
+  write_updates_xml "$WORK/repo"
+  push_update_repo "$WORK/repo" "Remove legacy nightly-N OTA releases."
+}
+
 reset_catalog() {
   echo "== Reset OTA catalog in github.com/${UPDATE_REPO} =="
   clone_update_repo "$WORK/repo"
@@ -206,6 +229,9 @@ for rel in data:
             break
     if not apk_asset:
         continue
+    import re
+    if tag.startswith("nightly-") and not re.match(r"^nightly-\d{8}-\d{4}$", tag):
+        continue
     seen.add(tag)
     out = os.path.join(dest, f"solar-{tag}.apk")
     url = apk_asset["browser_download_url"]
@@ -230,6 +256,7 @@ add_release() {
 
 usage() {
   echo "Usage: $0 sync-from-releases" >&2
+  echo "       $0 purge-legacy-nightlies" >&2
   echo "       $0 reset" >&2
   echo "       $0 push-catalog" >&2
   echo "       $0 add --apk PATH --tag TAG --version-name NAME --version-code N [--nightly]" >&2
@@ -239,6 +266,9 @@ usage() {
 case "${1:-}" in
   sync-from-releases)
     sync_from_releases
+    ;;
+  purge-legacy-nightlies)
+    purge_legacy_nightlies
     ;;
   reset)
     reset_catalog

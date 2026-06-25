@@ -12,6 +12,66 @@ import java.util.List;
 public class GetMusicSearchTest {
 
     @Test
+    public void organize_interleavesResultTypes() {
+        List<DeezerSearch.DeezerArtist> artists = new ArrayList<DeezerSearch.DeezerArtist>();
+        artists.add(new DeezerSearch.DeezerArtist(1L, "A1", ""));
+        artists.add(new DeezerSearch.DeezerArtist(2L, "A2", ""));
+
+        List<MusicSearchEntry> flat = new ArrayList<MusicSearchEntry>();
+        flat.add(MusicSearchEntry.deezer(new DeezerResult(10, "T1", "X", "Album One", 100, 200, "", "")));
+        flat.add(MusicSearchEntry.deezer(new DeezerResult(11, "T2", "X", "Album One", 100, 200, "", "")));
+        flat.add(MusicSearchEntry.deezer(new DeezerResult(12, "T3", "Y", "Album Two", 101, 200, "", "")));
+        flat.add(MusicSearchEntry.deezer(new DeezerResult(13, "T4", "Y", "Album Two", 101, 200, "", "")));
+        flat.add(MusicSearchEntry.deezer(new DeezerResult(14, "Loose", "Z", "", 0, 200, "", "")));
+        flat.add(MusicSearchEntry.reach(new SoulseekClient.Result("p", "Music\\FolderA\\a.mp3",
+                1000, 200, 320, true, true, 100, 0)));
+        flat.add(MusicSearchEntry.reach(new SoulseekClient.Result("p", "Music\\FolderA\\b.mp3",
+                1000, 200, 320, true, true, 100, 0)));
+        flat.add(MusicSearchEntry.reach(new SoulseekClient.Result("p", "Music\\FolderB\\c.mp3",
+                1000, 200, 320, true, true, 100, 0)));
+        flat.add(MusicSearchEntry.reach(new SoulseekClient.Result("p", "Music\\FolderB\\d.mp3",
+                1000, 200, 320, true, true, 100, 0)));
+        flat.add(MusicSearchEntry.reach(new SoulseekClient.Result("p", "loose.mp3",
+                1000, 200, 320, true, true, 100, 0)));
+
+        List<MusicSearchEntry> out = GetMusicSearch.organizeWithContainers(artists, flat);
+        if (out.size() < 6) throw new AssertionError("expected diverse rows");
+
+        java.util.Set<MusicSearchEntry.RowKind> headKinds =
+                new java.util.HashSet<MusicSearchEntry.RowKind>();
+        for (int i = 0; i < Math.min(8, out.size()); i++) {
+            headKinds.add(out.get(i).kind);
+        }
+        if (headKinds.size() < 3) throw new AssertionError("first rows not mixed");
+
+        int firstAlbum = -1;
+        int lastArtist = -1;
+        for (int i = 0; i < out.size(); i++) {
+            if (out.get(i).kind == MusicSearchEntry.RowKind.DEEZER_ARTIST) lastArtist = i;
+            if (firstAlbum < 0 && out.get(i).kind == MusicSearchEntry.RowKind.DEEZER_ALBUM) {
+                firstAlbum = i;
+            }
+        }
+        if (lastArtist > firstAlbum && firstAlbum >= 0) {
+            throw new AssertionError("artists blocked before albums");
+        }
+
+        boolean sawArtist = false;
+        boolean sawAlbum = false;
+        boolean sawFolder = false;
+        boolean sawTrack = false;
+        for (MusicSearchEntry e : out) {
+            if (e.kind == MusicSearchEntry.RowKind.DEEZER_ARTIST) sawArtist = true;
+            if (e.kind == MusicSearchEntry.RowKind.DEEZER_ALBUM) sawAlbum = true;
+            if (e.kind == MusicSearchEntry.RowKind.REACH_FOLDER) sawFolder = true;
+            if (e.kind == MusicSearchEntry.RowKind.TRACK) sawTrack = true;
+        }
+        if (!sawArtist || !sawAlbum || !sawFolder || !sawTrack) {
+            throw new AssertionError("missing result kinds");
+        }
+    }
+
+    @Test
     public void organize_includesArtistsAndMixedContainers() {
         List<DeezerSearch.DeezerArtist> artists = new ArrayList<DeezerSearch.DeezerArtist>();
         artists.add(new DeezerSearch.DeezerArtist(1L, "Oasis", ""));
@@ -26,15 +86,15 @@ public class GetMusicSearchTest {
 
         List<MusicSearchEntry> out = GetMusicSearch.organizeWithContainers(artists, flat);
         if (out.isEmpty()) throw new AssertionError("empty");
-        if (out.get(0).kind != MusicSearchEntry.RowKind.DEEZER_ARTIST) {
-            throw new AssertionError("artist first");
-        }
+        boolean hasArtist = false;
         boolean hasAlbum = false;
         boolean hasReach = false;
         for (MusicSearchEntry e : out) {
+            if (e.kind == MusicSearchEntry.RowKind.DEEZER_ARTIST) hasArtist = true;
             if (e.kind == MusicSearchEntry.RowKind.DEEZER_ALBUM) hasAlbum = true;
             if (e.source == MusicSearchEntry.Source.REACH) hasReach = true;
         }
+        if (!hasArtist) throw new AssertionError("artist row");
         if (!hasAlbum) throw new AssertionError("album container");
         if (!hasReach) throw new AssertionError("reach folder or track");
     }

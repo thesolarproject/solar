@@ -41,6 +41,8 @@ public final class SoulseekClient extends Thread {
   private static final int PEER_READ_TIMEOUT_MS = 30000;
   private static final int PEER_CONNECT_MS = 10000;
   private static final int SEARCH_COLLECT_MS = 13000;
+  private static final int FALLBACK_COLLECT_MS = 6000;
+  private static final int FALLBACK_MIN_RESULTS = 8;
   private static final int DOWNLOAD_TRANSFER_TIMEOUT_MS = 300000;
   private static final int DOWNLOAD_PEER_WAIT_MS = 45000;
   private static final int DOWNLOAD_FILE_CONNECT_MS = 45000;
@@ -304,6 +306,8 @@ public final class SoulseekClient extends Thread {
   private int listenPort = 61000;
   private int reportedListenPort = 61000;
   private volatile String activeSearchQuery = "";
+  private volatile String originalSearchQuery = "";
+  private volatile boolean broadFallbackGateActive = false;
   private volatile boolean outboundFTried;
   private final Set<Integer> cantConnectTokens = Collections.synchronizedSet(new HashSet<Integer>());
   private volatile int activeSearchToken;
@@ -759,27 +763,52 @@ public final class SoulseekClient extends Thread {
   private void runSearchQuery(String query) throws Exception {
     ensureConnected();
     if (searchCancelled) return;
-    final int token = searchToken.getAndIncrement();
-    activeSearchToken = token;
+    originalSearchQuery = query.trim();
+    broadFallbackGateActive = false;
     pendingResults.clear();
     seenResultKeys.clear();
+    final int token = searchToken.getAndIncrement();
+    activeSearchToken = token;
     synchronized (serverLock) {
       sendSearchLocked(token, query);
     }
     notifyStatus("Waiting for peers…");
-    long deadline = System.currentTimeMillis() + SEARCH_COLLECT_MS;
-    while (System.currentTimeMillis() < deadline && !searchCancelled) {
-      Thread.sleep(200);
-    }
+    collectSearchWindow(SEARCH_COLLECT_MS);
     if (searchCancelled) return;
-    if (listener != null) listener.onSearchFinished(token, pendingResults.size());
+
+    if (pendingResults.size() < FALLBACK_MIN_RESULTS) {
+      for (String fallbackQ : SoulseekSearchRanking.fallbackQueries(query)) {
+        if (searchCancelled) break;
+        if (pendingResults.size() >= FALLBACK_MIN_RESULTS) break;
+        broadFallbackGateActive = SoulseekSearchRanking.isBroadFallbackQuery(query, fallbackQ);
+        notifyStatus("Widening search…");
+        final int fbToken = searchToken.getAndIncrement();
+        activeSearchToken = fbToken;
+        synchronized (serverLock) {
+          sendSearchLocked(fbToken, fallbackQ);
+        }
+        collectSearchWindow(FALLBACK_COLLECT_MS);
+        broadFallbackGateActive = false;
+      }
+    }
+    broadFallbackGateActive = false;
+
+    if (searchCancelled) return;
+    if (listener != null) listener.onSearchFinished(activeSearchToken, pendingResults.size());
     // #region agent log
     try {
       agentLog("SoulseekClient.search", "search finished", "H3",
-          new JSONObject().put("token", token).put("results", pendingResults.size())
-              .put("q", activeSearchQuery));
+          new JSONObject().put("token", activeSearchToken).put("results", pendingResults.size())
+              .put("q", originalSearchQuery));
     } catch (Exception ignored) {}
     // #endregion
+  }
+
+  private void collectSearchWindow(int collectMs) throws InterruptedException {
+    long deadline = System.currentTimeMillis() + collectMs;
+    while (System.currentTimeMillis() < deadline && !searchCancelled) {
+      Thread.sleep(200);
+    }
   }
 
   private void reportSearchFailure(Throwable err) {
@@ -1526,6 +1555,10 @@ public final class SoulseekClient extends Thread {
     if (pendingResults.size() >= MAX_SEARCH_RESULTS) return;
     String key = resultKey(user, file);
     if (!seenResultKeys.add(key)) return;
+    if (broadFallbackGateActive
+            && !SoulseekSearchRanking.passesBroadFallbackGate(originalSearchQuery, file)) {
+      return;
+    }
     Result res = new Result(user, file, f.size, f.bitrate, f.duration, livePeer,
             f.freeSlot, f.speed, f.queueLength);
     pendingResults.add(res);

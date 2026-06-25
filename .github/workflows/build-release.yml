@@ -53,7 +53,7 @@ jobs:
 
       - name: Install ROM build dependencies
         run: |
-          sudo apt-get update && sudo apt-get install -y unzip zip e2fsprogs curl util-linux kmod openssl
+          sudo apt-get update && sudo apt-get install -y unzip zip e2fsprogs curl util-linux kmod openssl android-sdk-libsparse-utils
           sudo modprobe loop || true
 
       - name: Verify ROM base firmware URLs
@@ -97,6 +97,12 @@ jobs:
           ./solar-rom/scripts/build-rom.sh a --apk "$APK" "$GITHUB_WORKSPACE/dist/rom.zip"
           ./solar-rom/scripts/build-rom.sh b --apk "$APK" "$GITHUB_WORKSPACE/dist/rom_type_b.zip"
           ls -la dist/
+          for z in dist/rom.zip dist/rom_type_b.zip; do
+            test -s "$z" || { echo "::error::Missing or empty $z"; exit 1; }
+          done
+          unzip -l dist/rom.zip | grep -q MT6572_Android_scatter.txt
+          unzip -l dist/rom_type_b.zip | grep -q MT6572_Android_scatter.txt
+          echo "Y1 type A/B ROM zips built and verified"
 
       - name: Prepare release notes
         run: ./solar-rom/scripts/format-release-notes.sh release.json > RELEASE_NOTES.md
@@ -107,6 +113,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           name: Solar ${{ steps.meta.outputs.version_name }} (${{ steps.meta.outputs.short_sha }})
           body_path: RELEASE_NOTES.md
           files: |
