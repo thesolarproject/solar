@@ -29,19 +29,6 @@ Custom firmware and launcher for the **Innioasis Y1** — a full interface repla
 | ![Quick controls](screenshots/Quick%20Controls.png) | ![ACmp3 theme](screenshots/ACmp3%20theme%20%20on%20Solar.png) |
 | **Quick controls** — global context menu (playback, queue, Wi‑Fi) | **ACmp3 theme** — Y1 custom theme applied in Solar |
 
-## Build & install
-
-**Full ROM** — download `rom.zip` (type A) or `rom_type_b.zip` (type B Y1) from [GitHub Releases](https://github.com/thesolarproject/solar/releases) and flash with SP Flash Tool or MTKclient.
-
-**APK only** (rooted device or existing Solar ROM):
-
-```bash
-./scripts/build.sh
-adb install -r app/build/outputs/apk/release/app-release.apk
-```
-
-See [solar-rom/README.md](solar-rom/README.md) for local ROM builds. Development targets **`nightly`**; stable releases ship from **`main`**.
-
 ## Deezer account setup
 
 Reach and **Get Music** can search, stream, and download from [Deezer](https://www.deezer.com) using your account’s **`arl` session cookie** (the same method used by other Deezer download tools). You need a free or Premium Deezer account and a PC on the **same Wi‑Fi** as the Y1.
