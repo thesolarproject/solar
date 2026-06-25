@@ -68,7 +68,7 @@ Head to the [Solar GitHub repository](https://github.com/thesolarproject/solar) 
 
 ### Install in Innioasis updater app:
 
-[1.Download](http://1.Download) the [rom.zip]([http://rom.zip](https://github.com/thesolarproject/solar/releases/latest/download/rom.zip)) file
+1.Download the [rom.zip]([[http://rom.zip](https://github.com/thesolarproject/solar/releases/latest/download/rom.zip)](https://github.com/thesolarproject/solar/releases/latest/download/rom.zip)) file
 
 2. click "Browse Files" in the updater app and select the [rom.zip]([http://rom.zip](https://github.com/thesolarproject/solar/releases/latest/download/rom.zip)) file
 
