@@ -66,7 +66,7 @@ A Demo Account is included for testers, please configure your own to ensure reli
 
 Head to the [Solar GitHub repository](https://github.com/thesolarproject/solar) and download a copy of the ROM from the [Releases](https://github.com/thesolarproject/solar) tab.
 
-# Install in Innioasis updater app:
+### Install in Innioasis updater app:
 
 [1.Download](https://github.com/thesolarproject/solar/releases/latest/download/rom.zip) the [rom.zip](https://github.com/thesolarproject/solar/releases/latest/download/rom.zip) file
 
@@ -74,11 +74,11 @@ Head to the [Solar GitHub repository](https://github.com/thesolarproject/solar) 
 
 3. Installation will begin
 
-# Install with SP Flash Tool 5.1924:
+### Install with SP Flash Tool 5.1924:
 
 Extract [rom.zip](https://github.com/thesolarproject/solar/releases/latest/download/rom.zip) contents and [apply these instructions to the files](https://support.innioasis.com/download/flashing_tutorial/Flashing_tutorial-Y1_EN%20v2.0.7-20241021.pdf) extracted from the zip
 
-# Install with MTKClient
+### Install with MTKClient
 
 1. Install [MTKClient](https://github.com/bkerler/mtkclient)
 2. Download [the latest Solar firmware](https://github.com/thesolarproject/solar/releases/latest) (rom.zip or rom\_type\_b.zip) (Try Type A first, if scrolling doesn't work then try B)
