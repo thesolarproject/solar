@@ -25,7 +25,7 @@ Custom firmware and launcher for the **Innioasis Y1** — a full interface repla
 | ![Soulseek messaging](screenshots/Soulseek%20Messaging.png) | ![Podcasts](screenshots/Podcasts.png) |
 | **Soulseek messaging** | **Podcasts** — subscribe and browse shows |
 | ![Podcast episodes](screenshots/Podcasts%202.png) | ![Artists view](screenshots/Artists%20View.png) |
-| **Podcast episodes** — episode list and downloads | **Artists view** — music library by artist |
+| **Podcast episodes** — episode list and downloads | **Artists view** — music library by artist > album |
 | ![Quick controls](screenshots/Quick%20Controls.png) | ![ACmp3 theme](screenshots/ACmp3%20theme%20%20on%20Solar.png) |
 | **Quick controls** — global context menu (playback, queue, Wi‑Fi) | **ACmp3 theme** — Y1 custom theme applied in Solar |
 
