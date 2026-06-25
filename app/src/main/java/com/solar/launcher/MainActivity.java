@@ -5411,9 +5411,6 @@ public class MainActivity extends Activity {
         } else if (HomeMenuConfig.ID_SOULSEEK.equals(id)) {
             if (!requireInternet(R.string.toast_internet_required)) return;
             openGetMusicScreen();
-        } else if (HomeMenuConfig.ID_DEEZER.equals(id)) {
-            if (!requireInternet(R.string.toast_internet_required)) return;
-            openDeezerScreen();
         } else if (HomeMenuConfig.ID_THEMES.equals(id) || HomeMenuConfig.ID_GET_THEMES.equals(id)) {
             openThemesScreen(null);
         } else if (HomeMenuConfig.ID_MORE.equals(id)) {
@@ -5590,9 +5587,9 @@ public class MainActivity extends Activity {
         changeScreen(screenBackReturnTo);
     }
 
-    /** Device test: Home → Deezer → Back without requiring network login. */
-    void deviceTestDeezerMenuRoundTrip() {
-        changeScreen(STATE_DEEZER);
+    /** Device test: Home → Get Music → Back without requiring network login. */
+    void deviceTestGetMusicMenuRoundTrip() {
+        changeScreen(STATE_SOULSEEK);
         changeScreen(STATE_MENU);
     }
 

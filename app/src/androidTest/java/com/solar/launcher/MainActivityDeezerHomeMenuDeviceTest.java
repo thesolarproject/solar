@@ -11,7 +11,7 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
-/** Regression: leaving Deezer must not duplicate home menu rows. */
+/** Regression: leaving Get Music must not duplicate home menu rows. */
 @RunWith(AndroidJUnit4.class)
 public class MainActivityDeezerHomeMenuDeviceTest {
     @Rule
@@ -19,7 +19,7 @@ public class MainActivityDeezerHomeMenuDeviceTest {
             new ActivityTestRule<>(MainActivity.class, true, false);
 
     @Test
-    public void deezerRoundTrip_homeMenuRowCountStable() throws InterruptedException {
+    public void getMusicRoundTrip_homeMenuRowCountStable() throws InterruptedException {
         Intent launch = new Intent(Intent.ACTION_MAIN);
         launch.setClassName(
                 InstrumentationRegistry.getInstrumentation().getTargetContext(),
@@ -37,7 +37,7 @@ public class MainActivityDeezerHomeMenuDeviceTest {
                 ViewGroup home = (ViewGroup) activity.findViewById(R.id.container_home_menu_items);
                 before[0] = home != null ? home.getChildCount() : -1;
                 expected[0] = activity.deviceTestExpectedHomeMenuRowCount();
-                activity.deviceTestDeezerMenuRoundTrip();
+                activity.deviceTestGetMusicMenuRoundTrip();
                 home = (ViewGroup) activity.findViewById(R.id.container_home_menu_items);
                 after[0] = home != null ? home.getChildCount() : -1;
             }
@@ -45,7 +45,7 @@ public class MainActivityDeezerHomeMenuDeviceTest {
         Thread.sleep(500);
 
         if (after[0] != expected[0]) {
-            throw new AssertionError("home menu rows after Deezer exit: expected="
+            throw new AssertionError("home menu rows after Get Music exit: expected="
                     + expected[0] + " actual=" + after[0] + " before=" + before[0]);
         }
         if (after[0] != before[0] && before[0] == expected[0]) {

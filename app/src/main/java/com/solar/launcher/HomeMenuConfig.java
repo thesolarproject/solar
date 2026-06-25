@@ -16,7 +16,7 @@ public final class HomeMenuConfig {
     public static final String PREF_MORE_ENABLED = "home_more_enabled";
     public static final String PREF_HOME_SCHEMA = "home_menu_schema";
 
-    private static final int HOME_SCHEMA = 3;
+    private static final int HOME_SCHEMA = 4;
 
     public static final String ID_NOW_PLAYING = "now_playing";
     public static final String ID_MUSIC = "music";
@@ -45,12 +45,12 @@ public final class HomeMenuConfig {
 
     /** Solar-only shortcuts after stock rows, in display order. */
     private static final List<String> SOLAR_HOME_EXTRAS = Arrays.asList(
-            ID_PC_UPLOAD, ID_PODCASTS, ID_SOULSEEK, ID_DEEZER, ID_THEMES, ID_APPS);
+            ID_PC_UPLOAD, ID_PODCASTS, ID_SOULSEEK, ID_THEMES, ID_APPS);
 
     /** Default enabled home shortcuts (coming-soon opt-in items omitted). */
     private static final String DEFAULT_ORDER = String.join(",",
             ID_NOW_PLAYING, ID_MUSIC, ID_FM, ID_BLUETOOTH, ID_SETTINGS,
-            ID_PC_UPLOAD, ID_PODCASTS, ID_SOULSEEK, ID_DEEZER);
+            ID_PC_UPLOAD, ID_PODCASTS, ID_SOULSEEK);
 
     /** Fixed home / More menu order — not user-reorderable. */
     private static final List<String> FIXED_HOME_ORDER;
@@ -111,9 +111,19 @@ public final class HomeMenuConfig {
             }
             schema = 2;
         }
-        if (schema < HOME_SCHEMA) {
+        if (schema < 3) {
             saveOrder(prefs, loadHomeOrderIds(prefs));
             saveMoreOrder(prefs, loadMoreOrderIds(prefs));
+            schema = 3;
+        }
+        // ponytail: Deezer home shortcut removed — Get Music covers it; strip legacy prefs.
+        if (schema < HOME_SCHEMA) {
+            List<String> home = new ArrayList<String>(loadHomeOrderIds(prefs));
+            List<String> more = new ArrayList<String>(loadMoreOrderIds(prefs));
+            home.remove(ID_DEEZER);
+            more.remove(ID_DEEZER);
+            saveOrder(prefs, home);
+            saveMoreOrder(prefs, more);
             schema = HOME_SCHEMA;
         }
         if (prefs.getInt(PREF_HOME_SCHEMA, 1) < schema) {
@@ -148,14 +158,26 @@ public final class HomeMenuConfig {
             new Entry(ID_FM, R.string.home_menu_fm, "fm", R.drawable.radio_circle, null, false),
             new Entry(ID_PC_UPLOAD, R.string.home_menu_pc_upload, null, R.drawable.file_sync, "PC Upload", false),
             new Entry(ID_PODCASTS, R.string.home_menu_podcasts, null, R.drawable.music_list, "Podcasts", false),
-            new Entry(ID_SOULSEEK, R.string.home_menu_soulseek, null, R.drawable.music_list, "Reach", false),
-            new Entry(ID_DEEZER, R.string.home_menu_deezer, null, R.drawable.music_list, "Deezer", false),
+            new Entry(ID_SOULSEEK, R.string.home_menu_soulseek, null, R.drawable.music_list, "Get Music", false),
             new Entry(ID_THEMES, R.string.home_menu_themes, "theme", R.drawable.setting_circle, "Themes", false),
             new Entry(ID_VIDEOS, R.string.home_menu_videos, "video", R.drawable.music_list, null, false),
             new Entry(ID_PHOTOS, R.string.home_menu_photos, "photos", R.drawable.music_list, null, false),
             new Entry(ID_AUDIOBOOKS, R.string.home_menu_audiobooks, "audiobooks", R.drawable.music_list, null, false),
             new Entry(ID_APPS, R.string.home_menu_apps, null, R.drawable.setting_circle, "Apps", false),
     };
+
+    /**
+     * Optional {@code homePageConfig} key for Solar-only shortcuts when {@code solarConfig.app*}
+     * is unset. Never maps unrelated Y1 keys (e.g. shuffleQuick).
+     */
+    public static String y1HomeIconFallbackKey(String id) {
+        if (id == null) return null;
+        id = migrateId(id);
+        if (ID_SOULSEEK.equals(id)) return "music";
+        if (ID_PODCASTS.equals(id) || ID_AUDIOBOOKS.equals(id)) return "audiobooks";
+        if (ID_PHOTOS.equals(id)) return "photos";
+        return null;
+    }
 
     private HomeMenuConfig() {}
 

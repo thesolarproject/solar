@@ -79,7 +79,7 @@ public final class ConnectivityHelper {
     public static boolean itemNeedsInternetForDiscovery(String id) {
         if (id == null) return false;
         id = HomeMenuConfig.migrateIdStatic(id);
-        return HomeMenuConfig.ID_SOULSEEK.equals(id) || HomeMenuConfig.ID_DEEZER.equals(id);
+        return HomeMenuConfig.ID_SOULSEEK.equals(id);
     }
 
     /** Set by MainActivity when Reach login fails on an online network. */
@@ -196,9 +196,6 @@ public final class ConnectivityHelper {
         if (HomeMenuConfig.ID_MORE.equals(id)) return true;
         if (HomeMenuConfig.ID_SOULSEEK.equals(id)) {
             return internetAvailable && isGetMusicShortcutAvailable(null);
-        }
-        if (HomeMenuConfig.ID_DEEZER.equals(id)) {
-            return internetAvailable && deezerEnabled && deezerLoginOk;
         }
         if (itemNeedsInternetForDiscovery(id)) return internetAvailable;
         if (itemNeedsLocalNetwork(id)) return localNetworkAvailable;
