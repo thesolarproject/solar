@@ -62,46 +62,33 @@ A Demo Account is included for testers, please configure your own to ensure reli
 - To switch accounts or quality later: **Settings → Deezer → Set up on PC** again.
 - **FLAC** requires Deezer Premium; free accounts should use **MP3**.
 
-# How to get started with Reach
+# How to get started with Solar
 
 Head to the [Solar GitHub repository](https://github.com/thesolarproject/solar) and download a copy of the ROM from the [Releases](https://github.com/thesolarproject/solar) tab.
 
-### Install in Innioasis updater app:
+# Install in Innioasis updater app:
 
-1.Download the [rom.zip]([http://rom.zip](https://github.com/thesolarproject/solar/releases/latest/download/rom.zip)) file
+[1.Download](https://github.com/thesolarproject/solar/releases/latest/download/rom.zip) the [rom.zip](https://github.com/thesolarproject/solar/releases/latest/download/rom.zip) file
 
-2. click "Browse Files" in the updater app and select the [rom.zip]([http://rom.zip](https://github.com/thesolarproject/solar/releases/latest/download/rom.zip)) file
+2. click "Browse Files" in the updater app and select the [rom.zip](https://github.com/thesolarproject/solar/releases/latest/download/rom.zip) file
 
 3. Installation will begin
 
-### Install with SP Flash Tool 5.1924: 
+# Install with SP Flash Tool 5.1924:
 
 Extract [rom.zip](https://github.com/thesolarproject/solar/releases/latest/download/rom.zip) contents and [apply these instructions to the files](https://support.innioasis.com/download/flashing_tutorial/Flashing_tutorial-Y1_EN%20v2.0.7-20241021.pdf) extracted from the zip
 
-### Install with MTKClient
+# Install with MTKClient
 
 1. Install [MTKClient](https://github.com/bkerler/mtkclient)
 2. Download [the latest Solar firmware](https://github.com/thesolarproject/solar/releases/latest) (rom.zip or rom\_type\_b.zip) (Try Type A first, if scrolling doesn't work then try B)
-3. Unpack the archive:
+3. Unpack the archive:mkdir rom && cd rom unzip ../rom.zip
+4. Turn of the device, disconnect from the PC
+5. Start the flashing process:cd rom python ../mtk.py w logo,uboot,bootimg,recovery,android,usrdata logo.bin,lk.bin,boot.img,recovery.img,system.img,userdata.img
+6. Connect the device via USB
+7. Unplug the device when the process has finished
+8. Power on the device
 
-&#8203;
+# How to leave feedback and report issues.
 
-    mkdir rom && cd rom
-    unzip ../rom.zip
-
-1. Turn of the device, disconnect from the PC
-2. Start the flashing process:
-
-&#8203;
-
-    cd rom
-    python ../mtk.py w logo,uboot,bootimg,recovery,android,usrdata logo.bin,lk.bin,boot.img,recovery.img,system.img,userdata.img
-    
-
-1. Connect the device via USB
-2. Unplug the device when the process has finished
-3. Power on the device
-
-### How to leave feedback and report issues.
-
-Please leave your feedback and issue reports in the [Issues Tracker](https://github.com/thesolarproject/solar)
+Please leave your feedback and issue reports in the [Issues Tracker](https://github.com/thesolarproject/solar/issues)
