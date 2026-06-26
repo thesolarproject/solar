@@ -71,6 +71,11 @@ public final class ReachChatRoomsAdapter extends BaseAdapter {
         notifyDataSetChanged();
     }
 
+    public void setAwaitingSearch(String message) {
+        setStatus(message != null ? message
+                : activity.getString(R.string.soulseek_chat_rooms_empty));
+    }
+
     public void setRooms(List<SoulseekWire.RoomEntry> rooms) {
         statusMode = false;
         statusText = "";

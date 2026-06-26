@@ -13,7 +13,7 @@ import static org.junit.Assert.assertTrue;
 public class SoulseekSearchRankingTest {
 
     private static SoulseekClient.Result r(String user, String file, boolean live, boolean slot, int speed) {
-        return new SoulseekClient.Result(user, file, 3 * 1024 * 1024, 192, 180, live, slot, speed);
+        return new SoulseekClient.Result(user, file, 3 * 1024 * 1024, 192, 180, live, slot, speed, 0);
     }
 
     @Test

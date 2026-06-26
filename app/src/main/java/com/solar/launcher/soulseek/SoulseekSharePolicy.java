@@ -77,9 +77,18 @@ public final class SoulseekSharePolicy {
         }
     }
 
-    /** Publish share counts and allow inbound browse/profile when Wi‑Fi + NAT-PMP are OK. */
+    /** Publish share counts on the server when Wi‑Fi + NAT-PMP are OK. */
     public boolean announceShares() {
         return reachMasterEnabled && userEnabled && wifi && peerConnectivityOk;
+    }
+
+    /**
+     * Serve indexed files on inbound peer browse (code 4/36) when sharing is enabled.
+     * Unlike {@link #announceShares()}, does not require NAT — if a peer reached our listen
+     * socket (LAN, pierce, or mapped port), return the share list.
+     */
+    public boolean serveSharesToPeer() {
+        return reachMasterEnabled && userEnabled && wifi;
     }
 
     public boolean acceptNewUploads() {
@@ -96,11 +105,13 @@ public final class SoulseekSharePolicy {
         messagingEnabled = enabled;
     }
 
-    /** Keep server connection only on Wi‑Fi with a mapped listen port. */
+    /** Keep server session on Wi‑Fi; messaging needs server only, not NAT-PMP. */
     public boolean shouldKeepClientAlive() {
-        if (!reachMasterEnabled || !wifi || !peerConnectivityOk) return false;
+        if (!reachMasterEnabled || !wifi) return false;
         if (messagingEnabled) return true;
-        return userEnabled || state == State.DRAINING;
+        // Sharing needs a login + listen socket to probe NAT and answer browse requests.
+        if (userEnabled || state == State.DRAINING) return true;
+        return false;
     }
 
     /** True while NAT-PMP probe has not finished (client may connect once to test). */

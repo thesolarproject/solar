@@ -71,15 +71,56 @@ public class SoulseekWireTest {
         java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
         bos.write(SoulseekWire.packString("Hello bio\nLine two"));
         bos.write(new byte[] {0}); // no picture
-        bos.write(SoulseekWire.packUInt32(0));
-        bos.write(SoulseekWire.packUInt32(0));
-        bos.write(new byte[] {1}); // slots avail
+        bos.write(SoulseekWire.packUInt32(6));
         bos.write(SoulseekWire.packUInt32(2));
+        bos.write(new byte[] {1}); // slots avail
+        bos.write(SoulseekWire.packUInt32(1));
         SoulseekWire.UserInfoResponse info =
                 SoulseekWire.parseUserInfoResponse(bos.toByteArray());
         if (!info.description.startsWith("Hello bio")) {
             throw new AssertionError("descr: " + info.description);
         }
+        if (info.totalUploadSlots != 6) throw new AssertionError("slots " + info.totalUploadSlots);
+        if (info.queueSize != 2) throw new AssertionError("queue " + info.queueSize);
+        if (!info.slotsAvailable) throw new AssertionError("slotsAvail");
+        if (info.uploadAllowed != 1) throw new AssertionError("perm " + info.uploadAllowed);
+    }
+
+    @Test
+    public void packUserInfoResponse_roundtripWithPicture() throws Exception {
+        byte[] pic = new byte[] { (byte) 0xff, (byte) 0xd8, 0x01, 0x02 };
+        byte[] packed = SoulseekWire.packUserInfoResponse("Reach bio", pic, true, 3, 6, 1);
+        SoulseekWire.UserInfoResponse info = SoulseekWire.parseUserInfoResponse(packed);
+        if (!"Reach bio".equals(info.description)) throw new AssertionError("descr");
+        if (info.totalUploadSlots != 6) throw new AssertionError("total");
+        if (info.queueSize != 3) throw new AssertionError("queue");
+        if (!info.slotsAvailable) throw new AssertionError("avail");
+        if (info.uploadAllowed != 1) throw new AssertionError("perm");
+    }
+
+    @Test
+    public void parseGetUserStats_readsFields() throws Exception {
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        bos.write(SoulseekWire.packString("peeruser"));
+        bos.write(SoulseekWire.packUInt32(512000));
+        bos.write(SoulseekWire.packUInt32(42));
+        bos.write(SoulseekWire.packUInt32(0)); // unknown
+        bos.write(SoulseekWire.packUInt32(1200));
+        bos.write(SoulseekWire.packUInt32(15));
+        SoulseekWire.GetUserStatsResponse stats =
+                SoulseekWire.parseGetUserStats(bos.toByteArray());
+        if (!"peeruser".equals(stats.username)) throw new AssertionError("user");
+        if (stats.avgSpeed != 512000) throw new AssertionError("speed");
+        if (stats.uploadNum != 42) throw new AssertionError("uploads");
+        if (stats.files != 1200) throw new AssertionError("files");
+        if (stats.dirs != 15) throw new AssertionError("dirs");
+    }
+
+    @Test
+    public void packGetUserStatsRequest_isUsernameString() throws Exception {
+        byte[] req = SoulseekWire.packGetUserStatsRequest("someone");
+        SoulseekWire.Reader r = new SoulseekWire.Reader(req);
+        if (!"someone".equals(r.readString())) throw new AssertionError("name");
     }
 
     @Test

@@ -28,11 +28,20 @@ final class SolarAdbTest {
                 + " scrollHeight=" + scrollHeight + " childCount=" + childCount);
     }
 
+    static void queueRestoreState(int diskItems, int memItems, int missingPaths) {
+        Log.i(TAG, "queueRestoreState disk=" + diskItems + " mem=" + memItems
+                + " missingPaths=" + missingPaths);
+    }
+
     static void fail(String reason) {
         Log.i(TAG, "FAIL " + reason);
     }
 
     static void pass(String reason) {
         Log.i(TAG, "PASS " + reason);
+    }
+
+    static void avrcpHarness(String phase, String detail) {
+        Log.i(TAG, "avrcp_harness " + phase + " " + detail);
     }
 }

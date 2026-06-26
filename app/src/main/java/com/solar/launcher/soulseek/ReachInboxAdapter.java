@@ -169,7 +169,14 @@ public final class ReachInboxAdapter extends BaseAdapter {
             frame = ReachMessageRow.create(activity, rowHeightPx);
         }
         final String timestamp = SoulseekMessaging.formatTimestamp(row.timestamp);
-        final String preview = ReachMessageFormat.previewText(row.text);
+        String preview = ReachMessageFormat.previewText(row.text);
+        String note = SoulseekPeerNotes.getNoteSync(activity, row.peer);
+        if (note != null && !note.trim().isEmpty()) {
+            String line = note.trim().split("\n")[0];
+            if (line.length() > 24) line = line.substring(0, 24) + "\u2026";
+            preview = "\u2605 " + line + (preview.isEmpty() ? "" : " \u00b7 " + preview);
+        }
+        final String previewFinal = preview;
         final String cc = listener != null ? listener.countryCodeForPeer(row.peer) : null;
         final FrameLayout rowView = frame;
         frame.setTag(ReachMessageRow.TAG_PEER, row.peer);
@@ -177,7 +184,7 @@ public final class ReachInboxAdapter extends BaseAdapter {
             @Override
             public void bind(boolean highlighted) {
                 boolean show = highlighted || position == selectedPosition;
-                ReachMessageRow.bindInboxRow(activity, rowView, row.peer, preview, timestamp,
+                ReachMessageRow.bindInboxRow(activity, rowView, row.peer, previewFinal, timestamp,
                         show, rowWidthPx, rowHeightPx, cc);
             }
         });

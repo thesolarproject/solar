@@ -8,17 +8,20 @@ import org.json.JSONObject;
 import java.io.File;
 import java.io.FileWriter;
 
-/** Debug-mode NDJSON logger — session 5f8a90; pull via adb from /storage/sdcard0/. */
+/** Debug-mode NDJSON logger — session cd7436; pull via adb from /storage/sdcard0/. */
 public final class DebugAgentLog {
     private static final String TAG = "SolarNetDbg";
-    private static final String FILE = "debug-5f8a90.log";
-    private static final String SESSION = "5f8a90";
+    private static final String FILE = "debug-cd7436.log";
+    private static final String SESSION = "cd7436";
     private static final String WORKSPACE_LOG =
-            "/home/deck/Documents/Cursor Workspaces/TheSolarProject/solar/.cursor/debug-5f8a90.log";
+            "/home/deck/Documents/Cursor Workspaces/TheSolarProject/solar/.cursor/debug-cd7436.log";
+    /** ponytail: hot-path sync file I/O was freezing UI — flip true only for short debug sessions. */
+    public static volatile boolean ENABLED = false;
 
     private DebugAgentLog() {}
 
     public static void log(Context ctx, String location, String message, String hypothesisId, JSONObject data) {
+        if (!ENABLED) return;
         try {
             long ts = System.currentTimeMillis();
             JSONObject o = new JSONObject();

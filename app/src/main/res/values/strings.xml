@@ -269,6 +269,7 @@
     <string name="home_menu_bluetooth">Bluetooth</string>
     <string name="home_menu_settings">Settings</string>
     <string name="home_menu_fm">FM Radio</string>
+    <string name="home_menu_radio">Radio</string>
     <string name="home_menu_pc_upload">Wi‑Fi Transfer</string>
     <string name="home_menu_podcasts">Podcasts</string>
     <string name="home_menu_soulseek">Get Music</string>
@@ -556,6 +557,7 @@
     <string name="soulseek_room_list_updated">Room list updated</string>
     <string name="soulseek_room_join_by_name">Join by name</string>
     <string name="soulseek_edit_user_note">Edit user note</string>
+    <string name="soulseek_clear_user_note">Clear user note</string>
     <string name="soulseek_user_note_hint">Note for this user</string>
     <string name="soulseek_user_note_saved">User note saved</string>
     <string name="soulseek_user_note_label">Note</string>
@@ -855,12 +857,18 @@
     <string name="context_hold_back_hint">Hold back button for Options</string>
     <string name="context_quick_power">Power</string>
     <string name="context_quick_queue">Queue</string>
+    <string name="queue_tutorial_line_ok">OK — play this track.</string>
+    <string name="queue_tutorial_line_hold">Hold OK — pick up the track, then scroll to move it in the queue.</string>
+    <string name="queue_tutorial_got_it">Got it</string>
     <string name="context_tier_wifi">Wi-Fi</string>
     <string name="context_wifi_on">Wi-Fi On</string>
     <string name="context_wifi_off">Wi-Fi Off</string>
     <string name="context_wifi_busy">Wi-Fi…</string>
     <string name="context_wifi_connected">Connected</string>
     <string name="context_tier_bluetooth">Bluetooth</string>
+    <string name="context_bluetooth_on">Bluetooth On</string>
+    <string name="context_bluetooth_off">Bluetooth Off</string>
+    <string name="context_bluetooth_busy">Bluetooth…</string>
     <string name="context_shutdown_title">Shut down?</string>
     <string name="context_shutdown_message">The device will power off.</string>
     <string name="context_shutdown_confirm">Shut down</string>
@@ -946,6 +954,11 @@
     <string name="settings_sub_debug">Debug</string>
     <string name="settings_debug_jj_themes">JJ theme engine (experimental)</string>
     <string name="settings_debug_jj_themes_hint">Use themes from /JJ_Themes/ instead of Y1 Themes/</string>
+    <string name="playlist_stream_save_failed">Could not save stream track to playlist: %1$s</string>
+    <string name="settings_debug_show_error_toasts">Show error toasts</string>
+    <string name="settings_debug_show_error_toasts_hint">Soulseek and Deezer download warnings</string>
+    <string name="context_wifi_scanning">Scanning for networks…</string>
+    <string name="context_bluetooth_scanning">Scanning for devices…</string>
     <string name="dialog_clear_cache_title">Clear Cache</string>
     <string name="dialog_clear_cache_message">Delete all downloaded album covers to free up storage space?</string>
     <string name="dialog_clear_cache_confirm">Clear</string>
@@ -969,6 +982,7 @@
     <string name="toast_requires_wifi">Connect to Wi‑Fi or a local network first</string>
     <string name="toast_network_required">Connect to Wi‑Fi or a local network first</string>
     <string name="toast_fm_unavailable">FM Radio not available</string>
+    <string name="radio_fm_play_error">Could not start FM radio</string>
     <string name="toast_wifi_connecting">Connecting to %1$s…</string>
     <string name="toast_bt_turning_off">Turning Bluetooth OFF…</string>
     <string name="toast_bt_turning_on">Turning Bluetooth ON…</string>
@@ -988,4 +1002,88 @@
     <string name="toast_bg_cleared">Custom background cleared.</string>
     <string name="toast_bg_none">No custom background set.</string>
     <string name="toast_bg_applied">Background Applied!</string>
+
+    <!-- Radio / Video / Photos (MediaSuiteHost) -->
+    <string name="status_radio">Radio</string>
+    <string name="status_radio_fm">Radio: FM</string>
+    <string name="status_radio_internet">Radio: Internet</string>
+    <string name="status_videos">Videos</string>
+    <string name="status_video_player">Video</string>
+    <string name="status_photos">Photos</string>
+    <string name="status_photo_viewer">Photo</string>
+
+    <string name="radio_back_home">〈 Radio</string>
+    <string name="radio_fm_row">FM Radio</string>
+    <string name="radio_internet_row">Internet Radio</string>
+    <string name="radio_fm_tune_manual">Tune manually</string>
+    <string name="radio_fm_scan">Scan stations</string>
+    <string name="radio_fm_presets">Presets</string>
+    <string name="radio_fm_recordings">FM Recordings folder</string>
+    <string name="radio_fm_unavailable">FM hardware not available on this device.</string>
+    <string name="radio_fm_no_presets">No presets saved yet.</string>
+    <string name="radio_fm_scanning">Scanning FM…</string>
+    <string name="radio_fm_scan_starting">Scanning band…</string>
+    <string name="radio_fm_scan_found">Found %1$s MHz</string>
+    <string name="radio_fm_scan_done">Scan complete — pick a preset or tune manually.</string>
+    <string name="radio_fm_scan_error">Scan failed: %1$s</string>
+    <string name="radio_fm_recordings_missing">Could not open FM Recordings folder.</string>
+
+    <string name="radio_net_favorites">Favorites</string>
+    <string name="radio_net_search">Search</string>
+    <string name="radio_net_search_hint">Use country and tag browse for now.</string>
+    <string name="radio_net_loading_countries">Loading countries…</string>
+    <string name="radio_net_loading_states">Loading states…</string>
+    <string name="radio_net_loading_tags">Loading tags…</string>
+    <string name="radio_net_loading_stations">Loading stations…</string>
+    <string name="radio_net_load_error">Could not load: %1$s</string>
+    <string name="radio_net_no_countries">No countries returned.</string>
+    <string name="radio_net_no_tags">No tags for this region.</string>
+    <string name="radio_net_no_stations">No stations found.</string>
+    <string name="radio_net_no_favorites">No favorite stations yet.</string>
+    <string name="radio_net_country_header">%1$s</string>
+    <string name="radio_net_tags_header">Tags — %1$s</string>
+    <string name="radio_net_stations_header">Stations — %1$s</string>
+    <string name="radio_net_skip_states">No states — loading tags…</string>
+    <string name="radio_net_play_error">Could not play station.</string>
+
+    <string name="radio_ctx_save_preset">Save preset</string>
+    <string name="radio_ctx_scan">Scan band</string>
+    <string name="radio_ctx_open_fm_browse">FM browse</string>
+    <string name="radio_ctx_add_favorite">Add favorite</string>
+    <string name="radio_ctx_remove_favorite">Remove favorite</string>
+    <string name="radio_ctx_open_net_browse">Internet browse</string>
+    <string name="radio_ctx_preset_saved">Preset saved.</string>
+    <string name="radio_ctx_favorite_added">Added to favorites.</string>
+    <string name="radio_ctx_favorite_removed">Removed from favorites.</string>
+
+    <string name="video_all_videos">All videos</string>
+    <string name="video_folder_row">Folder: %1$s</string>
+    <string name="video_folder_header">Folder: %1$s</string>
+    <string name="video_none_found">No videos on MicroSD.</string>
+    <string name="video_none_in_folder">No videos in this folder.</string>
+    <string name="video_play_error">Could not play video.</string>
+
+    <string name="settings_video">Video</string>
+    <string name="settings_sub_video">Settings: Video</string>
+    <string name="video_settings_sleep_during_playback">Sleep screen during playback</string>
+
+    <string name="photo_no_folders">No photo folders found.</string>
+    <string name="photo_folder_header">Folder: %1$s</string>
+    <string name="photo_none_in_folder">No images in this folder.</string>
+    <string name="photo_wallpaper_failed">Could not set wallpaper.</string>
+
+    <string name="settings_radio">Radio</string>
+    <string name="settings_sub_radio">Settings: Radio</string>
+    <string name="settings_sub_radio_fm_band">Settings: Radio / FM band</string>
+    <string name="settings_sub_radio_internet_country">Settings: Radio / Country</string>
+    <string name="radio_settings_fm_band">FM band region</string>
+    <string name="radio_settings_internet_country">Internet radio country</string>
+    <string name="radio_settings_auto_region">Auto-detect FM region</string>
+    <string name="radio_settings_buffer_sd">Buffer radio on SD card</string>
+    <string name="radio_band_us">United States / Canada</string>
+    <string name="radio_band_eu">Europe</string>
+    <string name="radio_band_jp">Japan</string>
+    <string name="radio_band_au">Australia / New Zealand</string>
+    <string name="radio_band_kr">Korea</string>
+    <string name="radio_band_ru">Russia</string>
 </resources>

@@ -566,6 +566,16 @@ public class ThemeManager {
         return 0x88000000;
     }
 
+    /** Solid home-menu column fill — never stretch menuItemBackground (paints stock row labels). */
+    public static int getMenuPanelSolidColor() {
+        JSONObject menu = getCurrentTheme().root.optJSONObject("menuConfig");
+        if (menu != null) {
+            int c = parseColorOpt(menu, "menuBackgroundColor");
+            if (c != Integer.MIN_VALUE) return c | 0xFF000000;
+        }
+        return 0xFF000000;
+    }
+
     public static void setStatusBarMatchItemText(boolean match) {
         statusBarMatchItemText = match;
     }
@@ -998,6 +1008,17 @@ public class ThemeManager {
         if (solar != null && solar.has("button_radius")) return solar.optInt("button_radius", 10);
         if (t.root.has("button_radius")) return t.root.optInt("button_radius", 10);
         return 10;
+    }
+
+    /** Rounded panel + external stroke — shared by context menu and video transport overlay. */
+    public static android.graphics.drawable.Drawable buildContextMenuPanelDrawable(Context context) {
+        float density = context.getResources().getDisplayMetrics().density;
+        float r = getButtonRadius() * 2f * density;
+        android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+        g.setColor(0xE0202022);
+        g.setCornerRadius(r);
+        g.setStroke(Math.max(1, (int) density), 0x66FFFFFF);
+        return g;
     }
 
     public static boolean hasThemeWallpaper() {

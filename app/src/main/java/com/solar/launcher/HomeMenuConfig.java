@@ -18,13 +18,15 @@ public final class HomeMenuConfig {
     public static final String PREF_MORE_ENABLED = "home_more_enabled";
     public static final String PREF_HOME_SCHEMA = "home_menu_schema";
 
-    private static final int HOME_SCHEMA = 4;
+    private static final int HOME_SCHEMA = 5;
 
     public static final String ID_NOW_PLAYING = "now_playing";
     public static final String ID_MUSIC = "music";
     public static final String ID_BLUETOOTH = "bluetooth";
     public static final String ID_SETTINGS = "settings";
+    /** @deprecated use {@link #ID_RADIO} */
     public static final String ID_FM = "fm";
+    public static final String ID_RADIO = "radio";
     public static final String ID_PC_UPLOAD = "pc_upload";
     public static final String ID_PODCASTS = "podcasts";
     public static final String ID_SOULSEEK = "soulseek";
@@ -42,7 +44,7 @@ public final class HomeMenuConfig {
 
     /** Stock Y1 row order (theme homePageConfig keys align to these slots). */
     public static final List<String> STOCK_Y1_HOME_ORDER = Arrays.asList(
-            ID_NOW_PLAYING, ID_MUSIC, ID_VIDEOS, ID_AUDIOBOOKS, ID_PHOTOS, ID_FM, ID_BLUETOOTH,
+            ID_NOW_PLAYING, ID_MUSIC, ID_VIDEOS, ID_AUDIOBOOKS, ID_PHOTOS, ID_RADIO, ID_BLUETOOTH,
             ID_SETTINGS);
 
     /** Solar-only shortcuts after stock rows, in display order. */
@@ -51,7 +53,7 @@ public final class HomeMenuConfig {
 
     /** Default enabled home shortcuts (coming-soon opt-in items omitted). */
     private static final String DEFAULT_ORDER = String.join(",",
-            ID_NOW_PLAYING, ID_MUSIC, ID_FM, ID_BLUETOOTH, ID_SETTINGS,
+            ID_NOW_PLAYING, ID_MUSIC, ID_RADIO, ID_BLUETOOTH, ID_SETTINGS,
             ID_PC_UPLOAD, ID_PODCASTS, ID_SOULSEEK);
 
     /** Fixed home / More menu order — not user-reorderable. */
@@ -94,10 +96,10 @@ public final class HomeMenuConfig {
     }
 
     private static final Set<String> OPT_IN = new HashSet<String>(Arrays.asList(
-            ID_APPS, ID_THEMES, ID_VIDEOS, ID_PHOTOS, ID_AUDIOBOOKS));
+            ID_APPS, ID_THEMES, ID_AUDIOBOOKS));
 
     private static final Set<String> COMING_SOON = new HashSet<String>(Arrays.asList(
-            ID_VIDEOS, ID_PHOTOS, ID_AUDIOBOOKS));
+            ID_AUDIOBOOKS));
 
     public static boolean isComingSoon(String id) {
         return id != null && COMING_SOON.contains(migrateId(id));
@@ -118,14 +120,30 @@ public final class HomeMenuConfig {
             saveMoreOrder(prefs, loadMoreOrderIds(prefs));
             schema = 3;
         }
-        // ponytail: Deezer home shortcut removed — Get Music covers it; strip legacy prefs.
-        if (schema < HOME_SCHEMA) {
+        // ponytail: schema 4 removed Deezer home tile; schema 5 adds Radio + enables Videos/Photos.
+        if (schema < 4) {
             List<String> home = new ArrayList<String>(loadHomeOrderIds(prefs));
             List<String> more = new ArrayList<String>(loadMoreOrderIds(prefs));
             home.remove(ID_DEEZER);
             more.remove(ID_DEEZER);
             saveOrder(prefs, home);
             saveMoreOrder(prefs, more);
+            schema = 4;
+        }
+        if (schema < HOME_SCHEMA) {
+            List<String> home = new ArrayList<String>(loadHomeOrderIds(prefs));
+            List<String> more = new ArrayList<String>(loadMoreOrderIds(prefs));
+            int fmIdx = home.indexOf(ID_FM);
+            if (fmIdx >= 0) home.set(fmIdx, ID_RADIO);
+            else if (!home.contains(ID_RADIO)) home.add(ID_RADIO);
+            home.remove(ID_FM);
+            int fmMore = more.indexOf(ID_FM);
+            if (fmMore >= 0) more.set(fmMore, ID_RADIO);
+            more.remove(ID_FM);
+            saveOrder(prefs, home);
+            saveMoreOrder(prefs, more);
+            setShortcutEnabled(prefs, ID_VIDEOS, true);
+            setShortcutEnabled(prefs, ID_PHOTOS, true);
             schema = HOME_SCHEMA;
         }
         if (prefs.getInt(PREF_HOME_SCHEMA, 1) < schema) {
@@ -162,7 +180,7 @@ public final class HomeMenuConfig {
             new Entry(ID_MUSIC, R.string.home_menu_music, "music", R.drawable.music_list, null, false),
             new Entry(ID_BLUETOOTH, R.string.home_menu_bluetooth, "bluetooth", R.drawable.bluetooth_circle, null, false),
             new Entry(ID_SETTINGS, R.string.home_menu_settings, "settings", R.drawable.setting_circle, null, true),
-            new Entry(ID_FM, R.string.home_menu_fm, "fm", R.drawable.radio_circle, null, false),
+            new Entry(ID_RADIO, R.string.home_menu_radio, "fm", R.drawable.radio_circle, "Radio", false),
             new Entry(ID_PC_UPLOAD, R.string.home_menu_pc_upload, null, R.drawable.file_sync, "PC Upload", false),
             new Entry(ID_PODCASTS, R.string.home_menu_podcasts, null, R.drawable.music_list, "Podcasts", false),
             new Entry(ID_SOULSEEK, R.string.home_menu_soulseek, null, R.drawable.music_list, "Get Music", false),
@@ -465,6 +483,7 @@ public final class HomeMenuConfig {
 
     static String migrateId(String id) {
         if (LEGACY_GET_THEMES.equals(id)) return ID_THEMES;
+        if (ID_FM.equals(id)) return ID_RADIO;
         return id;
     }
 

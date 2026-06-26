@@ -39,6 +39,10 @@ public final class ThemedContextMenu {
     private static final int TAG_QUEUE_CONFIRM = 0x70ca0015;
     private static final int TAG_RIBBON_SLOT = 0x70ca0014;
     private static final int TAG_QUEUE_DROP = 0x70ca0014;
+    private static final int TAG_DECOR = 0x70ca0016;
+
+    /** Context-menu row: muted label + indeterminate spinner (Wi‑Fi/BT scan footer). */
+    public static final String ICON_ROW_LOADING = "__loading__";
 
     public static final class QueueRowSpec {
         public final String title;
@@ -149,6 +153,10 @@ public final class ThemedContextMenu {
     private int cachedQueueRowBgWidth;
     private static final int QUEUE_MOVE_RIBBON_ANIM_MS = 130;
     private static final int QUEUE_MOVE_RIBBON_ENTER_MS = 150;
+    /** Wi-Fi scan row refresh — staggered fade/slide like queue move ribbon. */
+    private static final int WIFI_TICKER_STAGGER_MS = 28;
+    /** Rows below this index never ticker-animate (toggle + connected / paired sections). */
+    private int networkTierAnimateFromIndex = Integer.MAX_VALUE;
     private boolean queueMoveRibbonActive = false;
     private boolean queueMoveRibbonAnimating = false;
     private int queueBrowseWindowStart = 0;
@@ -326,22 +334,32 @@ public final class ThemedContextMenu {
         if (labels == null || labels.length == 0) return;
         submenuTierOpen = true;
         optionsListVisible = true;
-        focusIndex = firstFocusableIndex(0);
-        focusZone = FocusZone.TIER_CONTENT;
         ensureSubmenuListVisible();
-        refreshAll();
-        scrollFocusIntoView();
-        requestOverlayFocus();
+        enterMenuListFocus(firstFocusableIndex(0));
         if (overlay != null) {
             overlay.post(new Runnable() {
                 @Override
                 public void run() {
                     ensureSubmenuListVisible();
+                    updateListHeightToContent();
                     scrollFocusIntoView();
                     requestOverlayFocus();
                 }
             });
         }
+    }
+
+    /** Focus a specific tier list row (queue tutorial "Got it" below scrollable intro). */
+    public void focusTierRow(int index) {
+        if (labels == null || labels.length == 0) return;
+        submenuTierOpen = true;
+        optionsListVisible = true;
+        enterMenuListFocus(index);
+        focusZone = FocusZone.TIER_CONTENT;
+        ensureSubmenuListVisible();
+        refreshAll();
+        scrollFocusIntoView();
+        requestOverlayFocus();
     }
 
     /** Reload root action rows but keep the list collapsed on the Options title. */
@@ -380,6 +398,17 @@ public final class ThemedContextMenu {
         }
         int idx = focusIndex >= 0 ? clampFocusableIndex(focusIndex) : firstFocusableIndex(0);
         enterMenuListFocus(idx);
+    }
+
+    /** Wheel down from last quick chip — enter the action list below. */
+    public void enterListFromLastQuickChip() {
+        if (focusZone != FocusZone.QUICK_BAR) return;
+        if (quickFocusIndex != lastVisibleQuickIndex()) return;
+        enterListFromQuickBar();
+    }
+
+    public boolean isOnLastVisibleQuickChip() {
+        return focusZone == FocusZone.QUICK_BAR && quickFocusIndex == lastVisibleQuickIndex();
     }
 
     /** Keep key events on the overlay after panel morphs (tiers, volume expand, Options title). */
@@ -1316,9 +1345,9 @@ public final class ThemedContextMenu {
             panel.addView(sub);
         }
 
-        itemsScroll = new ScrollView(activity);
+        itemsScroll = new Y1SafeScrollView(activity);
         itemsScroll.setFillViewport(false);
-        itemsScroll.setVerticalScrollBarEnabled(false);
+        Y1ScrollIndicators.applyVerticalScrollView(itemsScroll);
         maxListHeightPx = (int) (activity.getResources().getDisplayMetrics().heightPixels * 0.42f);
         itemsHost = new LinearLayout(activity);
         itemsHost.setOrientation(LinearLayout.VERTICAL);
@@ -1365,7 +1394,11 @@ public final class ThemedContextMenu {
             } else {
                 String iconKey = itemIconKeys != null && i < itemIconKeys.length ? itemIconKeys[i] : null;
                 String stateText = itemStateTexts != null && i < itemStateTexts.length ? itemStateTexts[i] : null;
-                itemsHost.addView(createRow(labels[i], iconKey, stateText));
+                if (ICON_ROW_LOADING.equals(iconKey)) {
+                    itemsHost.addView(createLoadingRow(labels[i]));
+                } else {
+                    itemsHost.addView(createRow(labels[i], iconKey, stateText));
+                }
             }
         }
     }
@@ -1454,6 +1487,294 @@ public final class ThemedContextMenu {
         }
         refreshAll();
         return true;
+    }
+
+  private View buildListRowView(int i, String[] itemIconKeys, String[] itemStateTexts) {
+        boolean header = rowHeaders != null && i < rowHeaders.length && rowHeaders[i];
+        if (header && scrollableDetailHeader && i == 0) {
+            detailHeaderText = labels[i] != null ? labels[i] : "";
+            return createScrollableDetailHeaderRow();
+        }
+        if (header) {
+            String iconKey = itemIconKeys != null && i < itemIconKeys.length ? itemIconKeys[i] : null;
+            return createHeaderRow(labels[i], iconKey);
+        }
+        String iconKey = itemIconKeys != null && i < itemIconKeys.length ? itemIconKeys[i] : null;
+        String stateText = itemStateTexts != null && i < itemStateTexts.length ? itemStateTexts[i] : null;
+        if (ICON_ROW_LOADING.equals(iconKey)) {
+            return createLoadingRow(labels[i]);
+        }
+        return createRow(labels[i], iconKey, stateText);
+    }
+
+    private void animateWifiTickerRowIn(final View row, int delayMs) {
+        if (row == null || itemsHost == null) return;
+        row.setAlpha(0.38f);
+        row.setTranslationY(rowHeightPx > 0 ? rowHeightPx * 0.22f : 8f);
+        itemsHost.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                row.animate().cancel();
+                row.animate()
+                        .alpha(1f)
+                        .translationY(0f)
+                        .setDuration(QUEUE_MOVE_RIBBON_ENTER_MS)
+                        .start();
+            }
+        }, delayMs);
+    }
+
+    private void pulseWifiTickerRow(View row) {
+        if (row == null) return;
+        row.animate().cancel();
+        row.setTranslationY(0f);
+        row.animate()
+                .alpha(0.48f)
+                .setDuration(70)
+                .withEndAction(new Runnable() {
+                    @Override
+                    public void run() {
+                        row.animate()
+                                .alpha(1f)
+                                .setDuration(QUEUE_MOVE_RIBBON_ENTER_MS)
+                                .start();
+                    }
+                })
+                .start();
+    }
+
+    /**
+     * Wi-Fi tier scan — same row order: update signal/state with a soft timetable pulse (no full rebuild).
+     */
+    public boolean refreshWifiTierInPlace(String[] itemLabels, String[] itemIconKeys,
+            String[] itemStateTexts, boolean[] itemHeaders) {
+        if (itemsHost == null || labels == null || itemLabels == null
+                || labels.length != itemLabels.length) {
+            return false;
+        }
+        for (int i = 0; i < labels.length; i++) {
+            if (!labels[i].equals(itemLabels[i])) {
+                // ponytail: toggle label (On/Off) may change while scan rows stay put.
+                if (i != 0 || isHeaderRow(0)) return false;
+            }
+            boolean hdr = isHeaderRow(i);
+            boolean newHdr = itemHeaders != null && i < itemHeaders.length && itemHeaders[i];
+            if (hdr != newHdr) return false;
+        }
+        this.labels = itemLabels;
+        this.rowHeaders = itemHeaders;
+        for (int i = 0; i < itemsHost.getChildCount() && i < labels.length; i++) {
+            if (isHeaderRow(i)) continue;
+            if (isStableNetworkRow(i)) continue;
+            View row = itemsHost.getChildAt(i);
+            if (row == null) continue;
+            String st = itemStateTexts != null && i < itemStateTexts.length ? itemStateTexts[i] : null;
+            TextView state = (TextView) row.findViewWithTag(TAG_STATE);
+            boolean changed = false;
+            if (state != null) {
+                String prior = state.getVisibility() == View.VISIBLE ? state.getText().toString() : "";
+                String next = st != null ? st : "";
+                if (!prior.equals(next)) {
+                    changed = true;
+                    if (next.length() > 0) {
+                        state.setText(next);
+                        state.setVisibility(View.VISIBLE);
+                    } else {
+                        state.setText("");
+                        state.setVisibility(View.GONE);
+                    }
+                }
+            }
+            if (changed) pulseWifiTickerRow(row);
+        }
+        // Toggle row label (Wi-Fi On/Off) may change without row-count churn.
+        if (labels.length > 0 && itemLabels.length > 0
+                && !labels[0].equals(itemLabels[0]) && itemsHost.getChildCount() > 0) {
+            updateRowLabelText(itemsHost.getChildAt(0), itemLabels[0]);
+        }
+        refreshAll();
+        return true;
+    }
+
+    /** Toggle, connected/paired blocks, and section headers above the scan list stay still. */
+    public void setNetworkTierAnimateFromIndex(int index) {
+        networkTierAnimateFromIndex = index >= 0 ? index : Integer.MAX_VALUE;
+    }
+
+    private boolean isStableNetworkRow(int index) {
+        return index < networkTierAnimateFromIndex;
+    }
+
+    private String rowStateTextFromView(View row) {
+        if (row == null) return "";
+        Object tag = row.getTag(TAG_STATE);
+        if (tag instanceof TextView) {
+            TextView state = (TextView) tag;
+            return state.getVisibility() == View.VISIBLE ? state.getText().toString() : "";
+        }
+        TextView state = (TextView) row.findViewWithTag(TAG_STATE);
+        if (state == null) return "";
+        return state.getVisibility() == View.VISIBLE ? state.getText().toString() : "";
+    }
+
+    private void updateRowLabelText(View row, String text) {
+        if (row == null || text == null) return;
+        Object tag = row.getTag(TAG_LABEL);
+        if (tag instanceof TextView) {
+            ((TextView) tag).setText(text);
+        }
+    }
+
+    private boolean isDecorRow(View row) {
+        return row != null && Boolean.TRUE.equals(row.getTag(TAG_DECOR));
+    }
+
+    private int findOldRowForLabel(String label, boolean header, boolean[] used, String[] oldLabels,
+            boolean[] oldHeaders) {
+        if (oldLabels == null) return -1;
+        for (int j = 0; j < oldLabels.length; j++) {
+            if (used[j]) continue;
+            if (!oldLabels[j].equals(label)) continue;
+            boolean oldHdr = oldHeaders != null && j < oldHeaders.length && oldHeaders[j];
+            if (oldHdr != header) continue;
+            return j;
+        }
+        return -1;
+    }
+
+    /**
+     * Wi-Fi / BT tier — reuse stable rows; ticker only for new or materially changed scan rows.
+     */
+    public void mergeNetworkTierListDiff(String title, String[] itemLabels, String[] itemIconKeys,
+            String[] itemStateTexts, boolean[] itemHeaders, Listener listener, boolean resetFocus) {
+        String preserveLabel = null;
+        if (!resetFocus && labels != null && focusIndex >= 0 && focusIndex < labels.length
+                && !isHeaderRow(focusIndex)) {
+            preserveLabel = labels[focusIndex];
+        }
+        FocusZone priorZone = focusZone;
+        String[] oldLabels = labels != null ? labels : new String[0];
+        boolean[] oldHeaders = rowHeaders;
+        int oldChildCount = itemsHost != null ? itemsHost.getChildCount() : 0;
+        View[] oldViews = new View[oldChildCount];
+        for (int i = 0; i < oldChildCount; i++) {
+            oldViews[i] = itemsHost.getChildAt(i);
+        }
+        boolean[] oldUsed = new boolean[oldChildCount];
+
+        this.labels = itemLabels != null ? itemLabels : new String[0];
+        this.rowHeaders = itemHeaders;
+        this.listener = listener;
+        optionsListVisible = this.labels.length > 0;
+        if (resetFocus) {
+            this.focusIndex = firstFocusableIndex(0);
+            focusZone = FocusZone.TIER_CONTENT;
+        } else if (preserveLabel != null) {
+            int idx = indexForFocusableLabel(preserveLabel);
+            this.focusIndex = idx >= 0 ? idx : clampFocusableIndex(focusIndex);
+            if (priorZone == FocusZone.QUICK_BAR || priorZone == FocusZone.OPTIONS_TITLE) {
+                focusZone = priorZone;
+            } else {
+                focusZone = FocusZone.TIER_CONTENT;
+            }
+        } else {
+            this.focusIndex = clampFocusableIndex(focusIndex);
+            if (priorZone == FocusZone.QUICK_BAR || priorZone == FocusZone.OPTIONS_TITLE) {
+                focusZone = priorZone;
+            } else {
+                focusZone = FocusZone.TIER_CONTENT;
+            }
+        }
+        if (titleRow != null) setContextTitleBarVisible(true);
+        prepareListPanelVisible();
+        if (itemsHost != null) {
+            itemsHost.removeAllViews();
+            int stagger = 0;
+            for (int i = 0; i < labels.length; i++) {
+                boolean hdr = itemHeaders != null && i < itemHeaders.length && itemHeaders[i];
+                String label = labels[i];
+                String newState = itemStateTexts != null && i < itemStateTexts.length
+                        && itemStateTexts[i] != null ? itemStateTexts[i] : "";
+                String iconKey = itemIconKeys != null && i < itemIconKeys.length
+                        ? itemIconKeys[i] : null;
+
+                View row = null;
+                boolean animateIn = false;
+
+                if (!resetFocus && i == 0 && !hdr && oldChildCount > 0 && oldViews[0] != null) {
+                    row = oldViews[0];
+                    oldUsed[0] = true;
+                    updateRowLabelText(row, label);
+                    updateRowStateQuiet(row, newState);
+                } else if (!resetFocus) {
+                    int oldIdx = findOldRowForLabel(label, hdr, oldUsed, oldLabels, oldHeaders);
+                    if (oldIdx >= 0 && oldIdx < oldChildCount) {
+                        row = oldViews[oldIdx];
+                        oldUsed[oldIdx] = true;
+                        String oldState = rowStateTextFromView(row);
+                        boolean labelSame = oldLabels[oldIdx].equals(label);
+                        boolean stateSame = newState.equals(oldState);
+                        if (labelSame && stateSame) {
+                            animateIn = false;
+                        } else if (isStableNetworkRow(i) || hdr || isDecorRow(row)) {
+                            updateRowLabelText(row, label);
+                            updateRowStateQuiet(row, newState);
+                            animateIn = false;
+                        } else if (labelSame && !stateSame) {
+                            updateRowStateQuiet(row, newState);
+                            pulseWifiTickerRow(row);
+                            animateIn = false;
+                        } else {
+                            row = buildListRowView(i, itemIconKeys, itemStateTexts);
+                            animateIn = true;
+                        }
+                    } else {
+                        row = buildListRowView(i, itemIconKeys, itemStateTexts);
+                        animateIn = !hdr && !isStableNetworkRow(i) && !isDecorRow(row);
+                    }
+                }
+                if (row == null) {
+                    row = buildListRowView(i, itemIconKeys, itemStateTexts);
+                    animateIn = !resetFocus && !hdr && !isStableNetworkRow(i) && !isDecorRow(row);
+                }
+                if (row.getParent() instanceof ViewGroup) {
+                    ((ViewGroup) row.getParent()).removeView(row);
+                }
+                itemsHost.addView(row);
+                if (!resetFocus && animateIn) {
+                    animateWifiTickerRowIn(row, stagger);
+                    stagger += WIFI_TICKER_STAGGER_MS;
+                }
+            }
+        }
+        refreshAll();
+        updateListHeightToContent();
+        if (focusZone == FocusZone.TIER_CONTENT) {
+            scrollFocusIntoView();
+        }
+        requestOverlayFocus();
+    }
+
+    private void updateRowStateQuiet(View row, String stateText) {
+        if (row == null) return;
+        Object tag = row.getTag(TAG_STATE);
+        TextView state = tag instanceof TextView ? (TextView) tag
+                : (TextView) row.findViewWithTag(TAG_STATE);
+        if (state == null) return;
+        if (stateText != null && stateText.length() > 0) {
+            state.setText(stateText);
+            state.setVisibility(View.VISIBLE);
+        } else {
+            state.setText("");
+            state.setVisibility(View.GONE);
+        }
+    }
+
+    /** @deprecated use {@link #mergeNetworkTierListDiff} */
+    public void replaceWifiTierWithTicker(String title, String[] itemLabels, String[] itemIconKeys,
+            String[] itemStateTexts, boolean[] itemHeaders, Listener listener, boolean resetFocus) {
+        mergeNetworkTierListDiff(title, itemLabels, itemIconKeys, itemStateTexts, itemHeaders,
+                listener, resetFocus);
     }
 
     public void replaceQueueContent(String title, QueueRowSpec[] rows, int focusIndex, int moveFrom) {
@@ -2314,7 +2635,19 @@ public final class ThemedContextMenu {
         if (target <= 0) {
             if (queueMode) {
                 target = queueRowSlotHeight() * Math.max(1, QUEUE_MOVE_VISIBLE_ROWS);
-            } else {
+            } else if (labels != null && labels.length > 0 && optionsListVisible) {
+                // ponytail: first OK on a quick tab can run before row layout — estimate from label count.
+                int rowSlot = rowHeightPx > 0 ? rowHeightPx + 2 : 0;
+                if (rowSlot > 0) {
+                    int rows = 0;
+                    for (int i = 0; i < labels.length; i++) {
+                        if (!isHeaderRow(i)) rows++;
+                    }
+                    target = Math.max(rowSlot, rows * rowSlot);
+                    if (maxListHeightPx > 0) target = Math.min(target, maxListHeightPx);
+                }
+            }
+            if (target <= 0) {
                 itemsScroll.setVisibility(View.GONE);
                 ViewGroup.LayoutParams lp = itemsScroll.getLayoutParams();
                 if (lp != null && lp.height != 0) {
@@ -2502,9 +2835,9 @@ public final class ThemedContextMenu {
         titleRowLp.bottomMargin = labels.length > 0 ? (int) (4 * density) : 0;
         panel.addView(titleRow, titleRowLp);
 
-        itemsScroll = new ScrollView(activity);
+        itemsScroll = new Y1SafeScrollView(activity);
         itemsScroll.setFillViewport(false);
-        itemsScroll.setVerticalScrollBarEnabled(false);
+        Y1ScrollIndicators.applyVerticalScrollView(itemsScroll);
         itemsScroll.setVisibility(View.GONE);
         maxListHeightPx = (int) (activity.getResources().getDisplayMetrics().heightPixels * 0.42f);
         itemsHost = new LinearLayout(activity);
@@ -2852,6 +3185,18 @@ public final class ThemedContextMenu {
                 quickFocusIndex = firstVisibleQuickIndex();
                 refreshAll();
                 scrollQuickFocusIntoView();
+                // #region agent log
+                try {
+                    org.json.JSONObject d = new org.json.JSONObject();
+                    d.put("quickIdx", quickFocusIndex);
+                    d.put("chipCount", quickBarHost.getChildCount());
+                    DebugAgentLog.log(activity, "ThemedContextMenu.handleKeyHorizontal",
+                            "back→quick bar", "H-NAV", d);
+                } catch (Exception ignored) {}
+                // #endregion
+                return true;
+            }
+            if (keyCode == 21 && quickBarHost != null && quickBarHost.getChildCount() > 0) {
                 return true;
             }
             if (keyCode == 21) return true;
@@ -2896,9 +3241,16 @@ public final class ThemedContextMenu {
         }
         if (focusZone == FocusZone.OPTIONS_TITLE) {
             if (delta > 0) {
-                if (labels != null && labels.length > 0) {
+                if (quickBarHost != null && quickBarHost.getChildCount() > 0) {
+                    focusZone = FocusZone.QUICK_BAR;
+                    quickFocusIndex = firstVisibleQuickIndex();
+                    refreshAll();
+                    scrollQuickFocusIntoView();
+                } else if (labels != null && labels.length > 0) {
                     enterOptionsListFromTitle();
                 }
+            } else if (delta < 0) {
+                Y1ScrollIndicators.edgeGlowAtLimit(itemsScroll, delta);
             }
             return;
         }
@@ -2929,7 +3281,10 @@ public final class ThemedContextMenu {
             focusZone = FocusZone.TIER_CONTENT;
             int prev = focusIndex;
             int next = nextFocusableIndex(focusIndex, delta);
-            if (next < 0 || next == focusIndex) return;
+            if (next < 0 || next == focusIndex) {
+                if (delta != 0) Y1ScrollIndicators.edgeGlowAtLimit(itemsScroll, delta);
+                return;
+            }
             if (scrollableDetailHeader && prev == 0 && next > 0) {
                 resetScrollableDetailScroll();
             }
@@ -2976,11 +3331,18 @@ public final class ThemedContextMenu {
             return;
         }
         int nextPos = pos + delta;
-        if (nextPos >= vis.length && delta > 0 && labels != null && labels.length > 0 && !submenuTierOpen) {
+        if (nextPos >= vis.length && delta > 0 && labels != null && labels.length > 0) {
             enterListFromQuickBar();
             return;
         }
-        if (nextPos < 0 || nextPos >= vis.length) return;
+        if (nextPos < 0) {
+            Y1ScrollIndicators.edgeGlowAtLimit(itemsScroll, -1);
+            return;
+        }
+        if (nextPos >= vis.length) {
+            Y1ScrollIndicators.edgeGlowAtLimit(itemsScroll, 1);
+            return;
+        }
         quickFocusIndex = vis[nextPos];
         focusZone = FocusZone.QUICK_BAR;
         refreshAll();
@@ -3010,6 +3372,12 @@ public final class ThemedContextMenu {
             } catch (Exception ignored) {}
             // #endregion
             if (quickListener != null) quickListener.onQuickSelected(quickFocusIndex);
+            // ponytail: tier rows may rebuild while focus stays on the chip until layout runs — enter list now.
+            if (focusZone == FocusZone.QUICK_BAR && submenuTierOpen
+                    && labels != null && labels.length > 0
+                    && !isMediaSliderStripVisible()) {
+                focusSubmenuList();
+            }
             return;
         }
         if (focusZone == FocusZone.SLIDER) return;
@@ -3106,7 +3474,7 @@ public final class ThemedContextMenu {
     private int firstFocusableIndex(int start) {
         if (labels == null) return 0;
         for (int i = start; i < labels.length; i++) {
-            if (!isHeaderRow(i)) return i;
+            if (!isHeaderRow(i) && !isDecorRow(i)) return i;
         }
         return start;
     }
@@ -3115,10 +3483,16 @@ public final class ThemedContextMenu {
         if (labels == null || labels.length == 0) return -1;
         int i = from + delta;
         while (i >= 0 && i < labels.length) {
-            if (!isHeaderRow(i)) return i;
+            if (!isHeaderRow(i) && !isDecorRow(i)) return i;
             i += delta;
         }
         return from;
+    }
+
+    private boolean isDecorRow(int index) {
+        if (itemsHost == null || index < 0 || index >= itemsHost.getChildCount()) return false;
+        View row = itemsHost.getChildAt(index);
+        return row != null && Boolean.TRUE.equals(row.getTag(TAG_DECOR));
     }
 
     private int clampFocusableIndex(int idx) {
@@ -3284,7 +3658,9 @@ public final class ThemedContextMenu {
     /** Swap quick-bar icons/labels without closing the menu (e.g. queue ↔ music library). */
     public void replaceQuickBar(QuickItem[] items) {
         if (volumeOnlyMode || !isShowing()) return;
-        quickItems = items != null ? items : new QuickItem[0];
+        QuickItem[] next = items != null ? items : new QuickItem[0];
+        if (quickItemsEqual(quickItems, next)) return;
+        quickItems = next;
         if (quickBarHost == null) return;
         quickBarHost.removeAllViews();
         for (int i = 0; i < quickItems.length; i++) {
@@ -3295,14 +3671,24 @@ public final class ThemedContextMenu {
         refreshQuickBar();
     }
 
+    /** ponytail: skip removeAllViews when chip set unchanged — BT scan was rebuilding every tick. */
+    private static boolean quickItemsEqual(QuickItem[] a, QuickItem[] b) {
+        if (a == b) return true;
+        if (a == null || b == null || a.length != b.length) return false;
+        for (int i = 0; i < a.length; i++) {
+            QuickItem x = a[i];
+            QuickItem y = b[i];
+            if (x == y) continue;
+            if (x == null || y == null) return false;
+            if (x.visible != y.visible || x.iconResId != y.iconResId) return false;
+            if (x.iconKey != null ? !x.iconKey.equals(y.iconKey) : y.iconKey != null) return false;
+            if (x.label != null ? !x.label.equals(y.label) : y.label != null) return false;
+        }
+        return true;
+    }
+
     private Drawable buildPanelBackground() {
-        float density = activity.getResources().getDisplayMetrics().density;
-        float r = ThemeManager.getButtonRadius() * 2f * density;
-        GradientDrawable g = new GradientDrawable();
-        g.setColor(0xE0202022);
-        g.setCornerRadius(r);
-        g.setStroke(Math.max(1, (int) density), 0x66FFFFFF);
-        return g;
+        return ThemeManager.buildContextMenuPanelDrawable(activity);
     }
 
     private int iconResForQuickIndex(int index, int fallbackResId) {
@@ -3394,15 +3780,20 @@ public final class ThemedContextMenu {
         float density = activity.getResources().getDisplayMetrics().density;
         int iconSize = (int) (rowHeightPx * 0.72f);
         int iconGap = (int) (4 * density);
+        boolean hasState = stateText != null && stateText.length() > 0;
+        boolean stackHint = hasState
+                && (stateText.length() > 20
+                        || (panelWidthPx > 0 && panelWidthPx < (int) (400 * density)));
 
         android.graphics.Bitmap iconBmp = resolveContextMenuIcon(iconKey);
         int iconW = iconBmp != null ? iconSize : 0;
         int labelLeft = textPadLeft + (iconW > 0 ? iconW + iconGap : 0);
+        int rowH = stackHint ? rowHeightPx + (int) (menuTextPx * 0.95f) : rowHeightPx;
 
         FrameLayout row = new FrameLayout(activity);
         row.setFocusable(false);
         LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, rowHeightPx);
+                LinearLayout.LayoutParams.MATCH_PARENT, rowH);
         rowLp.setMargins(0, 1, 0, 1);
         row.setLayoutParams(rowLp);
 
@@ -3425,26 +3816,50 @@ public final class ThemedContextMenu {
         label.setMarqueeRepeatLimit(-1);
         label.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
         ThemeManager.applyThemedTextStyle(label, textNormal());
-        FrameLayout.LayoutParams labelLp = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
-        labelLp.leftMargin = labelLeft;
-        labelLp.rightMargin = arrowW + arrowMarginEnd + (stateText != null ? (int) (48 * density) : 0);
-        row.addView(label, labelLp);
 
-        if (stateText != null && stateText.length() > 0) {
+        if (stackHint) {
+            LinearLayout stack = new LinearLayout(activity);
+            stack.setOrientation(LinearLayout.VERTICAL);
+            stack.setGravity(Gravity.CENTER_VERTICAL);
+            FrameLayout.LayoutParams stackLp = new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
+            stackLp.leftMargin = labelLeft;
+            stackLp.rightMargin = arrowW + arrowMarginEnd + (int) (6 * density);
+            stack.addView(label, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
             TextView state = new TextView(activity);
             state.setText(stateText);
-            state.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
-            state.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, menuTextPx * 0.9f);
-            state.setSingleLine(true);
+            state.setTypeface(ThemeManager.getCustomFont());
+            state.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, menuTextPx * 0.82f);
+            state.setMaxLines(2);
             ThemeManager.applyThemedTextStyle(state,
                     ThemeManager.contextMenuMutedText(ThemeManager.getHintTextColor()));
-            FrameLayout.LayoutParams stateLp = new FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.MATCH_PARENT);
-            stateLp.gravity = Gravity.CENTER_VERTICAL | Gravity.END;
-            stateLp.rightMargin = arrowW + arrowMarginEnd + (int) (6 * density);
-            row.addView(state, stateLp);
+            stack.addView(state, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+            row.addView(stack, stackLp);
             row.setTag(TAG_STATE, state);
+        } else {
+            FrameLayout.LayoutParams labelLp = new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
+            labelLp.leftMargin = labelLeft;
+            labelLp.rightMargin = arrowW + arrowMarginEnd + (hasState ? (int) (48 * density) : 0);
+            row.addView(label, labelLp);
+            if (hasState) {
+                TextView state = new TextView(activity);
+                state.setText(stateText);
+                state.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
+                state.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, menuTextPx * 0.9f);
+                state.setSingleLine(true);
+                state.setEllipsize(TextUtils.TruncateAt.END);
+                ThemeManager.applyThemedTextStyle(state,
+                        ThemeManager.contextMenuMutedText(ThemeManager.getHintTextColor()));
+                FrameLayout.LayoutParams stateLp = new FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.MATCH_PARENT);
+                stateLp.gravity = Gravity.CENTER_VERTICAL | Gravity.END;
+                stateLp.rightMargin = arrowW + arrowMarginEnd + (int) (6 * density);
+                row.addView(state, stateLp);
+                row.setTag(TAG_STATE, state);
+            }
         }
 
         ImageView arrow = new ImageView(activity);
@@ -3459,6 +3874,44 @@ public final class ThemedContextMenu {
 
         row.setTag(TAG_LABEL, label);
         row.setTag(TAG_ARROW, arrow);
+        return row;
+    }
+
+    /** Non-interactive scan/status row — spinner on the right, skipped by wheel focus. */
+    private FrameLayout createLoadingRow(String text) {
+        int textPadLeft = (int) activity.getResources().getDimension(R.dimen.y1_menu_text_pad_left);
+        float menuTextPx = activity.getResources().getDimension(R.dimen.y1_menu_text_size);
+        float density = activity.getResources().getDisplayMetrics().density;
+        int spinSize = (int) (rowHeightPx * 0.55f);
+
+        FrameLayout row = new FrameLayout(activity);
+        row.setTag(TAG_DECOR, Boolean.TRUE);
+        row.setFocusable(false);
+        LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, rowHeightPx);
+        rowLp.setMargins(0, 1, 0, 1);
+        row.setLayoutParams(rowLp);
+
+        TextView label = new TextView(activity);
+        label.setText(text);
+        label.setTypeface(ThemeManager.getCustomFont());
+        label.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, menuTextPx * 0.9f);
+        label.setSingleLine(true);
+        label.setEllipsize(TextUtils.TruncateAt.END);
+        label.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        ThemeManager.applyThemedTextStyle(label,
+                ThemeManager.contextMenuMutedText(ThemeManager.getHintTextColor()));
+        FrameLayout.LayoutParams labelLp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
+        labelLp.leftMargin = textPadLeft;
+        labelLp.rightMargin = spinSize + (int) (12 * density);
+        row.addView(label, labelLp);
+
+        ProgressBar spin = new ProgressBar(activity, null, android.R.attr.progressBarStyleSmall);
+        FrameLayout.LayoutParams spinLp = new FrameLayout.LayoutParams(spinSize, spinSize);
+        spinLp.gravity = Gravity.CENTER_VERTICAL | Gravity.END;
+        spinLp.rightMargin = (int) (10 * density);
+        row.addView(spin, spinLp);
         return row;
     }
 

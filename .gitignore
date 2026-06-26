@@ -29,6 +29,9 @@ local.properties
 /scripts/test_podcast_emulator.sh
 /scripts/test_soulseek_device.sh
 
+# Local Soulseek share-browse harness (generated fixtures, nicotine iteration)
+.soulseek-browse-test/
+
 # Stray docs / screenshots at repo root
 /docs/
 /*.md

@@ -64,6 +64,47 @@ public final class Y1InputKeys {
         return 0;
     }
 
+    /** AVRCP PASSTHROUGH PLAY → same Android keycode as wheel up; only remap when device is AVRCP. */
+    public static boolean isDiscreteMediaPlay(int keyCode) {
+        return isWheelUp(keyCode);
+    }
+
+    /** AVRCP PASSTHROUGH PAUSE → same Android keycode as wheel down; only remap when device is AVRCP. */
+    public static boolean isDiscreteMediaPause(int keyCode) {
+        return isWheelDown(keyCode);
+    }
+
+    /** Discrete skip from AVRCP.kl — not Y1 side keys (21/22). */
+    public static boolean isAvrcpSkipNext(int keyCode) {
+        return keyCode == KEY_TRACK_NEXT || keyCode == 87;
+    }
+
+    public static boolean isAvrcpSkipPrevious(int keyCode) {
+        return keyCode == KEY_TRACK_PREV || keyCode == 88;
+    }
+
+    public static boolean isAvrcpSkipKey(int keyCode) {
+        return isAvrcpSkipNext(keyCode) || isAvrcpSkipPrevious(keyCode);
+    }
+
+    /** Keycodes BT remotes may send via AVRCP.kl or ACTION_MEDIA_BUTTON (not hardware 21/22). */
+    public static boolean isAvrcpMediaTransportKeyCode(int keyCode) {
+        return isDiscreteMediaPlay(keyCode) || isDiscreteMediaPause(keyCode)
+                || keyCode == KeyEvent.KEYCODE_MEDIA_STOP || keyCode == 86
+                || isAvrcpSkipKey(keyCode)
+                || keyCode == KeyEvent.KEYCODE_HEADSETHOOK || keyCode == 79;
+    }
+
+    /** Volume from BT remote / ACTION_MEDIA_BUTTON — not Y1 wheel. */
+    public static boolean isBluetoothVolumeKeyCode(int keyCode) {
+        return isVolumeDownKey(keyCode) || isVolumeUpKey(keyCode);
+    }
+
+    /** Keys Solar handles from ACTION_MEDIA_BUTTON (AVRCP + volume). */
+    public static boolean isBluetoothMediaButtonKeyCode(int keyCode) {
+        return isAvrcpMediaTransportKeyCode(keyCode) || isBluetoothVolumeKeyCode(keyCode);
+    }
+
     public static boolean isVolumeDownKey(int keyCode) {
         return keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
                 || keyCode == 25 || keyCode == 114 || keyCode == 160;

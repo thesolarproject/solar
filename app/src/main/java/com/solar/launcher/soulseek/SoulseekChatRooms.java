@@ -143,4 +143,19 @@ public final class SoulseekChatRooms {
                 + (joined ? " has joined the room" : " has left the room");
         appendMessage(ctx, prefs, new RoomMessage(room, "", line, ts, true, true));
     }
+
+    /** Bridge room history into the shared PM conversation pipeline. */
+    public static List<SoulseekMessaging.Message> toThreadMessages(List<RoomMessage> roomMessages) {
+        List<SoulseekMessaging.Message> out = new ArrayList<SoulseekMessaging.Message>();
+        if (roomMessages == null) return out;
+        for (int i = 0; i < roomMessages.size(); i++) {
+            RoomMessage rm = roomMessages.get(i);
+            if (rm == null) continue;
+            out.add(new SoulseekMessaging.Message(i, rm.timestamp,
+                    rm.sender != null ? rm.sender : "",
+                    rm.text != null ? rm.text : "",
+                    rm.incoming, rm.statusEvent));
+        }
+        return out;
+    }
 }

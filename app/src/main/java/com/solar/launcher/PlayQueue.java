@@ -1,6 +1,7 @@
 package com.solar.launcher;
 
 import com.solar.launcher.podcast.OpenRssClient;
+import com.solar.launcher.radio.FmBandPlan;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -8,7 +9,10 @@ import java.util.List;
 
 /** Unified playback queue — music files, podcast episodes, Reach streams in one order. */
 public final class PlayQueue {
-    public enum ItemKind { MUSIC_FILE, PODCAST_EPISODE, REACH_STREAM, DEEZER_STREAM }
+    public enum ItemKind {
+        MUSIC_FILE, PODCAST_EPISODE, REACH_STREAM, DEEZER_STREAM,
+        FM_STATION, INTERNET_RADIO_STATION
+    }
 
     public static final class QueueItem {
         public final ItemKind kind;
@@ -20,10 +24,22 @@ public final class PlayQueue {
         public final String reachPeerUsername;
         public final String deezerMeta;
         public final long deezerTrackId;
+        /** FM: frequency in kHz (e.g. 98700 = 98.7 MHz). */
+        public final int fmFreqKhz;
+        public final String fmLabel;
+        /** Internet radio: Radio Browser stationuuid. */
+        public final String radioStationUuid;
+        public final String radioName;
+        public final String radioUrl;
+        public final String radioSubtitle;
+        public final String radioFavicon;
 
         private QueueItem(ItemKind kind, File file, OpenRssClient.Episode episode,
                 String podcastShowTitle, boolean podcastFromSaved, String reachMeta,
-                String reachPeerUsername, String deezerMeta, long deezerTrackId) {
+                String reachPeerUsername, String deezerMeta, long deezerTrackId,
+                int fmFreqKhz, String fmLabel,
+                String radioStationUuid, String radioName, String radioUrl,
+                String radioSubtitle, String radioFavicon) {
             this.kind = kind;
             this.file = file;
             this.episode = episode;
@@ -33,10 +49,18 @@ public final class PlayQueue {
             this.reachPeerUsername = reachPeerUsername;
             this.deezerMeta = deezerMeta;
             this.deezerTrackId = deezerTrackId;
+            this.fmFreqKhz = fmFreqKhz;
+            this.fmLabel = fmLabel != null ? fmLabel : "";
+            this.radioStationUuid = radioStationUuid != null ? radioStationUuid : "";
+            this.radioName = radioName != null ? radioName : "";
+            this.radioUrl = radioUrl != null ? radioUrl : "";
+            this.radioSubtitle = radioSubtitle != null ? radioSubtitle : "";
+            this.radioFavicon = radioFavicon != null ? radioFavicon : "";
         }
 
         public static QueueItem music(File f) {
-            return new QueueItem(ItemKind.MUSIC_FILE, f, null, "", false, null, null, null, 0);
+            return new QueueItem(ItemKind.MUSIC_FILE, f, null, "", false, null, null, null, 0,
+                    0, "", "", "", "", "", "");
         }
 
         public static QueueItem reach(File temp, String meta) {
@@ -44,21 +68,40 @@ public final class PlayQueue {
         }
 
         public static QueueItem reach(File temp, String meta, String peerUsername) {
-            return new QueueItem(ItemKind.REACH_STREAM, temp, null, "", false, meta, peerUsername, null, 0);
+            return new QueueItem(ItemKind.REACH_STREAM, temp, null, "", false, meta, peerUsername,
+                    null, 0, 0, "", "", "", "", "", "");
         }
 
         public static QueueItem deezer(File temp, String meta, long trackId) {
-            return new QueueItem(ItemKind.DEEZER_STREAM, temp, null, "", false, null, null, meta, trackId);
+            return new QueueItem(ItemKind.DEEZER_STREAM, temp, null, "", false, null, null, meta,
+                    trackId, 0, "", "", "", "", "", "");
         }
 
         public static QueueItem podcast(OpenRssClient.Episode ep, String showTitle, boolean fromSaved) {
-            return new QueueItem(ItemKind.PODCAST_EPISODE, null, ep, showTitle, fromSaved, null, null, null, 0);
+            return new QueueItem(ItemKind.PODCAST_EPISODE, null, ep, showTitle, fromSaved, null,
+                    null, null, 0, 0, "", "", "", "", "", "");
         }
 
-        /** Display title for stream items. */
+        public static QueueItem fmStation(int freqKhz, String label) {
+            return new QueueItem(ItemKind.FM_STATION, null, null, "", false, null, null, null, 0,
+                    freqKhz, label, "", "", "", "", "");
+        }
+
+        public static QueueItem internetRadio(String uuid, String name, String url,
+                String subtitle, String favicon) {
+            return new QueueItem(ItemKind.INTERNET_RADIO_STATION, null, null, "", false, null,
+                    null, null, 0, 0, "", uuid, name, url, subtitle, favicon);
+        }
+
+        /** Display title for stream / radio items. */
         public String streamMeta() {
             if (kind == ItemKind.DEEZER_STREAM && deezerMeta != null) return deezerMeta;
             if (kind == ItemKind.REACH_STREAM && reachMeta != null) return reachMeta;
+            if (kind == ItemKind.FM_STATION) {
+                if (fmLabel != null && !fmLabel.isEmpty()) return fmLabel;
+                return FmBandPlan.formatMhz(fmFreqKhz / 1000f);
+            }
+            if (kind == ItemKind.INTERNET_RADIO_STATION) return radioName;
             return file != null ? file.getName() : "";
         }
     }

@@ -8,7 +8,7 @@ import java.util.List;
 
 /** ponytail: unified queue for playback order; legacy music/podcast views synced from PlayQueue. */
 public final class PlaybackCoordinator {
-    public enum Mode { NONE, MUSIC, PODCAST }
+    public enum Mode { NONE, MUSIC, PODCAST, RADIO }
 
     private final PlayQueue queue = new PlayQueue();
     private Mode activeMode = Mode.NONE;
@@ -37,6 +37,36 @@ public final class PlaybackCoordinator {
                 || (c != null && (c.kind == PlayQueue.ItemKind.MUSIC_FILE
                 || c.kind == PlayQueue.ItemKind.REACH_STREAM
                 || c.kind == PlayQueue.ItemKind.DEEZER_STREAM));
+    }
+
+    public boolean isFmActive() {
+        PlayQueue.QueueItem c = queue.current();
+        return activeMode == Mode.RADIO
+                && c != null && c.kind == PlayQueue.ItemKind.FM_STATION;
+    }
+
+    public boolean isInternetRadioActive() {
+        PlayQueue.QueueItem c = queue.current();
+        return activeMode == Mode.RADIO
+                && c != null && c.kind == PlayQueue.ItemKind.INTERNET_RADIO_STATION;
+    }
+
+    public boolean isRadioActive() {
+        return isFmActive() || isInternetRadioActive();
+    }
+
+    /** Clear queue and play a single FM or internet station. */
+    public void startRadioStation(PlayQueue.QueueItem station) {
+        if (station == null) return;
+        musicOriginal.clear();
+        musicInitiator = null;
+        musicActivePlaylistName = null;
+        podcastShowTitle = "";
+        podcastFromSavedLibrary = false;
+        List<PlayQueue.QueueItem> one = new ArrayList<PlayQueue.QueueItem>();
+        one.add(station);
+        queue.setAll(one, 0);
+        activeMode = Mode.RADIO;
     }
 
     public boolean hasAnyQueue() {
@@ -191,18 +221,74 @@ public final class PlaybackCoordinator {
         queue.setAll(items, qStart);
     }
 
+    /** Shuffle or restore music/stream slots in the unified queue; preserves Reach/Deezer item kinds. */
     public void reshuffleMusic(boolean shuffle) {
-        if (musicOriginal.isEmpty()) return;
-        File current = queue.current() != null ? queue.current().file : null;
-        List<File> order = new ArrayList<File>(musicOriginal);
-        if (shuffle) java.util.Collections.shuffle(order);
-        List<PlayQueue.QueueItem> items = new ArrayList<PlayQueue.QueueItem>();
-        int qStart = 0;
-        for (int i = 0; i < order.size(); i++) {
-            items.add(PlayQueue.QueueItem.music(order.get(i)));
-            if (current != null && order.get(i).equals(current)) qStart = i;
+        java.util.List<PlayQueue.QueueItem> all = new java.util.ArrayList<PlayQueue.QueueItem>(queue.items());
+        if (all.isEmpty()) return;
+        PlayQueue.QueueItem current = queue.current();
+        java.util.List<PlayQueue.QueueItem> musicLike = new java.util.ArrayList<PlayQueue.QueueItem>();
+        for (PlayQueue.QueueItem q : all) {
+            if (isMusicLike(q)) musicLike.add(q);
         }
-        queue.setAll(items, qStart);
+        if (musicLike.size() <= 1) return;
+
+        java.util.List<PlayQueue.QueueItem> ordered;
+        if (shuffle) {
+            ordered = new java.util.ArrayList<PlayQueue.QueueItem>(musicLike);
+            java.util.Collections.shuffle(ordered);
+        } else {
+            ordered = restoreMusicQueueOrder(musicLike);
+        }
+        int mi = 0;
+        for (int i = 0; i < all.size(); i++) {
+            if (isMusicLike(all.get(i))) {
+                all.set(i, ordered.get(mi++));
+            }
+        }
+        int newIndex = resolveCurrentQueueIndex(all, current);
+        queue.setAll(all, newIndex);
+    }
+
+    private static boolean isMusicLike(PlayQueue.QueueItem q) {
+        return q != null && (q.kind == PlayQueue.ItemKind.MUSIC_FILE
+                || q.kind == PlayQueue.ItemKind.REACH_STREAM
+                || q.kind == PlayQueue.ItemKind.DEEZER_STREAM);
+    }
+
+    private java.util.List<PlayQueue.QueueItem> restoreMusicQueueOrder(
+            java.util.List<PlayQueue.QueueItem> items) {
+        java.util.Map<File, PlayQueue.QueueItem> byFile = new java.util.HashMap<File, PlayQueue.QueueItem>();
+        for (PlayQueue.QueueItem q : items) {
+            if (q.file != null) byFile.put(q.file, q);
+        }
+        java.util.List<PlayQueue.QueueItem> out = new java.util.ArrayList<PlayQueue.QueueItem>();
+        java.util.Set<File> used = new java.util.HashSet<File>();
+        for (File f : musicOriginal) {
+            PlayQueue.QueueItem q = byFile.get(f);
+            if (q != null) {
+                out.add(q);
+                used.add(f);
+            }
+        }
+        for (PlayQueue.QueueItem q : items) {
+            if (q.file != null && !used.contains(q.file)) out.add(q);
+        }
+        return out;
+    }
+
+    private static int resolveCurrentQueueIndex(java.util.List<PlayQueue.QueueItem> items,
+                                                PlayQueue.QueueItem current) {
+        if (current == null || items.isEmpty()) return 0;
+        for (int i = 0; i < items.size(); i++) {
+            PlayQueue.QueueItem q = items.get(i);
+            if (current.kind == PlayQueue.ItemKind.PODCAST_EPISODE) {
+                if (q.kind == current.kind && q.episode == current.episode) return i;
+            } else if (current.file != null && q.file != null
+                    && current.file.equals(q.file) && q.kind == current.kind) {
+                return i;
+            }
+        }
+        return 0;
     }
 
     public void appendToMusicQueue(List<File> tracks) {
@@ -441,6 +527,12 @@ public final class PlaybackCoordinator {
                 || c.kind == PlayQueue.ItemKind.DEEZER_STREAM) {
             activeMode = Mode.MUSIC;
             musicInitiator = c.file;
+            podcastShowTitle = "";
+            podcastFromSavedLibrary = false;
+        } else if (c.kind == PlayQueue.ItemKind.FM_STATION
+                || c.kind == PlayQueue.ItemKind.INTERNET_RADIO_STATION) {
+            activeMode = Mode.RADIO;
+            musicInitiator = null;
             podcastShowTitle = "";
             podcastFromSavedLibrary = false;
         } else {

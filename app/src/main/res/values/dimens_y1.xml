@@ -23,7 +23,13 @@
     <dimen name="y1_theme_cover_height">32dp</dimen>
     <dimen name="y1_player_art_width">200dp</dimen>
     <dimen name="y1_player_info_width">235dp</dimen>
-    <dimen name="y1_player_progress_height">32dp</dimen>
+    <dimen name="y1_player_progress_height">34dp</dimen>
+    <dimen name="y1_transport_volume_height">12dp</dimen>
+    <dimen name="y1_transport_hint_height">14dp</dimen>
+    <!-- Now Playing: scrub + hold-Back hint -->
+    <dimen name="y1_player_transport_height">46dp</dimen>
+    <!-- Video: scrub row only -->
+    <dimen name="y1_video_transport_height">34dp</dimen>
     <dimen name="y1_settings_menu_width">218dp</dimen>
     <dimen name="y1_settings_menu_height">305dp</dimen>
     <dimen name="y1_settings_preview_margin_right">22dp</dimen>

@@ -29,7 +29,7 @@ public class HomeMenuConfigTest {
         if (!HomeMenuConfig.ID_VIDEOS.equals(stock.get(2))) throw new AssertionError("videos");
         if (!HomeMenuConfig.ID_AUDIOBOOKS.equals(stock.get(3))) throw new AssertionError("audiobooks");
         if (!HomeMenuConfig.ID_PHOTOS.equals(stock.get(4))) throw new AssertionError("photos");
-        if (!HomeMenuConfig.ID_FM.equals(stock.get(5))) throw new AssertionError("fm");
+        if (!HomeMenuConfig.ID_RADIO.equals(stock.get(5))) throw new AssertionError("radio");
         if (!HomeMenuConfig.ID_BLUETOOTH.equals(stock.get(6))) throw new AssertionError("bluetooth");
         if (!HomeMenuConfig.ID_SETTINGS.equals(stock.get(7))) throw new AssertionError("settings");
     }
@@ -44,8 +44,8 @@ public class HomeMenuConfigTest {
         if (!HomeMenuConfig.ID_MUSIC.equals(visible.get(1).id)) {
             throw new AssertionError("music position");
         }
-        if (!HomeMenuConfig.ID_FM.equals(visible.get(2).id)) {
-            throw new AssertionError("fm position");
+        if (!HomeMenuConfig.ID_RADIO.equals(visible.get(2).id)) {
+            throw new AssertionError("radio position");
         }
         if (!HomeMenuConfig.ID_BLUETOOTH.equals(visible.get(3).id)) {
             throw new AssertionError("bluetooth position");
@@ -64,8 +64,11 @@ public class HomeMenuConfigTest {
         if (!HomeMenuConfig.ID_MUSIC.equals(home.get(0))) {
             throw new AssertionError("music should lead stock block");
         }
-        if (!HomeMenuConfig.ID_FM.equals(home.get(1))) {
-            throw new AssertionError("fm should follow music when coming-soon off");
+        if (!home.contains(HomeMenuConfig.ID_RADIO)) {
+            throw new AssertionError("radio should be present after fm migrate");
+        }
+        if (home.indexOf(HomeMenuConfig.ID_RADIO) <= home.indexOf(HomeMenuConfig.ID_MUSIC)) {
+            throw new AssertionError("radio should follow music");
         }
         if (!HomeMenuConfig.ID_SOULSEEK.equals(home.get(home.size() - 1))) {
             throw new AssertionError("solar extras trail");
@@ -87,12 +90,15 @@ public class HomeMenuConfigTest {
     }
 
     @Test
-    public void migrateHomePrefs_disablesComingSoon() {
+    public void migrateHomePrefs_enablesVideosAndPhotosOnSchema5() {
         HomeMenuConfig.saveOrder(prefs, Arrays.asList(
                 HomeMenuConfig.ID_MUSIC, HomeMenuConfig.ID_VIDEOS, HomeMenuConfig.ID_SETTINGS));
         HomeMenuConfig.migrateHomePrefsIfNeeded(prefs);
-        if (HomeMenuConfig.isShortcutEnabled(prefs, HomeMenuConfig.ID_VIDEOS)) {
-            throw new AssertionError("videos should be off after migrate");
+        if (!HomeMenuConfig.isShortcutEnabled(prefs, HomeMenuConfig.ID_VIDEOS)) {
+            throw new AssertionError("videos should be on after schema 5 migrate");
+        }
+        if (!HomeMenuConfig.isShortcutEnabled(prefs, HomeMenuConfig.ID_PHOTOS)) {
+            throw new AssertionError("photos should be on after schema 5 migrate");
         }
     }
 

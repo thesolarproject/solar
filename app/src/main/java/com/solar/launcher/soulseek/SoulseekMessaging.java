@@ -22,13 +22,21 @@ public final class SoulseekMessaging {
         public final String peer;
         public final String text;
         public final boolean incoming;
+        /** Join/leave line when bridged from {@link SoulseekChatRooms.RoomMessage}. */
+        public final boolean statusEvent;
 
         public Message(int id, int timestamp, String peer, String text, boolean incoming) {
+            this(id, timestamp, peer, text, incoming, false);
+        }
+
+        public Message(int id, int timestamp, String peer, String text, boolean incoming,
+                boolean statusEvent) {
             this.id = id;
             this.timestamp = timestamp;
             this.peer = peer;
             this.text = text;
             this.incoming = incoming;
+            this.statusEvent = statusEvent;
         }
     }
 

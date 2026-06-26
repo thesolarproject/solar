@@ -10,10 +10,11 @@ while [ "$i" -lt 30 ]; do
 done
 
 if [ -d "$SD" ]; then
-    for d in Music Podcasts Themes JJ_Themes; do
+    for d in Music Podcasts Themes JJ_Themes Videos Pictures "FM Recordings" RadioBuffer; do
         [ -d "$SD/$d" ] || mkdir -p "$SD/$d"
     done
-    chmod 755 "$SD/Music" "$SD/Podcasts" "$SD/Themes" "$SD/JJ_Themes" 2>/dev/null
+    chmod 755 "$SD/Music" "$SD/Podcasts" "$SD/Themes" "$SD/JJ_Themes" \
+        "$SD/Videos" "$SD/Pictures" "$SD/FM Recordings" "$SD/RadioBuffer" 2>/dev/null
 fi
 
 # Seed launcher switch scripts for unmodified Rockbox-y1 APK (expects /data/data/switch-to-stock.sh).

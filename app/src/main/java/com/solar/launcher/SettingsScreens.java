@@ -37,6 +37,10 @@ public final class SettingsScreens {
     /** EQ preset picker: key + preset name in settingsSubScreenExtra. */
     public static final String EQ = "settings.eq";
     public static final String LIBRARY_BROWSE = "settings.library_browse";
+    public static final String RADIO = "settings.radio";
+    public static final String RADIO_FM_BAND = "settings.radio.fm_band";
+    public static final String RADIO_INTERNET_COUNTRY = "settings.radio.internet_country";
+    public static final String VIDEO = "settings.video";
 
     public static int titleResId(String key) {
         if (key == null) return 0;
@@ -73,6 +77,10 @@ public final class SettingsScreens {
         if (EQ.equals(key)) return R.string.settings_sub_eq;
         if (THEME_VARIANT.equals(key)) return R.string.settings_sub_theme_variant;
         if (LIBRARY_BROWSE.equals(key)) return R.string.settings_sub_library_browse;
+        if (RADIO.equals(key)) return R.string.settings_sub_radio;
+        if (RADIO_FM_BAND.equals(key)) return R.string.settings_sub_radio_fm_band;
+        if (RADIO_INTERNET_COUNTRY.equals(key)) return R.string.settings_sub_radio_internet_country;
+        if (VIDEO.equals(key)) return R.string.settings_sub_video;
         return 0;
     }
 

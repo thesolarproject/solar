@@ -45,6 +45,11 @@ public final class ConversationDisplayBuilder {
 
   public static List<Entry> build(List<SoulseekMessaging.Message> messages, String selfUsername,
       String peerUsername) {
+    return build(messages, selfUsername, peerUsername, false);
+  }
+
+  public static List<Entry> build(List<SoulseekMessaging.Message> messages, String selfUsername,
+      String peerUsername, boolean roomMode) {
     List<Entry> out = new ArrayList<Entry>();
     if (messages == null || messages.isEmpty()) return out;
 
@@ -55,7 +60,7 @@ public final class ConversationDisplayBuilder {
 
     for (int i = 0; i < messages.size(); i++) {
       SoulseekMessaging.Message m = messages.get(i);
-      if (m == null || m.text == null) continue;
+      if (m == null || m.text == null || m.statusEvent) continue;
       if (ReachIntroMessage.isIntro(m.text)) {
         skipIndices.add(i);
         continue;
@@ -81,7 +86,10 @@ public final class ConversationDisplayBuilder {
 
       ReachMessageFormat.Reply reply = ReachMessageFormat.parseReply(m.text);
       if (reply != null) {
-        int parent = ReachMessageFormat.findQuotedMessageIndex(messages, reply.quote, i);
+        int parent = roomMode
+            ? ReachMessageFormat.findQuotedMessageIndex(
+                    messages, reply.quote, reply.quoteAuthor, i)
+            : ReachMessageFormat.findQuotedMessageIndex(messages, reply.quote, i);
         if (parent >= 0) {
           List<Integer> list = repliesByParent.get(parent);
           if (list == null) {
@@ -99,12 +107,21 @@ public final class ConversationDisplayBuilder {
       if (skipIndices.contains(i) || replyIndices.contains(i)) continue;
       SoulseekMessaging.Message m = messages.get(i);
       if (m == null) continue;
+      if (m.statusEvent) {
+        out.add(newEntry(m, m.text != null ? m.text : "", false, reactionsFor(reactionsByParent, i),
+            roomMode));
+        emitted.add(i);
+        continue;
+      }
       if (ReachIntroMessage.isIntro(m.text)) continue;
 
       String display = ReachMessageFormat.displayText(m.text);
-      out.add(newEntry(m, display, false, reactionsFor(reactionsByParent, i)));
+      if (display.isEmpty() && !ReachIntroMessage.isIntro(m.text)) {
+        display = m.text != null ? m.text.trim() : "";
+      }
+      out.add(newEntry(m, display, false, reactionsFor(reactionsByParent, i), roomMode));
       emitted.add(i);
-      appendReplyChain(out, messages, repliesByParent, reactionsByParent, emitted, i);
+      appendReplyChain(out, messages, repliesByParent, reactionsByParent, emitted, i, roomMode);
     }
 
     // Orphan replies (parent not found) — show compact with quote hint.
@@ -113,9 +130,9 @@ public final class ConversationDisplayBuilder {
       SoulseekMessaging.Message m = messages.get(i);
       ReachMessageFormat.Reply rp = ReachMessageFormat.parseReply(m.text);
       if (rp == null) continue;
-      out.add(newEntry(m, rp.body, true, reactionsFor(reactionsByParent, i)));
+      out.add(newEntry(m, rp.body, true, reactionsFor(reactionsByParent, i), roomMode));
       emitted.add(i);
-      appendReplyChain(out, messages, repliesByParent, reactionsByParent, emitted, i);
+      appendReplyChain(out, messages, repliesByParent, reactionsByParent, emitted, i, roomMode);
     }
 
     return out;
@@ -123,7 +140,8 @@ public final class ConversationDisplayBuilder {
 
   private static void appendReplyChain(List<Entry> out, List<SoulseekMessaging.Message> messages,
       Map<Integer, List<Integer>> repliesByParent,
-      Map<Integer, List<String>> reactionsByParent, Set<Integer> emitted, int parentIndex) {
+      Map<Integer, List<String>> reactionsByParent, Set<Integer> emitted, int parentIndex,
+      boolean roomMode) {
     List<Integer> replyList = repliesByParent.get(parentIndex);
     if (replyList == null) return;
     for (int ri : replyList) {
@@ -132,9 +150,9 @@ public final class ConversationDisplayBuilder {
       if (rm == null) continue;
       ReachMessageFormat.Reply rp = ReachMessageFormat.parseReply(rm.text);
       String body = rp != null ? rp.body : ReachMessageFormat.displayText(rm.text);
-      out.add(newEntry(rm, body, true, reactionsFor(reactionsByParent, ri)));
+      out.add(newEntry(rm, body, true, reactionsFor(reactionsByParent, ri), roomMode));
       emitted.add(ri);
-      appendReplyChain(out, messages, repliesByParent, reactionsByParent, emitted, ri);
+      appendReplyChain(out, messages, repliesByParent, reactionsByParent, emitted, ri, roomMode);
     }
   }
 
@@ -145,9 +163,11 @@ public final class ConversationDisplayBuilder {
   }
 
   private static Entry newEntry(SoulseekMessaging.Message m, String display, boolean isReply,
-      List<String> reactions) {
-    return new Entry(m, display, null, isReply, reactions,
-        SoulseekMessaging.formatTimestamp(m.timestamp));
+      List<String> reactions, boolean roomMode) {
+    String ts = roomMode
+        ? SoulseekChatRooms.formatTimestamp(m.timestamp)
+        : SoulseekMessaging.formatTimestamp(m.timestamp);
+    return new Entry(m, display, null, isReply, reactions, ts);
   }
 
   private static String reactionActorLabel(SoulseekMessaging.Message m, String selfUsername,
@@ -155,6 +175,7 @@ public final class ConversationDisplayBuilder {
     if (!m.incoming) {
       return "You";
     }
+    if (m.peer != null && !m.peer.isEmpty()) return m.peer;
     if (peerUsername != null && !peerUsername.isEmpty()) return peerUsername;
     return "User";
   }

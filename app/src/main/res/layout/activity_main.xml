@@ -33,7 +33,7 @@
             android:layout_marginTop="@dimen/y1_status_bar_height"
             android:clipChildren="true">
 
-            <ScrollView
+            <com.solar.launcher.Y1SafeScrollView
                 android:id="@+id/menu_scroll"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
@@ -45,7 +45,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical" />
-            </ScrollView>
+            </com.solar.launcher.Y1SafeScrollView>
         </FrameLayout>
 
         <ImageView
@@ -126,7 +126,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="match_parent">
 
-                    <ScrollView
+                    <com.solar.launcher.Y1SafeScrollView
                         android:id="@+id/scroll_view_browser"
                         android:layout_width="match_parent"
                         android:layout_height="match_parent"
@@ -137,7 +137,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:orientation="vertical" />
-                    </ScrollView>
+                    </com.solar.launcher.Y1SafeScrollView>
                 </FrameLayout>
 
                 <LinearLayout
@@ -215,7 +215,7 @@
             android:layout_marginTop="@dimen/y1_status_bar_height"
             android:clipChildren="true">
 
-            <ScrollView
+            <com.solar.launcher.Y1SafeScrollView
                 android:id="@+id/settings_list_scroll"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
@@ -227,7 +227,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical" />
-            </ScrollView>
+            </com.solar.launcher.Y1SafeScrollView>
 
             <LinearLayout
                 android:id="@+id/soulseek_conversation_host"
@@ -480,7 +480,7 @@
             android:layout_height="match_parent"
             android:orientation="horizontal"
             android:paddingTop="@dimen/y1_status_bar_height"
-            android:paddingBottom="@dimen/y1_player_progress_height"
+            android:paddingBottom="@dimen/y1_player_transport_height"
             android:paddingLeft="10dp"
             android:paddingRight="10dp">
 
@@ -517,7 +517,7 @@
             android:layout_height="match_parent"
             android:orientation="vertical"
             android:paddingTop="@dimen/y1_status_bar_height"
-            android:paddingBottom="@dimen/y1_player_progress_height"
+            android:paddingBottom="@dimen/y1_player_transport_height"
             android:paddingLeft="10dp"
             android:paddingRight="10dp"
             android:visibility="gone">
@@ -592,27 +592,12 @@
                 android:layout_marginTop="6dp" />
         </LinearLayout>
 
-        <LinearLayout
-            android:id="@+id/player_progress_bar"
+        <include
+            android:id="@+id/player_transport_bar"
+            layout="@layout/layout_media_transport_bar"
             android:layout_width="match_parent"
-            android:layout_height="@dimen/y1_player_progress_height"
-            android:layout_gravity="bottom"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:paddingLeft="8dp"
-            android:paddingRight="8dp">
-            <TextView android:id="@+id/tv_player_time_current" android:layout_width="77dp" android:layout_height="wrap_content" android:text="00:00" android:textColor="#FFFFFF" android:textSize="15sp" android:textStyle="bold" android:gravity="center"/>
-            <FrameLayout
-                android:id="@+id/player_progress_track"
-                android:layout_width="0dp"
-                android:layout_height="16dp"
-                android:layout_weight="1"
-                android:layout_gravity="center_vertical">
-                <ProgressBar android:id="@+id/player_progress" style="?android:attr/progressBarStyleHorizontal" android:layout_width="match_parent" android:layout_height="8dp" android:layout_gravity="center_vertical" android:max="100" android:progress="0"/>
-                <View android:id="@+id/player_scrub_marker" android:layout_width="10dp" android:layout_height="10dp" android:layout_gravity="center_vertical" android:visibility="gone"/>
-            </FrameLayout>
-            <TextView android:id="@+id/tv_player_time_total" android:layout_width="77dp" android:layout_height="wrap_content" android:text="00:00" android:textColor="#FFFFFF" android:textSize="15sp" android:textStyle="bold" android:gravity="center"/>
-        </LinearLayout>
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom" />
     </FrameLayout>
 
     <RelativeLayout
@@ -714,4 +699,38 @@
         <Button android:id="@+id/btn_server_toggle" android:layout_width="match_parent" android:layout_height="@dimen/y1_menu_item_height" android:text="@string/webserver_start" android:background="@android:color/transparent" android:layout_marginBottom="16dp" android:focusable="true"/>
         <TextView android:id="@+id/tv_webserver_hint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/webserver_hint" android:textSize="16sp" android:gravity="center"/>
     </LinearLayout>
+
+    <FrameLayout
+        android:id="@+id/layout_video_mode"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#FF000000"
+        android:visibility="gone">
+
+        <FrameLayout
+            android:id="@+id/video_surface_host"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <include
+            android:id="@+id/video_transport_bar"
+            layout="@layout/layout_media_transport_bar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom" />
+    </FrameLayout>
+
+    <FrameLayout
+        android:id="@+id/layout_photo_viewer"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#FF000000"
+        android:visibility="gone">
+
+        <ImageView
+            android:id="@+id/iv_photo_viewer"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:scaleType="fitCenter" />
+    </FrameLayout>
 </FrameLayout>

@@ -33,7 +33,6 @@ import com.solar.launcher.soulseek.SoulseekWire;
 import com.solar.launcher.soulseek.ReachChatRoomsAdapter;
 import com.solar.launcher.soulseek.ReachIntroMessage;
 import com.solar.launcher.soulseek.ReachIntroTracker;
-import com.solar.launcher.soulseek.RoomConversationDisplayBuilder;
 import com.solar.launcher.soulseek.SoulseekRoomWall;
 import com.solar.launcher.soulseek.ReachInboxAdapter;
 import com.solar.launcher.soulseek.ReachInterestsAdapter;
@@ -57,6 +56,9 @@ import com.solar.launcher.theme.JjThemeManager;
 import com.solar.launcher.theme.ThemeBrowser;
 import com.solar.launcher.theme.ThemeDownloader;
 import com.solar.launcher.theme.ThemeManager;
+import com.solar.launcher.media.MediaSuiteHost;
+import com.solar.launcher.media.MediaSuiteHostAdapter;
+import com.solar.launcher.media.MediaTransportBar;
 import com.solar.launcher.podcast.OpenRssClient;
 import com.solar.launcher.podcast.PodcastCatalog;
 import com.solar.launcher.podcast.PodcastLibrary;
@@ -225,6 +227,7 @@ public class MainActivity extends Activity {
     private List<File> virtualSongList = new ArrayList<>();
     // 💡 백그라운드 미디어 제어권(스크린 오프) 변수
     private Object mediaSessionShim;
+    private AvrcpTrackInfoWriter avrcpTrackInfoWriter;
     // 💡 [추가] OS 스캐너를 대체할 '자체 미디어 라이브러리 엔진' 변수들
     private static class SongItem {
         File file;
@@ -322,6 +325,8 @@ public class MainActivity extends Activity {
     private LinearLayout playerStatusRow;
     private ImageView ivPlayerShuffleStatus, ivPlayerRepeatStatus; // 💡 텍스트뷰에서 이미지뷰로 변경!
     private ProgressBar playerProgress, volumeProgress, pbBrightness, pbStorage;
+    private MediaTransportBar playerTransport;
+    private MediaTransportBar videoTransport;
     private TextView tvBrightnessVal, tvStorageDetails;
 
     private TextView tvServerStatus, tvServerIp, tvWebserverHint;
@@ -341,6 +346,13 @@ public class MainActivity extends Activity {
     private static final int HOME_MENU_TAG_ARROW = 0x7f0a0002;
     private int focusedHomeMenuIndex = 0;
     private int homeMenuBuildGen = 0;
+    private final Runnable homeMenuRebuildRunnable =
+            new Runnable() {
+                @Override
+                public void run() {
+                    rebuildHomeMenuIfVisible();
+                }
+            };
     private boolean webServerStartedForDeezerSetup = false;
     private int homeScreenEditorMenuFocusIndex = 11;
     private int homeScreenEditorFocusIndex = 1;
@@ -401,8 +413,6 @@ public class MainActivity extends Activity {
             String query = reachChatRoomsAdapter.getSearchQuery();
             if (query != null && !query.isEmpty()) {
                 runReachChatRoomSearch(query, reachChatRoomsSearchGen);
-            } else {
-                applyCachedChatRoomsToAdapter(pendingRoomListSnapshot);
             }
         }
     };
@@ -429,6 +439,7 @@ public class MainActivity extends Activity {
     private int libraryScanGen = 0;
     private int activeLibraryScanGen = 0;
     private final PlaybackCoordinator playback = new PlaybackCoordinator();
+    private MediaSuiteHost mediaSuite;
     private int podcastLoadGeneration = 0;
     private boolean podcastEpisodeLoading = false;
     private volatile boolean podcastPartialPlaybackStarted = false;
@@ -507,6 +518,8 @@ public class MainActivity extends Activity {
     private long reachGrowingTotalBytes = 0;
     private volatile boolean reachPartialPlaybackStarted = false;
     private volatile boolean reachGrowingReprepareInFlight = false;
+    /** One full-file reprepare when MediaPlayer ends before the download finished decoding. */
+    private boolean reachGrowingFinalReprepareDone = false;
     private int reachGrowingSeekMs = 0;
     private File reachQueuePartialFile = null;
     private static final long REACH_GROWING_EXTEND_MS = 3500;
@@ -715,10 +728,18 @@ public class MainActivity extends Activity {
     private static final long QUEUE_CLEAR_HOLD_MS = 2000L;
     private static final int STARTUP_MOUNT_RETRY_MAX = 3;
     private static final long STARTUP_MOUNT_RETRY_INTERVAL_MS = 3333L;
+    private static final long PERSIST_QUEUE_DEBOUNCE_MS = 500L;
     private long globalPpKeyDownAt = 0;
     private boolean globalPpLongClearHandled = false;
     private int startupMountRetryAttempt = 0;
     private final Handler startupMountHandler = new Handler();
+    private final Handler persistQueueHandler = new Handler();
+    private final Runnable persistQueueDebouncedRunnable = new Runnable() {
+        @Override
+        public void run() {
+            persistPlaybackQueue();
+        }
+    };
     private final Runnable startupMountRetryRunnable = new Runnable() {
         @Override
         public void run() {
@@ -779,11 +800,15 @@ public class MainActivity extends Activity {
     private FrameLayout playerProgressTrack;
     private View playerScrubMarker;
     private ThemedContextMenu themedContextMenu;
+    private Y1UsbFocusHelper usbFocusHelper;
     private final java.util.ArrayList<String> contextMenuLabels = new java.util.ArrayList<String>();
     private final java.util.ArrayList<String> contextMenuIconKeys = new java.util.ArrayList<String>();
     private final java.util.ArrayList<String> contextMenuStateTexts = new java.util.ArrayList<String>();
     private final java.util.ArrayList<Boolean> contextMenuHeaders = new java.util.ArrayList<Boolean>();
     private final java.util.ArrayList<Runnable> contextMenuActions = new java.util.ArrayList<Runnable>();
+    /** Toggle rows that refresh in-place instead of dismissing the context modal. */
+    private final java.util.ArrayList<Boolean> contextMenuKeepOpen = new java.util.ArrayList<Boolean>();
+    // ponytail: Deque.addLast/peekLast/removeLast — never push() (addFirst); that inverts the stack vs peekLast.
     private final java.util.ArrayDeque<String> contextMenuTierStack = new java.util.ArrayDeque<String>();
     private boolean contextMenuInVolumeSlider = false;
     private boolean contextMenuVolumeOnly = false;
@@ -800,6 +825,7 @@ public class MainActivity extends Activity {
     private boolean contextMenuQuickOnly = false;
     private boolean contextMenuNavPending = false;
     private int contextReachMessagePosition = -1;
+    private boolean contextReachMessageIsRoom = false;
     private String contextReachPeerUser;
     private String contextReachPmBody = "";
     private java.util.ArrayDeque<SoulseekClient.Result> soulseekFolderDownloadQueue;
@@ -808,6 +834,7 @@ public class MainActivity extends Activity {
     private boolean soulseekFolderThankPending;
     private String contextReachReactQuote;
     private SoulseekUserDirectory.UserInfo contextReachPeerInfo;
+    private boolean contextQueueTutorialForPlaylist = false;
     private boolean contextQueueEditPlaylist = false;
     private PlaylistManager.Entry playlistEditEntry = null;
     private final java.util.ArrayList<File> playlistEditTracks = new java.util.ArrayList<File>();
@@ -823,10 +850,34 @@ public class MainActivity extends Activity {
     private int contextQueueFocusIndex = 0;
     private boolean nowPlayingHomeMenuVisible = false;
 
-    private static final long NETWORK_RESCAN_INTERVAL_MS = 10_000L;
-    private static final long WIFI_CONTEXT_REFRESH_DEBOUNCE_MS = 500L;
+    private boolean contextTierConfirmOpen = false;
+    /** Optimistic off while {@link WifiManager#setWifiEnabled(false)} is still in flight. */
+    private boolean wifiContextPendingDisable = false;
+    /** Optimistic on + expanded list while {@link WifiManager#setWifiEnabled(true)} is still in flight. */
+    private boolean wifiContextPendingEnable = false;
+    private boolean btContextPendingDisable = false;
+    private boolean btContextPendingEnable = false;
+    private static final long NETWORK_RESCAN_INTERVAL_MS = 18_000L;
+    private static final long WIFI_CONTEXT_REFRESH_DEBOUNCE_MS = 1_200L;
+    private static final long WIFI_CONTEXT_SCAN_DEBOUNCE_MS = 900L;
+    /** Coalesce BT scan/discovery callbacks — full tier rebuild was freezing the wheel. */
+    private static final long BT_CONTEXT_REFRESH_DEBOUNCE_MS = 600L;
+    /** Staggered rescans after Wi-Fi enable — scan results often lag the ENABLED broadcast. */
+    private static final long[] WIFI_CONTEXT_SCAN_RETRY_MS = {400L, 900L, 1800L, 3200L};
+    private static final int WIFI_CONTEXT_REVEAL_INITIAL = 2;
+    private static final int WIFI_CONTEXT_REVEAL_STEP = 4;
+    private int wifiContextScannedRevealLimit = 0;
+    private boolean wifiContextScanActive = false;
+    private static final String PREF_QUEUE_TUTORIAL_SEEN = "queue_tutorial_seen";
+    private static final String PREF_DEBUG_SHOW_ERROR_TOASTS = "debug_show_error_toasts";
     private final Handler wifiContextRefreshHandler = new Handler();
+    private final Handler wifiContextScanFollowUpHandler = new Handler();
+    private final Handler wifiContextScanDebounceHandler = new Handler();
+    private final Handler btContextRefreshHandler = new Handler();
     private boolean wifiContextRefreshPendingResetFocus = false;
+    private boolean btContextRefreshPendingResetFocus = false;
+    private boolean btContextRefreshPendingForce = false;
+    private int wifiContextScanRetryIndex = 0;
     private final Runnable wifiContextRefreshRunnable = new Runnable() {
         @Override
         public void run() {
@@ -834,8 +885,47 @@ public class MainActivity extends Activity {
                 wifiContextRefreshPendingResetFocus = false;
                 return;
             }
-            refreshContextWifiTierImmediate(wifiContextRefreshPendingResetFocus);
+            refreshContextWifiTierImmediate(wifiContextRefreshPendingResetFocus,
+                    wifiContextPendingEnable || wifiContextPendingDisable);
             wifiContextRefreshPendingResetFocus = false;
+        }
+    };
+    private final Runnable btContextRefreshRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!isContextTierActive("bt") && !btContextRefreshPendingForce) {
+                btContextRefreshPendingResetFocus = false;
+                btContextRefreshPendingForce = false;
+                return;
+            }
+            refreshContextBluetoothTierImmediate(btContextRefreshPendingResetFocus,
+                    btContextRefreshPendingForce);
+            btContextRefreshPendingResetFocus = false;
+            btContextRefreshPendingForce = false;
+        }
+    };
+    private final Runnable wifiContextScanFollowUpRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (themedContextMenu == null || !themedContextMenu.isShowing()) return;
+            if (contextTierConfirmOpen) return;
+            if (!isWifiTierMounted()) return;
+            refreshContextWifiTierImmediate(false, true);
+            try {
+                WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+                if (wm != null && wm.isWifiEnabled()) wm.startScan();
+            } catch (Exception ignored) {}
+            wifiContextScanRetryIndex++;
+            if (wifiContextScanRetryIndex < WIFI_CONTEXT_SCAN_RETRY_MS.length
+                    && isWifiContextExpanded()) {
+                wifiContextScanFollowUpHandler.postDelayed(this,
+                        WIFI_CONTEXT_SCAN_RETRY_MS[wifiContextScanRetryIndex]);
+            } else {
+                finishWifiContextScanPacing();
+                if (isWifiTierMounted()) {
+                    refreshContextWifiTierImmediate(false, true);
+                }
+            }
         }
     };
     private final Handler networkRescanHandler = new Handler();
@@ -844,12 +934,16 @@ public class MainActivity extends Activity {
         public void run() {
             if (!isNetworkRescanActive()) return;
             if (themedContextMenu != null && themedContextMenu.isShowing()
-                    && isContextTierActive("wifi")) {
+                    && isWifiTierMounted() && !contextTierConfirmOpen && isWifiContextExpanded()) {
                 try {
                     WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
                     if (wm != null && wm.isWifiEnabled()) wm.startScan();
                 } catch (Exception ignored) {}
-                refreshContextWifiTierImmediate(false);
+                refreshContextWifiTierImmediate(false, true);
+            } else if (themedContextMenu != null && themedContextMenu.isShowing()
+                    && isWifiTierMounted() && !contextTierConfirmOpen && !isWifiContextExpanded()
+                    && (wifiContextPendingEnable || wifiContextPendingDisable)) {
+                refreshContextWifiTierImmediate(false, true);
             } else if (currentScreenState == STATE_WIFI) {
                 try {
                     WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
@@ -857,11 +951,17 @@ public class MainActivity extends Activity {
                 } catch (Exception ignored) {}
             }
             if (themedContextMenu != null && themedContextMenu.isShowing()
-                    && isContextTierActive("bt")) {
+                    && isBtTierMounted() && !contextTierConfirmOpen
+                    && isBluetoothContextExpanded()) {
                 collectBluetoothDevicesForContext();
-                refreshContextBluetoothTier(false);
+                startBtContextDiscoveryIfNeeded();
+                refreshContextBluetoothTier(false, false);
             } else if (currentScreenState == STATE_BLUETOOTH) {
-                triggerBluetoothDiscovery(false);
+                if (!hasActiveBluetoothAudioSink()) {
+                    triggerBluetoothDiscovery(false);
+                } else {
+                    startBluetoothScan(false);
+                }
             }
             updateNetworkRescanLoop();
         }
@@ -913,6 +1013,7 @@ public class MainActivity extends Activity {
     private static final String BG_MODE_THEME = "theme_wallpaper";
     private static final String BG_MODE_CUSTOM = "custom";
     private static final String PREF_PLAYER_ALBUM_BLUR = "player_album_blur";
+    private static final String PREF_HOLD_BACK_HINT_DISMISSED = "context_hold_back_hint_dismissed";
     private static final String PREF_BG_HOME = "bg_home";
     private static final String PREF_BG_LIBRARY = "bg_library";
     private static final String PREF_BG_SETTINGS = "bg_settings";
@@ -921,6 +1022,7 @@ public class MainActivity extends Activity {
     private static final long REACH_ID3_MIN_BYTES = 32 * 1024L;
     private static final String PREF_BG_THEME_WALLPAPER = "bg_theme_wallpaper";
     private boolean playerAlbumBlurEnabled = false;
+    private boolean holdBackHintDismissed = false;
     private boolean isShuffleMode = false;
     private int repeatMode = 0; // 0: OFF, 1: ONE (Repeat One), 2: ALL (Repeat Folder/All)
     private boolean isSoundEffectEnabled = true;
@@ -954,6 +1056,8 @@ public class MainActivity extends Activity {
     private BluetoothA2dp bluetoothA2dp;
     private BluetoothDevice pendingA2dpDevice;
     private String connectedA2dpAddress;
+    /** User tapped Connect on a paired device — start queue on A2DP when link comes up. */
+    private boolean userInitiatedA2dpConnect;
     private static final String PREF_LAST_BT_AUDIO = "last_bt_audio_address";
     private final BluetoothProfile.ServiceListener a2dpProfileListener = new BluetoothProfile.ServiceListener() {
         @Override
@@ -1015,6 +1119,9 @@ public class MainActivity extends Activity {
                         tvPlayerTimeCurrent.setText(formatTime(current));
                         tvPlayerTimeTotal.setText(formatTime(duration));
                     }
+                    if (avrcpTrackInfoWriter != null) {
+                        avrcpTrackInfoWriter.tickPlayingPosition(current);
+                    }
                     if (playback.isPodcastActive() && !podcastResumeKey.isEmpty()
                             && System.currentTimeMillis() - lastPodcastResumeSaveMs > 5000) {
                         PodcastResumeStore.save(getApplicationContext(), podcastResumeKey, current,
@@ -1052,9 +1159,30 @@ public class MainActivity extends Activity {
                             tvPlayerTimeCurrent.setText(formatTime(current));
                             tvPlayerTimeTotal.setText(formatTime(displayDur));
                         }
-                        int mpDur = mediaPlayer.getDuration();
-                        if (mpDur > 0 && current >= mpDur - REACH_GROWING_EXTEND_MS) {
+                        int edgeMs = reachGrowingDecodeEdgeMs();
+                        if (edgeMs > 0 && current >= edgeMs - REACH_GROWING_EXTEND_MS) {
+                            // #region agent log
+                            try {
+                                org.json.JSONObject d = new org.json.JSONObject();
+                                d.put("current", current);
+                                d.put("edgeMs", edgeMs);
+                                d.put("mpDur", mediaPlayer.getDuration());
+                                d.put("fileLen", reachGrowingCacheFile.length());
+                                d.put("totalBytes", reachGrowingTotalBytes);
+                                DebugAgentLog.log(MainActivity.this, "MainActivity.updateProgressTask",
+                                        "extend at decode edge", "H-STREAM-A", d);
+                            } catch (Exception ignored) {}
+                            // #endregion
                             maybeExtendReachGrowingPlayback(false);
+                        } else if (reachDownloadInProgress() && !isPausedByHand) {
+                            // ponytail: MP3 headers report full length — stall at byte edge without onCompletion.
+                            boolean playing = false;
+                            try {
+                                playing = mediaPlayer.isPlaying();
+                            } catch (Exception ignored) {}
+                            if (!playing) {
+                                maybeExtendReachGrowingPlayback(false);
+                            }
                         }
                         refreshReachGrowingBufferUi();
                     }
@@ -1113,11 +1241,26 @@ public class MainActivity extends Activity {
             } else if (BluetoothAdapter.ACTION_STATE_CHANGED.equals(action)) {
                 int state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR);
                 if (state == BluetoothAdapter.STATE_ON) {
+                    btContextPendingDisable = false;
+                    try {
+                        BluetoothAdapter onAdapter = BluetoothAdapter.getDefaultAdapter();
+                        if (onAdapter != null && onAdapter.isEnabled()) {
+                            btContextPendingEnable = false;
+                        }
+                    } catch (Exception ignored) {
+                        btContextPendingEnable = false;
+                    }
                     ivStatusBluetooth.setVisibility(View.VISIBLE);
                     applyThemedStatusIcon(ivStatusBluetooth, "blConnected", null,
                             R.drawable.ic_bluetooth, 0xFF5555FF);
                     ensureA2dpProfile();
                     reconnectLastBluetoothAudio();
+                    ensureContextBluetoothListVisibleAfterEnable();
+                } else if (state == BluetoothAdapter.STATE_OFF) {
+                    btContextPendingEnable = false;
+                    btContextPendingDisable = false;
+                    ivStatusBluetooth.setVisibility(View.GONE);
+                    connectedA2dpAddress = null;
                 } else {
                     ivStatusBluetooth.setVisibility(View.GONE);
                     connectedA2dpAddress = null;
@@ -1126,11 +1269,31 @@ public class MainActivity extends Activity {
                     buildSettingsUI();
                 else if (currentScreenState == STATE_BLUETOOTH)
                     startBluetoothScan();
+                if (themedContextMenu != null && themedContextMenu.isShowing()
+                        && isBtTierMounted()) {
+                    refreshContextBluetoothTier(false, false);
+                }
             } else if (WifiManager.WIFI_STATE_CHANGED_ACTION.equals(action)) {
                 int state = intent.getIntExtra(WifiManager.EXTRA_WIFI_STATE, WifiManager.WIFI_STATE_UNKNOWN);
+                WifiManager wifiMgr = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
                 if (state == WifiManager.WIFI_STATE_ENABLED) {
+                    wifiContextPendingDisable = false;
+                    if (wifiMgr != null && wifiMgr.isWifiEnabled()) {
+                        wifiContextPendingEnable = false;
+                    }
                     ivStatusWifi.setVisibility(View.VISIBLE);
                     refreshWifiStatusIcon();
+                    if (wifiMgr != null) {
+                        try {
+                            wifiMgr.startScan();
+                        } catch (Exception ignored) {}
+                    }
+                    ensureContextWifiListVisibleAfterEnable();
+                } else if (state == WifiManager.WIFI_STATE_DISABLED) {
+                    wifiContextPendingDisable = false;
+                    wifiContextPendingEnable = false;
+                    cancelWifiContextScanFollowUps();
+                    ivStatusWifi.setVisibility(View.GONE);
                 } else {
                     ivStatusWifi.setVisibility(View.GONE);
                 }
@@ -1140,7 +1303,7 @@ public class MainActivity extends Activity {
                     startWifiScan();
                 onWifiConnectivityChanged();
                 if (themedContextMenu != null && themedContextMenu.isShowing()
-                        && isContextTierActive("wifi")) {
+                        && isWifiTierMounted()) {
                     refreshContextWifiTierImmediate(false, true);
                 }
             } else if (WifiManager.RSSI_CHANGED_ACTION.equals(action)
@@ -1159,15 +1322,14 @@ public class MainActivity extends Activity {
             } else if (BluetoothDevice.ACTION_FOUND.equals(action)) {
                 BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
                 if (device == null) return;
-                String deviceName = device.getName();
                 String deviceAddress = device.getAddress();
-                if (deviceName != null && !foundBtDevices.contains(deviceAddress)) {
+                if (deviceAddress != null && !foundBtDevices.contains(deviceAddress)) {
                     foundBtDevices.add(deviceAddress);
                     if (currentScreenState == STATE_BLUETOOTH) {
-                        addBluetoothItemToUI(deviceName, device, false, false);
+                        addBluetoothItemToUI(bluetoothDeviceDisplayName(device), device, false, false);
                     } else if (themedContextMenu != null && themedContextMenu.isShowing()
                             && isContextTierActive("bt")) {
-                        refreshContextBluetoothTier(false);
+                        refreshContextBluetoothTier(false, false);
                     }
                 }
             } else if (BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(action)) {
@@ -1176,7 +1338,7 @@ public class MainActivity extends Activity {
                 int bondState = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR);
                 if (bondState == BluetoothDevice.BOND_BONDED) {
                     prefs.edit().putString(PREF_LAST_BT_AUDIO, device.getAddress()).apply();
-                    connectBluetoothAudio(device);
+                    connectBluetoothAudio(device, true);
                 }
                 if (currentScreenState == STATE_BLUETOOTH) {
                     if (bondState == BluetoothDevice.BOND_BONDED) {
@@ -1204,23 +1366,46 @@ public class MainActivity extends Activity {
                 if (device != null && state == BluetoothProfile.STATE_CONNECTED) {
                     connectedA2dpAddress = device.getAddress();
                     prefs.edit().putString(PREF_LAST_BT_AUDIO, device.getAddress()).apply();
+                    cancelBluetoothDiscoveryIfActive();
+                    if (avrcpTrackInfoWriter != null) avrcpTrackInfoWriter.ensureReady();
+                    kickY1BridgeMediaService();
+                    routeAudioToBluetoothA2dp();
+                    syncAvrcpTrackInfo(true);
+                    if (userInitiatedA2dpConnect) {
+                        userInitiatedA2dpConnect = false;
+                        resumeBluetoothAudioPlayback();
+                    }
+                    // ponytail: Samsung TVs miss playstate if only metadata was sent before AVRCP ready.
+                    new Handler().postDelayed(new Runnable() {
+                        @Override public void run() {
+                            syncAvrcpTrackInfo(false);
+                        }
+                    }, 600);
                     Toast.makeText(MainActivity.this, getString(R.string.toast_audio_connected, device.getName()), Toast.LENGTH_SHORT).show();
                 } else if (device != null && state == BluetoothProfile.STATE_DISCONNECTED
                         && device.getAddress().equals(connectedA2dpAddress)) {
                     connectedA2dpAddress = null;
                 }
+                if (themedContextMenu != null && themedContextMenu.isShowing()
+                        && isBtTierMounted()) {
+                    refreshContextBluetoothTier(false, false);
+                }
                 if (currentScreenState == STATE_BLUETOOTH) startBluetoothScan();
             } else if (BluetoothAdapter.ACTION_DISCOVERY_FINISHED.equals(action)) {
                 updateStatusBarTitle();
+                if (themedContextMenu != null && themedContextMenu.isShowing()
+                        && isContextTierActive("bt")) {
+                    refreshContextBluetoothTier(false, false);
+                }
             } else if (WifiManager.SCAN_RESULTS_AVAILABLE_ACTION.equals(action)) {
                 WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
                 if (wm != null) {
                     List<ScanResult> results = wm.getScanResults();
                     updateWifiUI(results);
                     if (themedContextMenu != null && themedContextMenu.isShowing()
-                            && isContextTierActive("wifi")) {
+                            && shouldRefreshWifiContextUi() && !contextTierConfirmOpen) {
                         collectWifiNetworksFromScan();
-                        scheduleContextWifiRefresh(false);
+                        scheduleContextWifiScanDebounce();
                     }
                 }
                 updateStatusBarTitle();
@@ -1255,7 +1440,7 @@ public class MainActivity extends Activity {
                     public void run() {
                         if (isFinishing()) return;
                         applyThemeToMainMenu();
-                        rebuildHomeMenuIfVisible();
+                        scheduleRebuildHomeMenuIfVisible();
                     }
                 });
             }
@@ -1267,6 +1452,40 @@ public class MainActivity extends Activity {
                 && layoutMainMenu.getVisibility() == View.VISIBLE) {
             buildHomeMenu();
         }
+    }
+
+    /** Coalesce rapid home menu rebuilds from connectivity/theme callbacks. */
+    private void scheduleRebuildHomeMenuIfVisible() {
+        clockHandler.removeCallbacks(homeMenuRebuildRunnable);
+        clockHandler.postDelayed(homeMenuRebuildRunnable, 100L);
+    }
+
+    /** ponytail: one guard — clear sibling browse layers before any list rebuild. */
+    public void resetBrowserListHost() {
+        if (scrollViewBrowser != null) scrollViewBrowser.setVisibility(View.VISIBLE);
+        if (listVirtualSongs != null) {
+            listVirtualSongs.setVisibility(View.GONE);
+            listVirtualSongs.setAdapter(null);
+        }
+        if (containerBrowserItems != null) containerBrowserItems.removeAllViews();
+    }
+
+    /** Show virtualized song list or scroll browse — enforces mutual exclusion. */
+    public void showVirtualSongList(boolean virtual) {
+        if (scrollViewBrowser != null) {
+            scrollViewBrowser.setVisibility(virtual ? View.GONE : View.VISIBLE);
+        }
+        if (listVirtualSongs != null) {
+            listVirtualSongs.setVisibility(virtual ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    public MediaTransportBar getPlayerTransport() {
+        return playerTransport;
+    }
+
+    public MediaTransportBar getVideoTransport() {
+        return videoTransport;
     }
 
     @Override
@@ -1286,6 +1505,7 @@ public class MainActivity extends Activity {
                     java.io.StringWriter sw = new java.io.StringWriter();
                     java.io.PrintWriter pw = new java.io.PrintWriter(sw);
                     e.printStackTrace(pw);
+                    android.util.Log.e("SolarCrash", sw.toString());
                     java.io.File logFile = new java.io.File("/storage/sdcard0/solar_crash_log.txt");
                     java.io.FileOutputStream fos = new java.io.FileOutputStream(logFile, true);
                     fos.write(("\n\n--- 💥 CRASH REPORT (" + new java.util.Date().toString() + ") ---\n").getBytes());
@@ -1330,6 +1550,7 @@ public class MainActivity extends Activity {
         ));
         // 🚀 [여기까지 추가 끝!]
         themedContextMenu = new ThemedContextMenu(this);
+        usbFocusHelper = new Y1UsbFocusHelper(this);
         tvFastScrollLetter = new TextView(this);
         tvFastScrollLetter.setTextSize(50); // 글자 크기를 아주 큼직하게!
         tvFastScrollLetter.setGravity(android.view.Gravity.CENTER);
@@ -1357,6 +1578,8 @@ public class MainActivity extends Activity {
 
         migrateLegacyPrefs();
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        mediaSuite = new MediaSuiteHost(new MediaSuiteHostAdapter(this));
+        avrcpTrackInfoWriter = AvrcpTrackInfoWriter.getInstance(this);
         DeezerAccount.migrateLegacyArl(this, prefs);
         DeezerAccount.seedBundledDemoArlIfNeeded(prefs);
         refreshDeezerSessionFromPrefs(false);
@@ -1452,7 +1675,7 @@ public class MainActivity extends Activity {
 
         if (!rootFolder.exists())
             rootFolder.mkdirs();
-        playback.configureStreamPaths(rootFolder, getCacheDir());
+        playback.configureStreamPaths(rootFolder, streamAppCacheRoot());
 
         // 🚀 [추가된 부분] 앱이 켜질 때(혹은 튕기고 재시작될 때) 조용히 자동 스캔을 돌려 리스트를 복구합니다!
         if (customLibrary.isEmpty() && !isCustomScanning) {
@@ -1500,6 +1723,7 @@ public class MainActivity extends Activity {
         if (menuScroll != null) {
             menuScroll.setFocusable(false);
             menuScroll.setFocusableInTouchMode(false);
+            Y1ScrollIndicators.applyVerticalScrollView(menuScroll);
         }
         if (containerHomeMenuItems != null) {
             containerHomeMenuItems.setFocusable(false);
@@ -1556,6 +1780,9 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {}
         try { isFullWidthMenus = prefs.getBoolean("full_width_menus", false); } catch (Exception e) {}
         try { playerAlbumBlurEnabled = prefs.getBoolean(PREF_PLAYER_ALBUM_BLUR, false); } catch (Exception e) {}
+        try {
+            holdBackHintDismissed = prefs.getBoolean(PREF_HOLD_BACK_HINT_DISMISSED, false);
+        } catch (Exception e) {}
         try { migrateBackgroundPrefs(); } catch (Exception e) {}
         try { HomeMenuConfig.migrateHomePrefsIfNeeded(prefs); } catch (Exception e) {}
         try { restorePlaybackQueue(); } catch (Exception e) {}
@@ -1643,8 +1870,12 @@ public class MainActivity extends Activity {
         }
 
         scrollViewBrowser = findViewById(R.id.scroll_view_browser);
+        if (scrollViewBrowser instanceof android.widget.ScrollView) {
+            Y1ScrollIndicators.applyVerticalScrollView((android.widget.ScrollView) scrollViewBrowser);
+        }
 
         listVirtualSongs = new android.widget.ListView(this);
+        Y1ScrollIndicators.applyVerticalListView(listVirtualSongs);
         listVirtualSongs.setDivider(null); // 못생긴 기본 구분선 제거
         listVirtualSongs.setSelector(new android.graphics.drawable.ColorDrawable(0)); // 기본 터치 효과 제거
         listVirtualSongs.setItemsCanFocus(true);
@@ -1662,6 +1893,9 @@ public class MainActivity extends Activity {
         layoutSettingsMode = findViewById(R.id.layout_settings_mode);
         containerSettingsItems = findViewById(R.id.container_settings_items);
         settingsScrollView = findViewById(R.id.settings_list_scroll);
+        if (settingsScrollView instanceof android.widget.ScrollView) {
+            Y1ScrollIndicators.applyVerticalScrollView((android.widget.ScrollView) settingsScrollView);
+        }
         listReachBrowse = (ListView) findViewById(R.id.list_reach_browse);
         configureReachListView(listReachBrowse);
         soulseekConversationHost = findViewById(R.id.soulseek_conversation_host);
@@ -1683,6 +1917,7 @@ public class MainActivity extends Activity {
             tvKeyboardHint.setVisibility(View.GONE);
         }
         listThemes = new android.widget.ListView(this);
+        Y1ScrollIndicators.applyVerticalListView(listThemes);
         listThemes.setDivider(null);
         listThemes.setSelector(new android.graphics.drawable.ColorDrawable(0));
         listThemes.setItemsCanFocus(true);
@@ -1778,8 +2013,6 @@ public class MainActivity extends Activity {
         tvPlayerTitle = findViewById(R.id.tv_player_title);
         tvPlayerArtist = findViewById(R.id.tv_player_artist);
         tvPlayerAlbum = findViewById(R.id.tv_player_album);
-        tvPlayerTimeCurrent = findViewById(R.id.tv_player_time_current);
-        tvPlayerTimeTotal = findViewById(R.id.tv_player_time_total);
         ivAlbumArt = findViewById(R.id.iv_album_art);
 
         LinearLayout playerInfoColumn = findViewById(R.id.player_info_column);
@@ -1790,10 +2023,25 @@ public class MainActivity extends Activity {
 
         ivPlayerBgBlur = findViewById(R.id.iv_player_bg_blur);
         ivPauseOverlay = findViewById(R.id.iv_pause_overlay);
-        playerProgress = findViewById(R.id.player_progress);
-        playerProgressTrack = findViewById(R.id.player_progress_track);
-        playerScrubMarker = findViewById(R.id.player_scrub_marker);
+        View playerBarRoot = findViewById(R.id.player_transport_bar);
+        playerTransport = new MediaTransportBar(this, playerBarRoot);
+        playerTransport.setDismissHandler(volumeHandler, VOLUME_CONTEXT_DISMISS_MS);
+        playerTransport.setHintVisible(false);
+        tvPlayerTimeCurrent = playerTransport.timeCurrent();
+        tvPlayerTimeTotal = playerTransport.timeTotal();
+        playerProgress = playerTransport.progressBar();
+        playerProgressTrack = playerTransport.progressTrack();
+        playerScrubMarker = playerTransport.scrubMarker();
+        View videoBarRoot = findViewById(R.id.video_transport_bar);
+        videoTransport = new MediaTransportBar(this, videoBarRoot);
+        videoTransport.setDismissHandler(volumeHandler, VOLUME_CONTEXT_DISMISS_MS);
+        videoTransport.setVideoOverlayDismissMs(3000L);
+        videoTransport.setHintVisible(false);
+        videoTransport.setVisible(false);
         stylePlayerScrubMarker();
+        if (playerTransport != null) playerTransport.applyTheme();
+        if (videoTransport != null) videoTransport.applyTheme();
+        applyHoldBackHintPolicy();
         if (playerProgressTrack != null) {
             playerProgressTrack.getViewTreeObserver().addOnGlobalLayoutListener(
                     new android.view.ViewTreeObserver.OnGlobalLayoutListener() {
@@ -1949,6 +2197,96 @@ public class MainActivity extends Activity {
                     SolarAdbTest.pass("queue_opened");
                 }
             }, 2000);
+        }
+
+        if (getIntent().getBooleanExtra("solar_adb_log_queue", false)) {
+            getIntent().removeExtra("solar_adb_log_queue");
+            new Handler().postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    int disk = PlayQueueStore.persistedItemCount(getApplicationContext());
+                    int mem = playback.unifiedQueue().size();
+                    int missing = PlayQueueStore.countMissingPaths(getApplicationContext());
+                    SolarAdbTest.queueRestoreState(disk, mem, missing);
+                    if (disk > 0 && mem == 0) {
+                        SolarAdbTest.fail("queue_not_restored disk=" + disk);
+                    } else if (disk > 0) {
+                        SolarAdbTest.pass("queue_restored disk=" + disk + " mem=" + mem);
+                    } else {
+                        SolarAdbTest.pass("queue_empty");
+                    }
+                }
+            }, 1500);
+        }
+
+        if (getIntent().getBooleanExtra("solar_adb_avrcp_harness", false)) {
+            final String btAddr = getIntent().getStringExtra("solar_adb_bt_addr");
+            getIntent().removeExtra("solar_adb_avrcp_harness");
+            getIntent().removeExtra("solar_adb_bt_addr");
+            scheduleAdbAvrcpHarness(btAddr != null ? btAddr : "50:BA:02:58:D7:39");
+        }
+
+        if (getIntent().getBooleanExtra("solar_adb_goto", false)) {
+            final int screen = getIntent().getIntExtra("solar_adb_screen", STATE_MENU);
+            getIntent().removeExtra("solar_adb_goto");
+            getIntent().removeExtra("solar_adb_screen");
+            new Handler().postDelayed(new Runnable() {
+                @Override public void run() {
+                    changeScreen(screen);
+                    SolarAdbTest.pass("goto_screen=" + screen);
+                }
+            }, 500);
+        }
+
+        if (getIntent().getBooleanExtra("solar_adb_connect_tv", false)) {
+            getIntent().removeExtra("solar_adb_connect_tv");
+            final String addr = getIntent().getStringExtra("solar_adb_bt_addr");
+            getIntent().removeExtra("solar_adb_bt_addr");
+            new Handler().postDelayed(new Runnable() {
+                @Override public void run() {
+                    BluetoothAdapter ba = BluetoothAdapter.getDefaultAdapter();
+                    if (ba == null) {
+                        SolarAdbTest.fail("no_bt_adapter");
+                        return;
+                    }
+                    userInitiatedA2dpConnect = true;
+                    connectBluetoothAudio(ba.getRemoteDevice(
+                            addr != null ? addr : "50:BA:02:58:D7:39"), true);
+                    new Handler().postDelayed(new Runnable() {
+                        @Override public void run() {
+                            boolean playing = false;
+                            try {
+                                playing = mediaPlayer != null && mediaPlayer.isPlaying();
+                            } catch (Exception ignored) {}
+                            if (playing) {
+                                SolarAdbTest.pass("user_connect_playing");
+                            } else {
+                                SolarAdbTest.fail("user_connect_not_playing");
+                            }
+                        }
+                    }, 8000);
+                }
+            }, 2000);
+        }
+
+        if (getIntent().getBooleanExtra("solar_adb_probe_bt", false)) {
+            getIntent().removeExtra("solar_adb_probe_bt");
+            new Handler().postDelayed(new Runnable() {
+                @Override public void run() {
+                    probeBluetoothUiStateForAdb();
+                }
+            }, 500);
+        }
+
+        if (getIntent().getBooleanExtra("solar_adb_open_bt_context", false)) {
+            getIntent().removeExtra("solar_adb_open_bt_context");
+            new Handler().postDelayed(new Runnable() {
+                @Override public void run() {
+                    showThemedContextMenu();
+                    openContextNetworkTab("bt", 2);
+                    probeBluetoothUiStateForAdb();
+                }
+            }, 1500);
         }
 
         if (getIntent().getBooleanExtra("solar_adb_open_context", false)) {
@@ -2234,6 +2572,13 @@ public class MainActivity extends Activity {
 
     private void applyMenuPanelBackground(FrameLayout host, int widthPx, int heightPx, int defaultHeightPx) {
         if (host == null) return;
+        // ponytail: home menu rows carry their own chrome — transparent host shows theme wallpaper.
+        if (host == menuListHost) {
+            host.setBackgroundColor(0x00000000);
+            if (menuScroll != null) menuScroll.setBackgroundColor(0x00000000);
+            if (containerHomeMenuItems != null) containerHomeMenuItems.setBackgroundColor(0x00000000);
+            return;
+        }
         int h = heightPx > 0 ? heightPx : defaultHeightPx;
         int w = widthPx > 0 ? widthPx : (int) getResources().getDimension(R.dimen.y1_menu_width);
         android.graphics.drawable.Drawable panel =
@@ -2386,6 +2731,13 @@ public class MainActivity extends Activity {
         if (sb.length() > 0) sb.append("\n\n");
         sb.append(bioText);
         return sb.toString();
+    }
+
+    /** In-list capped bio/note panel (full-width profile — no preview pane). */
+    private void addProfileMarqueePanel(ViewGroup host, CharSequence text) {
+        FrameLayout panel = VerticalTextMarqueeHelper.createCappedPanel(this, text,
+                VerticalTextMarqueeHelper.defaultMaxHeightPx(this));
+        host.addView(panel);
     }
 
     private int y1RowKindForScreen() {
@@ -2776,18 +3128,35 @@ public class MainActivity extends Activity {
                 ThemeManager.applyThemedTextStyle(tvPlayerTimeTotal, progressText);
                 tvPlayerTimeTotal.setTypeface(font, android.graphics.Typeface.BOLD);
             }
+            if (playerTransport != null) playerTransport.applyTheme();
+            if (videoTransport != null) videoTransport.applyTheme();
         } catch (Exception ignored) {}
     }
 
     private void refreshPlayerMarquee() {
-        enableMarquee(tvPlayerTitle);
-        enableMarquee(tvPlayerArtist);
-        enableMarquee(tvPlayerAlbum);
-        enableMarquee(tvPlayerTrackCount);
-        if (tvPlayerTitle != null) tvPlayerTitle.setSelected(true);
-        if (tvPlayerArtist != null) tvPlayerArtist.setSelected(true);
-        if (tvPlayerAlbum != null) tvPlayerAlbum.setSelected(true);
-        if (tvPlayerTrackCount != null) tvPlayerTrackCount.setSelected(true);
+        Runnable apply = new Runnable() {
+            @Override
+            public void run() {
+                enableMarquee(tvPlayerTitle);
+                enableMarquee(tvPlayerArtist);
+                enableMarquee(tvPlayerAlbum);
+                enableMarquee(tvPlayerTrackCount);
+                enableMarquee(tvVizTitle);
+                enableMarquee(tvVizArtist);
+                enableMarquee(tvVizAlbum);
+                enableMarquee(tvVizTrackCount);
+                if (tvPlayerTitle != null) tvPlayerTitle.setSelected(true);
+                if (tvPlayerArtist != null) tvPlayerArtist.setSelected(true);
+                if (tvPlayerAlbum != null) tvPlayerAlbum.setSelected(true);
+                if (tvPlayerTrackCount != null) tvPlayerTrackCount.setSelected(true);
+                if (tvVizTitle != null) tvVizTitle.setSelected(true);
+                if (tvVizArtist != null) tvVizArtist.setSelected(true);
+                if (tvVizAlbum != null) tvVizAlbum.setSelected(true);
+                if (tvVizTrackCount != null) tvVizTrackCount.setSelected(true);
+            }
+        };
+        if (tvPlayerTitle != null) tvPlayerTitle.post(apply);
+        else apply.run();
     }
 
     /** Now Playing lines 2–3: artist and album on separate rows. */
@@ -3777,7 +4146,7 @@ public class MainActivity extends Activity {
             boolean busy = soulseekActiveDownload != null
                     || (soulseekClient != null && soulseekClient.isTransferActive());
             if (busy) {
-                Toast.makeText(this, getString(R.string.reach_peer_lost_toast), Toast.LENGTH_LONG).show();
+                toastReachDownloadError(getString(R.string.reach_peer_lost_toast));
             } else if (isSoulseekUiActive()) {
                 buildReachUnavailableUI();
             }
@@ -3975,14 +4344,22 @@ public class MainActivity extends Activity {
                 && (isThemeGalleryActive() || isThemeVariantPickerActive());
     }
 
+    /** Index-driven theme browser scroll — ListView DPAD dispatch is unreliable on API 17. */
+    private boolean moveThemeListFocus(int delta) {
+        if (listThemes == null || themeBrowserRows.isEmpty() || delta == 0) return false;
+        int pos = themeBrowserListPosition();
+        if (pos < 0) pos = themeBrowserFocus;
+        int next = pos + (delta < 0 ? -1 : 1);
+        if (next < 0 || next >= themeBrowserRows.size()) return false;
+        themeBrowserFocus = next;
+        scrollThemesToListPos(next);
+        ThemeBrowser.Row row = themeBrowserRows.get(next);
+        if (row != null) scheduleThemeRowPreview(row);
+        return true;
+    }
+
     private void dispatchThemeListKey(int keyCode) {
-        if (Y1InputKeys.isWheelUp(keyCode)) {
-            listThemes.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP));
-            listThemes.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_UP));
-        } else if (Y1InputKeys.isWheelDown(keyCode)) {
-            listThemes.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN));
-            listThemes.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_DOWN));
-        }
+        moveThemeListFocus(Y1InputKeys.isWheelUp(keyCode) ? -1 : 1);
     }
 
     private void clearThemeGalleryPreview() {
@@ -4427,6 +4804,25 @@ public class MainActivity extends Activity {
         return false;
     }
 
+    /** App cache for Reach/Deezer/podcast stream temps (may use SD when internal is full). */
+    private File streamAppCacheRoot() {
+        return StreamCacheRoot.resolve(getApplicationContext());
+    }
+
+    /** Debug Menu — Soulseek/Deezer download error toasts (success toasts stay visible). */
+    private boolean shouldShowDownloadErrorToasts() {
+        return prefs != null && prefs.getBoolean(PREF_DEBUG_SHOW_ERROR_TOASTS, false);
+    }
+
+    private void toastReachDownloadError(CharSequence message) {
+        if (!shouldShowDownloadErrorToasts() || message == null || message.length() == 0) return;
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+    }
+
+    private void toastStreamDownloadWarning(CharSequence message) {
+        toastReachDownloadError(message);
+    }
+
     private void onNetworkConnectivityChanged() {
         refreshConnectivityGatedMenus();
     }
@@ -4797,6 +5193,7 @@ public class MainActivity extends Activity {
 
     private void configureReachListView(ListView list) {
         if (list == null) return;
+        Y1ScrollIndicators.applyVerticalListView(list);
         list.setDivider(null);
         list.setSelector(new android.graphics.drawable.ColorDrawable(0));
         list.setItemsCanFocus(true);
@@ -5198,9 +5595,32 @@ public class MainActivity extends Activity {
         int total = containerHomeMenuItems.getChildCount();
         if (total == 0) return false;
         int next = focusedHomeMenuIndex + delta;
-        if (next < 0 || next >= total) return false;
+        if (next < 0 || next >= total) {
+            if (menuScroll != null) Y1ScrollIndicators.edgeGlowAtLimit(menuScroll, delta);
+            return false;
+        }
         focusedHomeMenuIndex = next;
         scrollHomeMenuToIndex(next);
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("next", next);
+            d.put("total", total);
+            d.put("scrollY", menuScroll != null ? menuScroll.getScrollY() : -1);
+            View row = getHomeMenuRow(next);
+            if (row != null) {
+                TextView tv = (TextView) row.getTag(HOME_MENU_TAG_LABEL);
+                d.put("label", tv != null && tv.getText() != null ? tv.getText().toString() : "");
+            }
+            if (next >= 0 && next < homeMenuEntries.size()) {
+                d.put("entryId", homeMenuEntries.get(next).id);
+            } else if (next == total - 1 && HomeMenuConfig.shouldShowMoreTile(prefs,
+                    ConnectivityHelper.isOnline(this), ConnectivityHelper.hasLocalNetwork(this))) {
+                d.put("entryId", HomeMenuConfig.ID_MORE);
+            }
+            DebugAgentLog.log(this, "MainActivity.moveHomeMenuFocus", "focus moved", "H-D", d);
+        } catch (Exception ignored) {}
+        // #endregion
         return true;
     }
 
@@ -5293,6 +5713,15 @@ public class MainActivity extends Activity {
 
     private void buildHomeMenu() {
         if (containerHomeMenuItems == null) return;
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("buildGen", homeMenuBuildGen + 1);
+            d.put("prevChildCount", containerHomeMenuItems.getChildCount());
+            d.put("thread", Thread.currentThread().getName());
+            DebugAgentLog.log(this, "MainActivity.buildHomeMenu", "build start", "H-E", d);
+        } catch (Exception ignored) {}
+        // #endregion
         if (ActiveThemeEngine.isJjMode()) {
             buildJjHomeMenu();
             return;
@@ -5304,6 +5733,7 @@ public class MainActivity extends Activity {
         }
         final int buildGen = ++homeMenuBuildGen;
         containerHomeMenuItems.removeAllViews();
+        if (menuScroll != null) menuScroll.scrollTo(0, 0);
         final boolean online = ConnectivityHelper.isOnline(this);
         final boolean onLan = ConnectivityHelper.hasLocalNetwork(this);
         homeMenuEntries = HomeMenuConfig.loadVisibleForDisplay(prefs, online, onLan);
@@ -5334,9 +5764,24 @@ public class MainActivity extends Activity {
             if (menuScroll != null) menuScroll.scrollTo(0, 0);
         }
         for (int i = 0; i < homeMenuEntries.size(); i++) {
+            if (buildGen != homeMenuBuildGen) {
+                // #region agent log
+                try {
+                    org.json.JSONObject d = new org.json.JSONObject();
+                    d.put("staleGen", buildGen);
+                    d.put("currentGen", homeMenuBuildGen);
+                    d.put("abortedAtRow", i);
+                    d.put("childCount", containerHomeMenuItems.getChildCount());
+                    DebugAgentLog.log(this, "MainActivity.buildHomeMenu",
+                            "stale build aborted", "H-HOME-B", d);
+                } catch (Exception ignored) {}
+                // #endregion
+                return;
+            }
             addHomeMenuRow(homeMenuEntries.get(i), i);
         }
         if (showMore) {
+            if (buildGen != homeMenuBuildGen) return;
             addHomeMoreTileRow(homeMenuEntries.size());
         }
         int panelH = menuListHeightPx > 0 ? menuListHeightPx
@@ -5345,15 +5790,67 @@ public class MainActivity extends Activity {
                 (int) getResources().getDimension(R.dimen.y1_menu_height));
         if (buildGen != homeMenuBuildGen) return;
         int childCount = containerHomeMenuItems.getChildCount();
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("buildGen", buildGen);
+            d.put("expectedRows", totalRows);
+            d.put("childCount", childCount);
+            d.put("entryCount", homeMenuEntries.size());
+            d.put("showMore", showMore);
+            d.put("showNowPlaying", showNowPlaying);
+            d.put("menuListHeightPx", menuListHeightPx);
+            d.put("focusedIndex", focusedHomeMenuIndex);
+            java.util.Set<String> idSet = new java.util.HashSet<String>();
+            boolean dupEntryIds = false;
+            org.json.JSONArray entryIds = new org.json.JSONArray();
+            for (HomeMenuConfig.Entry e : homeMenuEntries) {
+                entryIds.put(e.id);
+                if (!idSet.add(e.id)) dupEntryIds = true;
+            }
+            d.put("entryIds", entryIds);
+            d.put("dupEntryIds", dupEntryIds);
+            org.json.JSONArray rowLabels = new org.json.JSONArray();
+            java.util.Set<String> labelSet = new java.util.HashSet<String>();
+            boolean dupLabels = false;
+            boolean musicTwice = false;
+            int musicCount = 0;
+            for (int i = 0; i < childCount; i++) {
+                View row = containerHomeMenuItems.getChildAt(i);
+                String lbl = "";
+                if (row != null) {
+                    TextView tv = (TextView) row.getTag(HOME_MENU_TAG_LABEL);
+                    if (tv != null && tv.getText() != null) lbl = tv.getText().toString();
+                }
+                rowLabels.put(i + ":" + lbl);
+                if (!lbl.isEmpty() && !labelSet.add(lbl)) dupLabels = true;
+                if (getString(R.string.home_menu_music).equals(lbl)) musicCount++;
+            }
+            d.put("rowLabels", rowLabels);
+            d.put("dupLabels", dupLabels);
+            d.put("musicLabelCount", musicCount);
+            d.put("musicTwice", musicCount >= 2);
+            if (menuScroll != null && containerHomeMenuItems != null) {
+                d.put("scrollY", menuScroll.getScrollY());
+                d.put("scrollHeight", menuScroll.getHeight());
+                d.put("contentHeight", containerHomeMenuItems.getHeight());
+            }
+            d.put("countMismatch", childCount != totalRows);
+            d.put("panelSolid", false);
+            DebugAgentLog.log(this, "MainActivity.buildHomeMenu", "home menu built", "H-HOME", d);
+        } catch (Exception ignored) {}
+        // #endregion
         if (childCount != totalRows) {
             try {
                 org.json.JSONObject d = new org.json.JSONObject();
                 d.put("expected", totalRows);
                 d.put("actual", childCount);
-                DebugAgentLog.log(this, "MainActivity.buildHomeMenu", "row count mismatch", "H-HOME", d);
+                DebugAgentLog.log(this, "MainActivity.buildHomeMenu", "row count mismatch", "H-B", d);
             } catch (Exception ignored) {}
         }
         scrollHomeMenuToIndex(focusedHomeMenuIndex);
+        refreshHomeMenuRowStyles();
+        if (containerHomeMenuItems != null) containerHomeMenuItems.requestLayout();
         nowPlayingHomeMenuVisible = shouldShowNowPlayingHome();
     }
 
@@ -5383,6 +5880,7 @@ public class MainActivity extends Activity {
         final List<JjThemeManager.MenuElement> elements = theme.menuElements;
         int focusIdx = 0;
         for (int i = 0; i < elements.size(); i++) {
+            if (buildGen != homeMenuBuildGen) return;
             final JjThemeManager.MenuElement el = elements.get(i);
             if (!"button".equals(el.type)) continue;
             final int rowIdx = i;
@@ -5438,7 +5936,7 @@ public class MainActivity extends Activity {
         JjThemeManager.ThemeData theme = JjThemeManager.availableThemes.get(index);
         Toast.makeText(this, getString(R.string.toast_theme_applied, theme.name), Toast.LENGTH_SHORT).show();
         applyThemeToMainMenu();
-        rebuildHomeMenuIfVisible();
+        scheduleRebuildHomeMenuIfVisible();
         rebuildThemeBrowserRows();
         refreshThemeBrowserList();
     }
@@ -5683,7 +6181,7 @@ public class MainActivity extends Activity {
             lastAlbumArtBytes = null;
         }
         if (currentScreenState == STATE_MENU && containerHomeMenuItems != null) {
-            buildHomeMenu();
+            scheduleRebuildHomeMenuIfVisible();
         }
         refreshContextQuickBarIfShowing();
     }
@@ -5712,15 +6210,8 @@ public class MainActivity extends Activity {
             openScreenWithReturn(STATE_BLUETOOTH);
         } else if (HomeMenuConfig.ID_SETTINGS.equals(id)) {
             changeScreen(STATE_SETTINGS);
-        } else if (HomeMenuConfig.ID_FM.equals(id)) {
-            try {
-                Intent fm = new Intent();
-                fm.setClassName("com.innioasis.fm", "com.innioasis.fm.FMMainActivity");
-                fm.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(fm);
-            } catch (Exception e) {
-                Toast.makeText(this, getString(R.string.toast_fm_unavailable), Toast.LENGTH_SHORT).show();
-            }
+        } else if (HomeMenuConfig.ID_RADIO.equals(id) || HomeMenuConfig.ID_FM.equals(id)) {
+            changeScreen(MediaSuiteHost.STATE_RADIO);
         } else if (HomeMenuConfig.ID_PC_UPLOAD.equals(id)) {
             if (!ConnectivityHelper.hasLocalNetwork(this)) {
                 Toast.makeText(this, getString(R.string.toast_requires_wifi), Toast.LENGTH_SHORT).show();
@@ -5744,9 +6235,9 @@ public class MainActivity extends Activity {
         } else if (HomeMenuConfig.ID_MORE.equals(id)) {
             changeScreen(STATE_MORE);
         } else if (HomeMenuConfig.ID_VIDEOS.equals(id)) {
-            Toast.makeText(this, getString(R.string.home_videos_coming_soon), Toast.LENGTH_LONG).show();
+            changeScreen(MediaSuiteHost.STATE_VIDEOS);
         } else if (HomeMenuConfig.ID_PHOTOS.equals(id)) {
-            Toast.makeText(this, getString(R.string.home_photos_coming_soon), Toast.LENGTH_LONG).show();
+            changeScreen(MediaSuiteHost.STATE_PHOTOS);
         } else if (HomeMenuConfig.ID_AUDIOBOOKS.equals(id)) {
             Toast.makeText(this, getString(R.string.home_audiobooks_coming_soon), Toast.LENGTH_LONG).show();
         } else if (HomeMenuConfig.ID_APPS.equals(id)) {
@@ -5786,7 +6277,12 @@ public class MainActivity extends Activity {
             case STATE_DEEZER_SETUP: return getString(R.string.status_deezer_setup);
             case STATE_APPS: return getString(R.string.status_apps);
             case STATE_MORE: return getString(R.string.path_more);
-            default: return getString(R.string.status_home);
+            default:
+                if (mediaSuite != null) {
+                    String mediaTitle = mediaSuite.statusTitleForState(currentScreenState);
+                    if (mediaTitle != null && !mediaTitle.isEmpty()) return mediaTitle;
+                }
+                return getString(R.string.status_home);
         }
     }
 
@@ -5982,13 +6478,18 @@ public class MainActivity extends Activity {
             flushPodcastResumeIfNeeded();
             pausePodcastBackgroundDownload();
             clearPlayerScrubCursorMode(false);
-            if (!playback.isMusicActive() || state != STATE_SETTINGS) {
+            // Keep stream cache while a persisted queue still references temps.
+            if (!playback.hasAnyQueue()
+                    && (!playback.isMusicActive() || state != STATE_SETTINGS)) {
                 purgeStreamTempFiles();
             }
         }
         if (state != STATE_PLAYER) maybeRenamePodcastGrowingCache();
 
         SessionLifecycle.onLeaveScreen(this, currentScreenState, state);
+        if (mediaSuite != null) {
+            mediaSuite.onScreenExit(currentScreenState);
+        }
         if (state == STATE_PLAYER && currentScreenState != STATE_PLAYER) {
             playerReturnScreen = currentScreenState;
             if (currentScreenState == STATE_PODCASTS) {
@@ -6009,8 +6510,34 @@ public class MainActivity extends Activity {
         currentScreenState = state;
         updateSoulseekSharePolicy();
         layoutMainMenu.setVisibility(state == STATE_MENU ? View.VISIBLE : View.GONE);
-        layoutBrowserMode.setVisibility((state == STATE_BROWSER || state == STATE_PODCASTS || state == STATE_SOULSEEK || state == STATE_DEEZER || state == STATE_APPS || state == STATE_MORE) ? View.VISIBLE : View.GONE);
+        if (state != STATE_MENU && layoutMainMenu != null) {
+            layoutMainMenu.setVisibility(View.GONE);
+        }
+        layoutBrowserMode.setVisibility((state == STATE_BROWSER || state == STATE_PODCASTS || state == STATE_SOULSEEK || state == STATE_DEEZER || state == STATE_APPS || state == STATE_MORE
+                || state == MediaSuiteHost.STATE_RADIO || state == MediaSuiteHost.STATE_RADIO_FM_BROWSE
+                || state == MediaSuiteHost.STATE_RADIO_NET_BROWSE || state == MediaSuiteHost.STATE_VIDEOS
+                || state == MediaSuiteHost.STATE_PHOTOS) ? View.VISIBLE : View.GONE);
+        if (state == STATE_BROWSER || state == STATE_PODCASTS || state == STATE_SOULSEEK || state == STATE_DEEZER
+                || state == STATE_APPS || state == STATE_MORE
+                || state == MediaSuiteHost.STATE_RADIO || state == MediaSuiteHost.STATE_RADIO_FM_BROWSE
+                || state == MediaSuiteHost.STATE_RADIO_NET_BROWSE || state == MediaSuiteHost.STATE_VIDEOS
+                || state == MediaSuiteHost.STATE_PHOTOS) {
+            resetBrowserListHost();
+        }
         layoutPlayerMode.setVisibility(state == STATE_PLAYER ? View.VISIBLE : View.GONE);
+        if (state == STATE_PLAYER && playerTransport != null) {
+            playerTransport.setHintVisible(false);
+            playerTransport.setVisible(true);
+        }
+        if (state == MediaSuiteHost.STATE_VIDEO_PLAYER && videoTransport != null) {
+            videoTransport.setHintVisible(false);
+        }
+        if (state == STATE_PLAYER) {
+            refreshPlayerMarquee();
+            if (playback.isRadioActive() && mediaSuite != null) {
+                mediaSuite.bindRadioNowPlayingUi();
+            }
+        }
         layoutSettingsMode.setVisibility(state == STATE_SETTINGS ? View.VISIBLE : View.GONE);
         layoutBluetoothMode.setVisibility(state == STATE_BLUETOOTH ? View.VISIBLE : View.GONE);
         layoutWifiMode.setVisibility(state == STATE_WIFI ? View.VISIBLE : View.GONE);
@@ -6154,7 +6681,25 @@ public class MainActivity extends Activity {
                 }
             }, 1500);
         }
+        if (mediaSuite != null) {
+            mediaSuite.onScreenEnter(state);
+        }
+        updateVideoStatusBarPolicy();
         updateNetworkRescanLoop();
+    }
+
+    /** Hide status bar during video; restore when leaving or when hold-Back menu is open. */
+    private void updateVideoStatusBarPolicy() {
+        View statusBar = findViewById(R.id.layout_status_bar);
+        if (statusBar == null) return;
+        boolean onVideo = currentScreenState == MediaSuiteHost.STATE_VIDEO_PLAYER;
+        boolean ctxOpen = themedContextMenu != null && themedContextMenu.isShowing();
+        statusBar.setVisibility(onVideo && !ctxOpen ? View.GONE : View.VISIBLE);
+    }
+
+    public void mediaSetStatusBarVisible(boolean visible) {
+        View statusBar = findViewById(R.id.layout_status_bar);
+        if (statusBar != null) statusBar.setVisibility(visible ? View.VISIBLE : View.GONE);
     }
 
     private void loadBrightnessUI() {
@@ -6246,6 +6791,20 @@ public class MainActivity extends Activity {
     private void handleCenterShortClick() {
         if (themedContextMenu != null && themedContextMenu.isShowing()) return;
         if (System.currentTimeMillis() < suppressListClickUntil) return;
+        // #region agent log
+        if (MediaSuiteHost.isMediaSuiteState(currentScreenState)) {
+            try {
+                View fc = getCurrentFocus();
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("screen", currentScreenState);
+                d.put("focusNull", fc == null);
+                d.put("focusClass", fc != null ? fc.getClass().getSimpleName() : "");
+                d.put("listVis", listVirtualSongs != null && listVirtualSongs.getVisibility() == View.VISIBLE);
+                d.put("browserChildCount", containerBrowserItems != null ? containerBrowserItems.getChildCount() : -1);
+                DebugAgentLog.log(this, "MainActivity.handleCenterShortClick", "media center", "H-C", d);
+            } catch (Exception ignored) {}
+        }
+        // #endregion
         if (currentScreenState == STATE_WIFI_KEYBOARD) {
             handleKeyboardInput();
         } else if (currentScreenState == STATE_MENU) {
@@ -6281,7 +6840,7 @@ public class MainActivity extends Activity {
                 return;
             }
             if (currentScreenState == STATE_SETTINGS
-                    && isRoomThreadScreenActive()
+                    && SettingsScreens.SOULSEEK_CHAT_ROOM_WALL.equals(settingsSubScreenKey)
                     && soulseekConversationHost != null
                     && soulseekConversationHost.getVisibility() == View.VISIBLE
                     && listConversationThread != null) {
@@ -6294,18 +6853,15 @@ public class MainActivity extends Activity {
                 if (listConversationThread.getAdapter() == null
                         || listConversationThread.getAdapter().getCount() == 0
                         || (pos >= 0 && isRoomNewMessagePosition(pos))) {
-                    if (SettingsScreens.SOULSEEK_CHAT_ROOM_WALL.equals(settingsSubScreenKey)) {
-                        openSoulseekRoomWallCompose();
-                    } else {
-                        openSoulseekRoomCompose();
-                    }
+                    openSoulseekRoomWallCompose();
                 } else if (pos >= 0) {
                     openReachRoomMessageContextMenu(pos);
                 }
                 return;
             }
             if (currentScreenState == STATE_SETTINGS
-                    && SettingsScreens.SOULSEEK_MESSAGES_THREAD.equals(settingsSubScreenKey)
+                    && (SettingsScreens.SOULSEEK_MESSAGES_THREAD.equals(settingsSubScreenKey)
+                    || SettingsScreens.SOULSEEK_CHAT_ROOM_THREAD.equals(settingsSubScreenKey))
                     && soulseekConversationHost != null
                     && soulseekConversationHost.getVisibility() == View.VISIBLE
                     && listConversationThread != null) {
@@ -6318,8 +6874,14 @@ public class MainActivity extends Activity {
                 if (listConversationThread.getAdapter() == null
                         || listConversationThread.getAdapter().getCount() == 0
                         || (pos >= 0 && isConversationNewMessagePosition(pos))) {
-                    openSoulseekMessageCompose(soulseekMessagePeer);
+                    if (SettingsScreens.SOULSEEK_CHAT_ROOM_THREAD.equals(settingsSubScreenKey)) {
+                        openSoulseekRoomCompose();
+                    } else {
+                        openSoulseekMessageCompose(soulseekMessagePeer);
+                    }
                 } else if (pos >= 0) {
+                    contextReachMessageIsRoom =
+                            SettingsScreens.SOULSEEK_CHAT_ROOM_THREAD.equals(settingsSubScreenKey);
                     openReachMessageContextMenu(pos);
                 }
                 return;
@@ -6427,9 +6989,12 @@ public class MainActivity extends Activity {
     private void openReachMessageContextMenu(int messagePosition) {
         if (!(listConversationThread.getAdapter() instanceof ConversationThreadAdapter)) return;
         ConversationThreadAdapter ad = (ConversationThreadAdapter) listConversationThread.getAdapter();
-        if (ad.getEntryAt(messagePosition) == null) return;
+        ConversationDisplayBuilder.Entry entry = ad.getEntryAt(messagePosition);
+        if (entry == null || entry.message == null || entry.message.statusEvent) return;
         contextReachMessagePosition = messagePosition;
-        contextReachPeerUser = soulseekMessagePeer;
+        contextReachPeerUser = contextReachMessageIsRoom
+                ? (entry.message.peer != null ? entry.message.peer : "")
+                : soulseekMessagePeer;
         if (themedContextMenu != null && themedContextMenu.isShowing()) {
             pushContextReachMessageTier(messagePosition);
             return;
@@ -6441,6 +7006,8 @@ public class MainActivity extends Activity {
         if (isConversationThreadActive() && listConversationThread != null) {
             int pos = listConversationThread.getSelectedItemPosition();
             if (pos >= 0 && !isConversationNewMessagePosition(pos)) {
+                contextReachMessageIsRoom =
+                        SettingsScreens.SOULSEEK_CHAT_ROOM_THREAD.equals(settingsSubScreenKey);
                 pushContextReachMessageTier(pos);
                 return true;
             }
@@ -6467,9 +7034,12 @@ public class MainActivity extends Activity {
     private void pushContextReachMessageTier(int messagePosition) {
         if (!(listConversationThread.getAdapter() instanceof ConversationThreadAdapter)) return;
         ConversationThreadAdapter ad = (ConversationThreadAdapter) listConversationThread.getAdapter();
-        if (ad.getEntryAt(messagePosition) == null) return;
+        ConversationDisplayBuilder.Entry entry = ad.getEntryAt(messagePosition);
+        if (entry == null || entry.message == null || entry.message.statusEvent) return;
         contextReachMessagePosition = messagePosition;
-        contextReachPeerUser = soulseekMessagePeer;
+        contextReachPeerUser = contextReachMessageIsRoom
+                ? (entry.message.peer != null ? entry.message.peer : "")
+                : soulseekMessagePeer;
         pushContextMenuTier("reach_msg");
         rebuildContextReachMessageTier(true);
     }
@@ -6553,9 +7123,10 @@ public class MainActivity extends Activity {
         if (!(listConversationThread.getAdapter() instanceof ConversationThreadAdapter)) return;
         ConversationThreadAdapter ad = (ConversationThreadAdapter) listConversationThread.getAdapter();
         final ConversationDisplayBuilder.Entry entry = ad.getEntryAt(contextReachMessagePosition);
-        if (entry == null || entry.message == null) return;
+        if (entry == null || entry.message == null || entry.message.statusEvent) return;
         final String quoteText = entry.displayText;
-        final String peer = soulseekMessagePeer;
+        final String sender = entry.message.peer != null ? entry.message.peer.trim() : "";
+        final String peer = contextReachMessageIsRoom ? sender : soulseekMessagePeer;
 
         java.util.ArrayList<String> labels = new java.util.ArrayList<String>();
         java.util.ArrayList<String> states = new java.util.ArrayList<String>();
@@ -6574,7 +7145,11 @@ public class MainActivity extends Activity {
             @Override
             public void run() {
                 dismissThemedContextMenu();
-                openSoulseekMessageComposeWithQuote(peer, quoteText);
+                if (contextReachMessageIsRoom) {
+                    openSoulseekRoomComposeWithQuote(sender, quoteText);
+                } else {
+                    openSoulseekMessageComposeWithQuote(peer, quoteText);
+                }
             }
         });
 
@@ -6585,11 +7160,16 @@ public class MainActivity extends Activity {
             @Override
             public void run() {
                 dismissThemedContextMenu();
-                openSoulseekUserProfile(peer, new Runnable() {
+                final String profileUser = contextReachMessageIsRoom ? sender : peer;
+                openSoulseekUserProfile(profileUser, new Runnable() {
                     @Override
                     public void run() {
-                        soulseekMessagePeer = peer;
-                        buildSoulseekConversationUI(peer);
+                        if (contextReachMessageIsRoom) {
+                            buildSoulseekChatRoomUI(soulseekChatRoomName);
+                        } else {
+                            soulseekMessagePeer = peer;
+                            buildSoulseekConversationUI(peer);
+                        }
                     }
                 });
             }
@@ -6601,34 +7181,45 @@ public class MainActivity extends Activity {
         actions.add(new Runnable() {
             @Override
             public void run() {
+                contextReachPeerUser = contextReachMessageIsRoom ? sender : peer;
                 pushContextReachReactTier(quoteText);
             }
         });
 
-        labels.add(getString(R.string.soulseek_new_message));
+        labels.add(contextReachMessageIsRoom
+                ? getString(R.string.soulseek_room_new_message)
+                : getString(R.string.soulseek_new_message));
         states.add(null);
         headers.add(Boolean.FALSE);
         actions.add(new Runnable() {
             @Override
             public void run() {
                 dismissThemedContextMenu();
-                openSoulseekMessageCompose(peer);
+                if (contextReachMessageIsRoom) {
+                    openSoulseekRoomCompose();
+                } else {
+                    openSoulseekMessageCompose(peer);
+                }
             }
         });
 
-        labels.add(getString(R.string.soulseek_block_user));
-        states.add(null);
-        headers.add(Boolean.FALSE);
-        actions.add(new Runnable() {
-            @Override
-            public void run() {
-                dismissThemedContextMenu();
-                toggleSoulseekPeerBlocked(peer, true);
-            }
-        });
+        if (!sender.isEmpty()) {
+            labels.add(getString(R.string.soulseek_block_user));
+            states.add(null);
+            headers.add(Boolean.FALSE);
+            actions.add(new Runnable() {
+                @Override
+                public void run() {
+                    dismissThemedContextMenu();
+                    toggleSoulseekPeerBlocked(peer, true);
+                }
+            });
+        }
 
-        showContextMenuTierInPlace(peer != null ? peer : getString(R.string.soulseek_messages),
-                labels, states, null, headers, actions, focusList);
+        String title = peer != null && !peer.isEmpty() ? peer
+                : (contextReachMessageIsRoom ? soulseekChatRoomName
+                        : getString(R.string.soulseek_messages));
+        showContextMenuTierInPlace(title, labels, states, null, headers, actions, focusList);
     }
 
     private void rebuildContextReachInboxTier(boolean focusList) {
@@ -6698,6 +7289,31 @@ public class MainActivity extends Activity {
                 openSoulseekMessageCompose(peer);
             }
         });
+
+        labels.add(getString(R.string.soulseek_edit_user_note));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+                openSoulseekPeerNoteEditor(peer);
+            }
+        });
+        final String inboxNote = SoulseekPeerNotes.getNoteSync(MainActivity.this, peer);
+        if (inboxNote != null && !inboxNote.trim().isEmpty()) {
+            labels.add(getString(R.string.soulseek_clear_user_note));
+            states.add(null);
+            headers.add(Boolean.FALSE);
+            actions.add(new Runnable() {
+                @Override
+                public void run() {
+                    dismissThemedContextMenu();
+                    SoulseekPeerNotes.clearNote(MainActivity.this, peer);
+                    buildSoulseekMessagesUI();
+                }
+            });
+        }
 
         final boolean ignored = SoulseekPeerPrefs.isIgnored(prefs, peer);
         labels.add(getString(ignored ? R.string.soulseek_unignore_user : R.string.soulseek_ignore_user));
@@ -6802,10 +7418,195 @@ public class MainActivity extends Activity {
         if (!themedContextMenu.isShowing()) {
             showThemedContextMenu();
             contextMenuTierStack.clear();
-            contextMenuTierStack.push(CONTEXT_NAV_ROOT);
+            contextMenuTierStack.addLast(CONTEXT_NAV_ROOT);
         }
         pushContextMenuTier("reach_pm");
         rebuildContextReachPmTier(true);
+    }
+
+    /** Global context-modal alert (Reach PM style) for background download failures. */
+    private void showGlobalContextAlert(final String title, final String message) {
+        if (title == null || title.trim().isEmpty()) return;
+        if (themedContextMenu == null) return;
+        if (!themedContextMenu.isShowing()) {
+            showThemedContextMenu();
+            contextMenuTierStack.clear();
+            contextMenuTierStack.addLast(CONTEXT_NAV_ROOT);
+        }
+        pushContextMenuTier("alert");
+        java.util.ArrayList<String> labels = new java.util.ArrayList<String>();
+        java.util.ArrayList<String> states = new java.util.ArrayList<String>();
+        java.util.ArrayList<Boolean> headers = new java.util.ArrayList<Boolean>();
+        java.util.ArrayList<Runnable> actions = new java.util.ArrayList<Runnable>();
+        labels.add(message != null ? message : "");
+        states.add(null);
+        headers.add(Boolean.TRUE);
+        actions.add(null);
+        labels.add(getString(R.string.soulseek_pm_dismiss));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override public void run() {
+                dismissThemedContextMenu();
+            }
+        });
+        showContextMenuTierInPlace(title, labels, states, headers, actions, true);
+        themedContextMenu.focusSubmenuList();
+        themedContextMenu.requestOverlayFocus();
+    }
+
+    private java.util.List<PlayQueue.QueueItem> collectMusicQueueItemsForPlaylist() {
+        java.util.ArrayList<PlayQueue.QueueItem> out = new java.util.ArrayList<PlayQueue.QueueItem>();
+        for (PlayQueue.QueueItem q : playback.unifiedQueue().items()) {
+            if (q.kind == PlayQueue.ItemKind.PODCAST_EPISODE) continue;
+            if (q.kind == PlayQueue.ItemKind.MUSIC_FILE || q.kind == PlayQueue.ItemKind.REACH_STREAM
+                    || q.kind == PlayQueue.ItemKind.DEEZER_STREAM) {
+                out.add(q);
+            }
+        }
+        return out;
+    }
+
+    private static final int PLAYLIST_STREAM_SAVE_RETRIES = 3;
+
+    /** Silently materialize Deezer/Reach stream rows into library paths for a saved M3U. */
+    private void materializePlaylistStreamTracksAsync(final File m3uFile,
+            final java.util.List<PlayQueue.QueueItem> items) {
+        if (m3uFile == null || items == null || items.isEmpty()) return;
+        boolean hasStream = false;
+        for (PlayQueue.QueueItem q : items) {
+            if (q.file != null && isStreamTempFile(q.file)) {
+                hasStream = true;
+                break;
+            }
+        }
+        if (!hasStream) return;
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                for (final PlayQueue.QueueItem q : items) {
+                    if (q.file == null || !isStreamTempFile(q.file)) continue;
+                    File libraryFile = null;
+                    String fail = null;
+                    for (int attempt = 0; attempt < PLAYLIST_STREAM_SAVE_RETRIES && libraryFile == null; attempt++) {
+                        try {
+                            if (q.kind == PlayQueue.ItemKind.DEEZER_STREAM && q.deezerTrackId > 0) {
+                                libraryFile = downloadDeezerTrackToLibrarySync(q.deezerTrackId, q.deezerMeta);
+                            } else if (!isStreamTrackStillBuffering(q.file)) {
+                                libraryFile = promoteStreamFileToLibrarySync(q.file);
+                            } else if (q.kind == PlayQueue.ItemKind.REACH_STREAM) {
+                                fail = getString(R.string.soulseek_save_wait_download);
+                            }
+                        } catch (Exception e) {
+                            fail = e.getMessage() != null ? e.getMessage() : "Save failed";
+                        }
+                        if (libraryFile == null && attempt + 1 < PLAYLIST_STREAM_SAVE_RETRIES) {
+                            try { Thread.sleep(800L * (attempt + 1)); } catch (InterruptedException ignored) {}
+                        }
+                    }
+                    if (libraryFile != null && libraryFile.isFile()) {
+                        final File old = q.file;
+                        final File lib = libraryFile;
+                        replacePathInM3u(m3uFile, old, lib);
+                        runOnUiThread(new Runnable() {
+                            @Override public void run() {
+                                playback.finishStreamFileInQueue(old, lib, lib.getName());
+                            }
+                        });
+                    } else if (fail != null) {
+                        final String msg = fail;
+                        final String title = q.streamMeta();
+                        runOnUiThread(new Runnable() {
+                            @Override public void run() {
+                                showGlobalContextAlert(title,
+                                        getString(R.string.playlist_stream_save_failed, msg));
+                            }
+                        });
+                    }
+                }
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        scanMediaLibraryAsync();
+                        purgeUnreferencedReachCache();
+                    }
+                });
+            }
+        }, "PlaylistStreamMat").start();
+    }
+
+    private File promoteStreamFileToLibrarySync(File src) {
+        if (src == null || !src.isFile() || isStreamTrackStillBuffering(src)) return null;
+        File dest = SoulseekClient.uniqueFile(rootFolder, src.getName());
+        final String oldPath = src.getAbsolutePath();
+        if (src.renameTo(dest)) {
+            ReachTrackProvenance.renamePath(prefs, oldPath, dest.getAbsolutePath());
+            return dest;
+        }
+        try {
+            java.io.FileInputStream in = new java.io.FileInputStream(src);
+            java.io.FileOutputStream out = new java.io.FileOutputStream(dest);
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) >= 0) out.write(buf, 0, n);
+            in.close();
+            out.close();
+            src.delete();
+            ReachTrackProvenance.renamePath(prefs, oldPath, dest.getAbsolutePath());
+            return dest;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private File downloadDeezerTrackToLibrarySync(long trackId, String meta) throws Exception {
+        DeezerClient client = new DeezerClient(prefs);
+        if (!client.isSessionValid()) client.initSession();
+        DeezerDownloader downloader = new DeezerDownloader(client);
+        String title = meta != null ? meta : ("track_" + trackId);
+        DeezerResult track = new DeezerResult(trackId, title, "", "", 0, 0, "", "");
+        final Object lock = new Object();
+        final File[] dest = {null};
+        final String[] err = {null};
+        downloader.download(track, rootFolder, client.fileExtension(), new DeezerDownloader.Listener() {
+            @Override public void onProgress(long doneBytes, long totalBytes) {}
+            @Override public void onPartialReady(File d, long bytesRead) {}
+            @Override public void onComplete(File d, DeezerTrackData t) {
+                dest[0] = d;
+                synchronized (lock) { lock.notifyAll(); }
+            }
+            @Override public void onError(String message) {
+                err[0] = message;
+                synchronized (lock) { lock.notifyAll(); }
+            }
+        });
+        synchronized (lock) {
+            while (dest[0] == null && err[0] == null) {
+                lock.wait(300000);
+            }
+        }
+        if (err[0] != null) throw new Exception(err[0]);
+        return dest[0];
+    }
+
+    /** ponytail: line scan — fine for Y1-sized M3U files */
+    private void replacePathInM3u(File m3u, File oldF, File newF) {
+        if (m3u == null || oldF == null || newF == null || !m3u.isFile()) return;
+        try {
+            java.io.BufferedReader in = new java.io.BufferedReader(
+                    new java.io.FileReader(m3u));
+            StringBuilder sb = new StringBuilder();
+            String line;
+            String oldPath = oldF.getAbsolutePath();
+            String newPath = newF.getAbsolutePath();
+            while ((line = in.readLine()) != null) {
+                if (line.equals(oldPath)) line = newPath;
+                sb.append(line).append('\n');
+            }
+            in.close();
+            java.io.FileOutputStream out = new java.io.FileOutputStream(m3u);
+            out.write(sb.toString().getBytes("UTF-8"));
+            out.close();
+        } catch (Exception ignored) {}
     }
 
     private void rebuildContextReachPeerTier(boolean focusList) {
@@ -6896,6 +7697,20 @@ public class MainActivity extends Activity {
                 openSoulseekPeerNoteEditor(peer);
             }
         });
+        if (note != null && !note.trim().isEmpty()) {
+            labels.add(getString(R.string.soulseek_clear_user_note));
+            states.add(null);
+            iconKeys.add(null);
+            headers.add(Boolean.FALSE);
+            actions.add(new Runnable() {
+                @Override
+                public void run() {
+                    dismissThemedContextMenu();
+                    SoulseekPeerNotes.clearNote(MainActivity.this, peer);
+                    rebuildContextReachPeerTier(true);
+                }
+            });
+        }
         labels.add(getString(blocked ? R.string.soulseek_unblock_user : R.string.soulseek_block_user));
         states.add(null);
         iconKeys.add(null);
@@ -7218,7 +8033,7 @@ public class MainActivity extends Activity {
         @Override public android.content.Context context() { return MainActivity.this; }
         @Override public android.content.SharedPreferences prefs() { return prefs; }
         @Override public File rootFolder() { return rootFolder; }
-        @Override public File deezerCacheDir() { return DeezerCache.dir(getCacheDir()); }
+        @Override public File deezerCacheDir() { return DeezerCache.dir(streamAppCacheRoot()); }
         @Override public LinearLayout containerBrowserItems() { return containerBrowserItems; }
         @Override public TextView tvBrowserPath() { return tvBrowserPath; }
         @Override public void clickFeedback() { MainActivity.this.clickFeedback(); }
@@ -7908,17 +8723,21 @@ public class MainActivity extends Activity {
     @android.annotation.SuppressLint("MissingPermission")
     private void startBluetoothScan(boolean requestFocus) {
         updateStatusBarTitle();
+        syncBluetoothContextPendingFlags();
         final BluetoothAdapter ba = BluetoothAdapter.getDefaultAdapter();
         boolean isOn = false;
         String statusText = "OFF";
 
         if (ba != null) {
             int state = ba.getState();
-            if (state == BluetoothAdapter.STATE_ON) {
+            boolean powerOn = isBluetoothPowerOn();
+            if (!powerOn && (btContextPendingEnable || btContextPendingDisable
+                    || state == BluetoothAdapter.STATE_TURNING_ON
+                    || state == BluetoothAdapter.STATE_TURNING_OFF)) {
+                statusText = "Wait...";
+            } else if (powerOn) {
                 isOn = true;
                 statusText = "ON";
-            } else if (state == BluetoothAdapter.STATE_TURNING_ON || state == BluetoothAdapter.STATE_TURNING_OFF) {
-                statusText = "Wait...";
             }
         }
 
@@ -7930,20 +8749,11 @@ public class MainActivity extends Activity {
                 @Override
                 public void onClick(View v) {
                     clickFeedback();
-                    if (ba != null) {
-                        boolean isCurrentlyOn = ba.isEnabled();
-                        if (isCurrentlyOn) {
-                            Toast.makeText(MainActivity.this, getString(R.string.toast_bt_turning_off), Toast.LENGTH_SHORT).show();
-                            ba.disable();
-                        } else {
-                            Toast.makeText(MainActivity.this, getString(R.string.toast_bt_turning_on), Toast.LENGTH_SHORT).show();
-                            ba.enable();
-                        }
-                        TextView tvRight = (TextView) btnToggle.getChildAt(1);
-                        tvRight.setText("Wait...");
-                        if (!btnToggle.hasFocus())
-                            ThemeManager.applyThemedTextStyle(tvRight, y1RowTextColorSelected(Y1_ROW_MENU));
-                    }
+                    applyBluetoothPowerState(!isBluetoothPowerOn());
+                    TextView tvRight = (TextView) btnToggle.getChildAt(1);
+                    tvRight.setText("Wait...");
+                    if (!btnToggle.hasFocus())
+                        ThemeManager.applyThemedTextStyle(tvRight, y1RowTextColorSelected(Y1_ROW_MENU));
                 }
             });
             containerBtItems.addView(btnToggle, 0);
@@ -7990,8 +8800,23 @@ public class MainActivity extends Activity {
     @android.annotation.SuppressLint("MissingPermission")
     private void triggerBluetoothDiscovery(boolean requestFocus) {
         final BluetoothAdapter ba = BluetoothAdapter.getDefaultAdapter();
-        if (ba == null || !ba.isEnabled()) return;
-        if (ba.isDiscovering()) ba.cancelDiscovery();
+        if (ba == null || !isBluetoothPowerOn()) return;
+        // ponytail: MTK BT stack drops A2DP during inquiry — never scan while audio sink is up.
+        if (hasActiveBluetoothAudioSink()) {
+            // #region agent log
+            if (DebugAgentLog.ENABLED) {
+                try {
+                    org.json.JSONObject d = new org.json.JSONObject();
+                    d.put("connectedAddr", connectedA2dpAddress);
+                    d.put("screen", currentScreenState);
+                    DebugAgentLog.log(this, "MainActivity.triggerBluetoothDiscovery",
+                            "skip_discovery_a2dp_active", "H-BT5", d);
+                } catch (Exception ignored) {}
+            }
+            // #endregion
+            return;
+        }
+        if (ba.isDiscovering()) return;
         ba.startDiscovery();
         if (requestFocus && currentScreenState == STATE_BLUETOOTH
                 && containerBtItems != null && containerBtItems.getChildCount() > 0) {
@@ -8026,10 +8851,36 @@ public class MainActivity extends Activity {
         try {
             if (device.getBondState() == BluetoothDevice.BOND_BONDED) {
                 if (isBluetoothAudioConnected(device)) {
+                    // #region agent log
+                    try {
+                        org.json.JSONObject d = new org.json.JSONObject();
+                        d.put("addr", device.getAddress());
+                        d.put("action", "disconnect_a2dp");
+                        DebugAgentLog.log(this, "MainActivity.pairBluetoothDevice", "toggle", "H-BT3", d);
+                    } catch (Exception ignored) {}
+                    // #endregion
                     disconnectBluetoothAudio(device);
                 } else {
-                    connectBluetoothAudio(device);
+                    // #region agent log
+                    try {
+                        org.json.JSONObject d = new org.json.JSONObject();
+                        d.put("addr", device.getAddress());
+                        d.put("action", "connect_a2dp");
+                        DebugAgentLog.log(this, "MainActivity.pairBluetoothDevice", "toggle", "H-BT3", d);
+                    } catch (Exception ignored) {}
+                    // #endregion
+                    userInitiatedA2dpConnect = true;
+                    connectBluetoothAudio(device, true);
                 }
+                progressHandler.postDelayed(new Runnable() {
+                    @Override public void run() {
+                        if (currentScreenState == STATE_BLUETOOTH) startBluetoothScan(false);
+                        if (themedContextMenu != null && themedContextMenu.isShowing()
+                                && isBtTierMounted()) {
+                            refreshContextBluetoothTier(false, false);
+                        }
+                    }
+                }, 800);
                 return;
             }
             BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
@@ -8101,7 +8952,7 @@ public class MainActivity extends Activity {
         if (bonded == null) return;
         for (BluetoothDevice device : bonded) {
             if (addr.equals(device.getAddress())) {
-                connectBluetoothAudio(device);
+                connectBluetoothAudio(device, true);
                 return;
             }
         }
@@ -8109,10 +8960,33 @@ public class MainActivity extends Activity {
 
     @android.annotation.SuppressLint("MissingPermission")
     private void connectBluetoothAudio(BluetoothDevice device) {
+        connectBluetoothAudio(device, false);
+    }
+
+    /** Disconnect other A2DP sinks before connecting (RB Meta vs Living Room TV). */
+    @android.annotation.SuppressLint("MissingPermission")
+    private void connectBluetoothAudio(BluetoothDevice device, boolean exclusive) {
         if (device == null) return;
         ensureA2dpProfile();
         BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
         if (adapter != null && adapter.isDiscovering()) adapter.cancelDiscovery();
+        if (exclusive && bluetoothA2dp != null && adapter != null) {
+            try {
+                Method disconnect = bluetoothA2dp.getClass().getMethod("disconnect", BluetoothDevice.class);
+                java.util.Set<BluetoothDevice> bonded = adapter.getBondedDevices();
+                if (bonded != null) {
+                    for (BluetoothDevice other : bonded) {
+                        if (other == null || device.getAddress().equals(other.getAddress())) continue;
+                        try {
+                            if (bluetoothA2dp.getConnectionState(other)
+                                    == BluetoothProfile.STATE_CONNECTED) {
+                                disconnect.invoke(bluetoothA2dp, other);
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
         pendingA2dpDevice = device;
         if (bluetoothA2dp != null) {
             connectA2dpNow(device);
@@ -8163,11 +9037,78 @@ public class MainActivity extends Activity {
         try {
             Method connect = bluetoothA2dp.getClass().getMethod("connect", BluetoothDevice.class);
             Object ok = connect.invoke(bluetoothA2dp, device);
+            // #region agent log
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("addr", device.getAddress());
+                d.put("ok", ok);
+                d.put("a2dpOn", audioManager != null && audioManager.isBluetoothA2dpOn());
+                DebugAgentLog.log(this, "MainActivity.connectA2dpNow", "connect", "H-BT4", d);
+            } catch (Exception ignored) {}
+            // #endregion
             if (ok instanceof Boolean && !(Boolean) ok) {
                 Toast.makeText(this, getString(R.string.toast_audio_connect_failed), Toast.LENGTH_SHORT).show();
+            } else {
+                routeAudioToBluetoothA2dp();
             }
         } catch (Exception e) {
             Toast.makeText(this, getString(R.string.toast_audio_connect_failed), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /** API 17: route music stream to A2DP sink after connect. */
+    private void routeAudioToBluetoothA2dp() {
+        try {
+            if (audioManager != null) {
+                audioManager.setBluetoothA2dpOn(true);
+            }
+        } catch (Exception ignored) {}
+    }
+
+    /**
+     * After user connects a TV/speaker: prepare queue if needed and start playback on A2DP.
+     * ponytail: reconnectLastBluetoothAudio on boot does not call this — only explicit Connect.
+     */
+    private void resumeBluetoothAudioPlayback() {
+        routeAudioToBluetoothA2dp();
+        if (!playback.hasAnyQueue() || playback.musicPlaylist().isEmpty()) {
+            // #region agent log
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("hasQueue", playback.hasAnyQueue());
+                d.put("musicSize", playback.musicPlaylist().size());
+                DebugAgentLog.log(this, "MainActivity.resumeBluetoothAudioPlayback",
+                        "no_music_to_play", "H-PLAY-BT", d);
+            } catch (Exception ignored) {}
+            // #endregion
+            return;
+        }
+        isPausedByHand = false;
+        boolean mpNull = mediaPlayer == null;
+        boolean playing = false;
+        try {
+            playing = mediaPlayer != null && mediaPlayer.isPlaying();
+        } catch (Exception ignored) {}
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("mpNull", mpNull);
+            d.put("wasPlaying", playing);
+            d.put("index", playback.musicIndex());
+            DebugAgentLog.log(this, "MainActivity.resumeBluetoothAudioPlayback",
+                    "resume", "H-PLAY-BT", d);
+        } catch (Exception ignored) {}
+        // #endregion
+        if (mpNull) {
+            prepareMusicTrack(playback.musicIndex());
+            return;
+        }
+        if (!playing) {
+            try {
+                mediaPlayer.start();
+                updatePlayerUI();
+                syncAvrcpTrackInfo(false);
+            } catch (Exception ignored) {}
         }
     }
 
@@ -8216,6 +9157,32 @@ public class MainActivity extends Activity {
     private void tryGrantPrivilegedPermission(String permission) {
         if (permission == null || permission.trim().isEmpty()) return;
         runSuCommandSilently("pm grant " + shQuote(getPackageName()) + " " + shQuote(permission));
+    }
+
+    @android.annotation.SuppressLint("MissingPermission")
+    private boolean hasActiveBluetoothAudioSink() {
+        if (connectedA2dpAddress != null) return true;
+        BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+        if (adapter == null || bluetoothA2dp == null) return false;
+        try {
+            java.util.Set<BluetoothDevice> bonded = adapter.getBondedDevices();
+            if (bonded == null) return false;
+            for (BluetoothDevice device : bonded) {
+                if (device != null
+                        && bluetoothA2dp.getConnectionState(device) == BluetoothProfile.STATE_CONNECTED) {
+                    return true;
+                }
+            }
+        } catch (Exception ignored) {}
+        return false;
+    }
+
+    @android.annotation.SuppressLint("MissingPermission")
+    private void cancelBluetoothDiscoveryIfActive() {
+        try {
+            BluetoothAdapter ba = BluetoothAdapter.getDefaultAdapter();
+            if (ba != null && ba.isDiscovering()) ba.cancelDiscovery();
+        } catch (Exception ignored) {}
     }
 
     @android.annotation.SuppressLint("MissingPermission")
@@ -9256,6 +10223,9 @@ public class MainActivity extends Activity {
         if (RowKeys.BUTTON_VIBRATE.equals(rowKey)) return stateOnOff(isVibrationEnabled);
         if (RowKeys.SCREEN_OFF_CTRL.equals(rowKey)) return stateOnOff(isScreenOffControlEnabled);
         if (RowKeys.DEBUG_JJ_THEMES.equals(rowKey)) return stateOnOff(ActiveThemeEngine.isJjMode());
+        if (RowKeys.DEBUG_SHOW_ERROR_TOASTS.equals(rowKey)) {
+            return stateOnOff(prefs != null && prefs.getBoolean(PREF_DEBUG_SHOW_ERROR_TOASTS, false));
+        }
         if (RowKeys.APP_THEME.equals(rowKey)) return ThemeManager.getCurrentTheme().name;
         if (RowKeys.STATUS_BAR_LEFT.equals(rowKey)) {
             return statusBarShowsTitle ? getString(R.string.settings_status_title) : getString(R.string.common_clock);
@@ -9339,6 +10309,23 @@ public class MainActivity extends Activity {
             }
             if (RowKeys.LIB_ALBUM_SUB.equals(rowKey)) return stateOnOff(libraryBrowsePrefs.albumOwnerSubtitles());
             if (RowKeys.LIB_GUEST_SUB.equals(rowKey)) return stateOnOff(libraryBrowsePrefs.guestSongSubtitles());
+        }
+        if (SettingsScreens.RADIO.equals(settingsSubScreenKey) && mediaSuite != null) {
+            if (SettingsScreens.RADIO_FM_BAND.equals(rowKey)) return mediaSuite.fmBandRegionLabel();
+            if (SettingsScreens.RADIO_INTERNET_COUNTRY.equals(rowKey)) {
+                return mediaSuite.internetCountryLabel();
+            }
+            if (MediaSuiteHost.ROW_AUTO_DETECT.equals(rowKey)) {
+                return stateOnOff(mediaSuite.isAutoDetectRegionEnabled());
+            }
+            if (MediaSuiteHost.ROW_BUFFER_SD.equals(rowKey)) {
+                return stateOnOff(mediaSuite.isBufferOnSdEnabled());
+            }
+        }
+        if (SettingsScreens.VIDEO.equals(settingsSubScreenKey) && mediaSuite != null) {
+            if (MediaSuiteHost.ROW_VIDEO_SLEEP.equals(rowKey)) {
+                return stateOnOff(mediaSuite.isSleepDuringPlaybackEnabled());
+            }
         }
         // ponytail: Reach blurb only in Reach settings sub-panes — home preview uses appReach icon
         if (RowKeys.SOULSEEK.equals(rowKey)) return "";
@@ -9827,11 +10814,6 @@ public class MainActivity extends Activity {
                 clockHandler.postDelayed(keyboardDelRepeatRunnable, 80);
             } else if (canScheduleCenterMovePick()) {
                 clockHandler.postDelayed(centerMovePickRunnable, CENTER_MOVE_HOLD_MS);
-            } else if (fromContextMenu && themedContextMenu != null
-                    && themedContextMenu.focusZone() == ThemedContextMenu.FocusZone.QUICK_BAR) {
-                centerQuickBarTapHandled = true;
-                themedContextMenu.activateFocused();
-                clickFeedback();
             }
         }
         return true;
@@ -9870,6 +10852,9 @@ public class MainActivity extends Activity {
                 return true;
             }
             centerMovePickHandled = false;
+            if (finishQueueTutorialFromInput()) {
+                return true;
+            }
             // #region agent log
             try {
                 org.json.JSONObject d = new org.json.JSONObject();
@@ -9927,6 +10912,16 @@ public class MainActivity extends Activity {
         }
         if (currentScreenState == STATE_PLAYER) {
             if (isCenterKey(event.getKeyCode())) {
+                if (playback.isRadioActive() && mediaSuite != null) {
+                    mediaSuite.handleRadioCenterOk();
+                    playerScrubCursorActive = mediaSuite.radioScrubMode != com.solar.launcher.radio.RadioScrubMode.NONE;
+                    if (playerScrubMarker != null) {
+                        playerScrubMarker.setVisibility(playerScrubCursorActive ? View.VISIBLE : View.GONE);
+                    }
+                    mediaSuite.updateRadioPlayerProgress();
+                    clickFeedback();
+                    return true;
+                }
                 if (playerScrubCursorActive) {
                     commitPlayerScrubCursor();
                 } else {
@@ -9935,6 +10930,12 @@ public class MainActivity extends Activity {
                 clickFeedback();
                 return true;
             }
+        }
+        if (currentScreenState == MediaSuiteHost.STATE_VIDEO_PLAYER && mediaSuite != null
+                && isCenterKey(event.getKeyCode())) {
+            mediaSuite.handleVideoCenterOk();
+            clickFeedback();
+            return true;
         }
         try {
             handleCenterShortClick();
@@ -9946,6 +10947,8 @@ public class MainActivity extends Activity {
         if (otaSystemReplaceInProgress) return;
         flushContextQueueMoveIfDirty();
         cancelPendingContextWifiRefresh();
+        cancelPendingContextBluetoothRefresh();
+        cancelWifiContextScanFollowUps();
         contextMenuTierStack.clear();
         contextMenuInVolumeSlider = false;
         contextMenuVolumeOnly = false;
@@ -9959,19 +10962,23 @@ public class MainActivity extends Activity {
         contextMenuVolumeReturnTier = null;
         contextMenuVolumeOnly = false;
         contextMenuOpenedAtMs = 0;
+        contextTierConfirmOpen = false;
         volumeHandler.removeCallbacks(hideVolumeContextTask);
         updateNetworkRescanLoop();
         if (themedContextMenu != null) themedContextMenu.dismiss();
         restoreFocusAfterContextMenuDismiss();
+        updateVideoStatusBarPolicy();
     }
 
     private boolean isNetworkRescanActive() {
         if (currentScreenState == STATE_WIFI || currentScreenState == STATE_BLUETOOTH) return true;
-        boolean ctxWifi = isContextTierActive("wifi");
-        boolean ctxBt = isContextTierActive("bt");
+        boolean ctxWifi = isWifiTierMounted() && !contextTierConfirmOpen
+                && (isWifiContextExpanded() || wifiContextPendingEnable || wifiContextPendingDisable);
+        boolean ctxBt = isBtTierMounted() && !contextTierConfirmOpen
+                && (isBluetoothContextExpanded() || btContextPendingEnable || btContextPendingDisable);
         boolean active = ctxWifi || ctxBt;
         // #region agent log
-        if (themedContextMenu != null && themedContextMenu.isShowing()) {
+        if (DebugAgentLog.ENABLED && themedContextMenu != null && themedContextMenu.isShowing()) {
             try {
                 org.json.JSONObject d = new org.json.JSONObject();
                 d.put("ctxWifi", ctxWifi);
@@ -10070,6 +11077,9 @@ public class MainActivity extends Activity {
             // #endregion
             return true;
         }
+        if (settingsScrollView instanceof android.widget.ScrollView) {
+            Y1ScrollIndicators.edgeGlowAtLimit((android.widget.ScrollView) settingsScrollView, delta);
+        }
         return false;
     }
 
@@ -10099,6 +11109,19 @@ public class MainActivity extends Activity {
                 }
                 return isViewDescendantOf(focused, layoutBrowserMode);
             default:
+                if (MediaSuiteHost.isMediaListBrowseState(currentScreenState)) {
+                    if (layoutBrowserMode == null || layoutBrowserMode.getVisibility() != View.VISIBLE) {
+                        return false;
+                    }
+                    if (listVirtualSongs != null && listVirtualSongs.getVisibility() == View.VISIBLE) {
+                        if (listVirtualSongs.hasFocus()) return true;
+                        if (focused != null && isViewDescendantOf(focused, listVirtualSongs)) return true;
+                        int sel = listVirtualSongs.getSelectedItemPosition();
+                        return sel >= 0 && listVirtualSongs.getAdapter() != null
+                                && sel < listVirtualSongs.getCount();
+                    }
+                    return isViewDescendantOf(focused, layoutBrowserMode);
+                }
                 return true;
         }
     }
@@ -10186,6 +11209,9 @@ public class MainActivity extends Activity {
                         }
                         break;
                     default:
+                        if (MediaSuiteHost.isMediaListBrowseState(currentScreenState)) {
+                            ensureBrowserListFocus();
+                        }
                         break;
                 }
             }
@@ -10274,9 +11300,7 @@ public class MainActivity extends Activity {
                 openContextNetworkTab("bt", 2);
                 break;
             case CONTEXT_QUICK_POWER_INDEX:
-                suppressListClickUntil = System.currentTimeMillis() + CONTEXT_MENU_CLICK_SUPPRESS_MS;
-                dismissThemedContextMenu();
-                showShutdownConfirm();
+                openContextPowerTier();
                 break;
             case CONTEXT_QUICK_QUEUE_INDEX:
                 if (!contextQuickBarShowsQueue()) {
@@ -10309,11 +11333,17 @@ public class MainActivity extends Activity {
         if (themedContextMenu == null) return;
         themedContextMenu.setQuickReturnIndex(quickIndex);
         if ("wifi".equals(tier) && !isWifiPowerOn()) applyWifiPowerState(true);
+        if ("bt".equals(tier) && !isBluetoothPowerOn()) {
+            applyBluetoothPowerState(true);
+        }
         setContextNetworkTier(tier);
         if ("wifi".equals(tier)) {
+            resetWifiContextScanPacing();
             refreshContextWifiTierImmediate(true, true);
+            scheduleWifiContextScanFollowUps();
         } else {
             refreshContextBluetoothTier(true, true);
+            startBtContextDiscoveryIfNeeded();
         }
         themedContextMenu.focusSubmenuList();
         themedContextMenu.requestOverlayFocus();
@@ -10326,13 +11356,16 @@ public class MainActivity extends Activity {
             d.put("tierDepth", contextMenuTierStack.size());
             d.put("zone", themedContextMenu.focusZone().name());
             d.put("submenuOpen", themedContextMenu.isSubmenuTierOpen());
+            d.put("listVisible", themedContextMenu.isSubmenuTierOpen());
+            d.put("runId", "post-fix-stack");
             DebugAgentLog.log(this, "MainActivity.openContextNetworkTab", "tab entered", "H6", d);
         } catch (Exception ignored) {}
         // #endregion
     }
 
     private void showShutdownConfirm() {
-        showThemedConfirm(getString(R.string.context_shutdown_title),
+        showContextTierConfirm(
+                getString(R.string.context_shutdown_title),
                 getString(R.string.context_shutdown_message),
                 getString(R.string.context_shutdown_confirm),
                 getString(R.string.common_cancel),
@@ -10343,7 +11376,83 @@ public class MainActivity extends Activity {
                             Runtime.getRuntime().exec(new String[] {"su", "-c", "reboot -p"});
                         } catch (Exception ignored) {}
                     }
-                });
+                },
+                null);
+    }
+
+    /** Power quick chip — shut down or switch to Rockbox without leaving the context modal first. */
+    private void openContextPowerTier() {
+        if (themedContextMenu == null) return;
+        themedContextMenu.setQuickReturnIndex(CONTEXT_QUICK_POWER_INDEX);
+        setContextPowerTier();
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("tierTop", contextMenuTopTier());
+            d.put("tierDepth", contextMenuTierStack.size());
+            d.put("submenuOpen", themedContextMenu.isSubmenuTierOpen());
+            DebugAgentLog.log(this, "MainActivity.openContextPowerTier", "open power", "H4", d);
+        } catch (Exception ignored) {}
+        // #endregion
+        refreshContextPowerTier(true);
+        themedContextMenu.focusSubmenuList();
+        themedContextMenu.requestOverlayFocus();
+    }
+
+    private void refreshContextPowerTier(boolean resetFocus) {
+        if (!"power".equals(contextMenuTopTier())) {
+            // #region agent log
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("tierTop", contextMenuTopTier());
+                d.put("tierDepth", contextMenuTierStack.size());
+                DebugAgentLog.log(this, "MainActivity.refreshContextPowerTier",
+                        "bail not power tier", "H-POWER-B", d);
+            } catch (Exception ignored) {}
+            // #endregion
+            return;
+        }
+        java.util.ArrayList<String> labels = new java.util.ArrayList<String>();
+        java.util.ArrayList<String> states = new java.util.ArrayList<String>();
+        java.util.ArrayList<Boolean> headers = new java.util.ArrayList<Boolean>();
+        java.util.ArrayList<Runnable> actions = new java.util.ArrayList<Runnable>();
+
+        headers.add(Boolean.FALSE);
+        labels.add(getString(R.string.context_shutdown_confirm));
+        states.add(null);
+        actions.add(new Runnable() {
+            @Override public void run() {
+                suppressListClickUntil = System.currentTimeMillis() + CONTEXT_MENU_CLICK_SUPPRESS_MS;
+                showShutdownConfirm();
+            }
+        });
+
+        if (LauncherSwitch.isRockboxAvailable(this) && LauncherSwitch.isSwitchScriptAvailable()) {
+            headers.add(Boolean.FALSE);
+            labels.add(getString(R.string.settings_switch_rockbox));
+            states.add(null);
+            actions.add(new Runnable() {
+                @Override public void run() {
+                    suppressListClickUntil = System.currentTimeMillis() + CONTEXT_MENU_CLICK_SUPPRESS_MS;
+                    dismissThemedContextMenu();
+                    launchRockboxSwitch();
+                }
+            });
+        }
+
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("rowCount", labels.size());
+            d.put("rockboxInstalled", LauncherSwitch.isRockboxInstalled(this));
+            d.put("rockboxAvailable", LauncherSwitch.isRockboxAvailable(this));
+            d.put("switchScript", LauncherSwitch.isSwitchScriptAvailable());
+            DebugAgentLog.log(this, "MainActivity.refreshContextPowerTier", "power tier", "H-POWER", d);
+        } catch (Exception ignored) {}
+        // #endregion
+
+        showContextMenuTierInPlace(getString(R.string.context_quick_power), labels, states, headers, actions,
+                resetFocus);
     }
 
     private void showContextMediaSliders(int quickIndex) {
@@ -10395,7 +11504,8 @@ public class MainActivity extends Activity {
             ViewGroup root = (ViewGroup) findViewById(android.R.id.content);
             int margin = (int) (10 * getResources().getDisplayMetrics().density);
             int panelW = screenWidthPx > margin * 2 ? screenWidthPx - margin * 2 : y1ActiveRowWidthPx();
-            themedContextMenu.showVolumeOnly(root, getString(R.string.context_hold_back_hint),
+            themedContextMenu.showVolumeOnly(root,
+                    holdBackHintDismissed ? "" : getString(R.string.context_hold_back_hint),
                     getString(R.string.context_quick_volume), max, cur, y1RowHeightPx, panelW);
         }
         scheduleVolumeContextDismiss();
@@ -10502,6 +11612,7 @@ public class MainActivity extends Activity {
             themedContextMenu.focusOptionsList();
         }
         contextMenuOpenedAtMs = System.currentTimeMillis();
+        markHoldBackHintDismissed();
         backLongPressHandled = true;
         themedContextMenu.requestOverlayFocus();
         clickFeedback();
@@ -10512,17 +11623,25 @@ public class MainActivity extends Activity {
             @Override
             public void onSelected(final int index) {
                 suppressListClickUntil = System.currentTimeMillis() + CONTEXT_MENU_CLICK_SUPPRESS_MS;
-                dismissThemedContextMenu();
+                final boolean keepOpen = index >= 0 && index < contextMenuKeepOpen.size()
+                        && Boolean.TRUE.equals(contextMenuKeepOpen.get(index));
                 final Runnable action = (index >= 0 && index < contextMenuActions.size())
                         ? contextMenuActions.get(index) : null;
+                if (!keepOpen) dismissThemedContextMenu();
                 if (action == null) return;
-                new Handler().post(new Runnable() {
-                    @Override
-                    public void run() {
-                        suppressListClickUntil = System.currentTimeMillis() + CONTEXT_MENU_CLICK_SUPPRESS_MS;
-                        action.run();
-                    }
-                });
+                if (keepOpen) {
+                    action.run();
+                    refreshContextRootOptionsInPlace();
+                } else {
+                    new Handler().post(new Runnable() {
+                        @Override
+                        public void run() {
+                            suppressListClickUntil = System.currentTimeMillis()
+                                    + CONTEXT_MENU_CLICK_SUPPRESS_MS;
+                            action.run();
+                        }
+                    });
+                }
             }
         };
     }
@@ -10554,6 +11673,7 @@ public class MainActivity extends Activity {
 
     /** Center on Back — dismiss at root, or step back through sub-tiers logically. */
     private void activateContextMenuBack() {
+        if (finishQueueTutorialFromInput()) return;
         navigateContextMenuBack(true);
     }
 
@@ -10666,7 +11786,8 @@ public class MainActivity extends Activity {
     private static boolean isReachContextTier(String tier) {
         return "reach_msg".equals(tier) || "reach_inbox".equals(tier)
                 || "reach_peer".equals(tier) || "reach_react".equals(tier)
-                || "reach_pm".equals(tier);
+                || "reach_pm".equals(tier) || "queue_tutorial".equals(tier)
+                || "alert".equals(tier);
     }
 
     /** Pop one Reach sub-tier (react → message → root). */
@@ -10695,6 +11816,12 @@ public class MainActivity extends Activity {
             leaveContextQueueListFocus();
         } else if (isReachContextTier(contextMenuTopTier())) {
             popReachContextTier();
+        } else if ("power".equals(contextMenuTopTier())) {
+            if (contextMenuTierStack.size() > 1) {
+                contextMenuTierStack.removeLast();
+            }
+            themedContextMenu.setSubmenuTierOpen(false);
+            themedContextMenu.focusQuickBarAtReturn();
         } else {
             deactivateContextNetworkTier();
             themedContextMenu.focusQuickBarAtReturn();
@@ -10720,7 +11847,7 @@ public class MainActivity extends Activity {
         clearContextQueueMoveSession();
         cancelPendingContextWifiRefresh();
         contextMenuTierStack.clear();
-        contextMenuTierStack.push(CONTEXT_NAV_ROOT);
+        contextMenuTierStack.addLast(CONTEXT_NAV_ROOT);
         contextMenuInQueueTier = false;
         updateNetworkRescanLoop();
         if (themedContextMenu != null) {
@@ -10753,6 +11880,10 @@ public class MainActivity extends Activity {
             refreshContextBluetoothTier(focusList);
             return;
         }
+        if ("power".equals(tier)) {
+            refreshContextPowerTier(focusList);
+            return;
+        }
         if ("reach_msg".equals(tier)) {
             rebuildContextReachMessageTier(focusList);
             return;
@@ -10773,7 +11904,34 @@ public class MainActivity extends Activity {
             rebuildContextReachPmTier(focusList);
             return;
         }
+        if ("queue_tutorial".equals(tier)) {
+            rebuildContextQueueTutorialTier(focusList);
+            return;
+        }
         restoreContextMenuRootOptions(focusList);
+    }
+
+    /**
+     * Rebuild root context action rows without closing the modal (shuffle/repeat toggles).
+     */
+    private void refreshContextRootOptionsInPlace() {
+        if (themedContextMenu == null || !themedContextMenu.isShowing()) return;
+        if (hasContextActiveTier()) return;
+        populateContextMenu();
+        themedContextMenu.hideSlider();
+        themedContextMenu.setSubmenuTierOpen(false);
+        contextMenuQuickOnly = contextMenuLabels.isEmpty();
+        if (contextMenuLabels.isEmpty()) return;
+        String[] labels = contextMenuLabels.toArray(new String[contextMenuLabels.size()]);
+        String[] iconKeys = contextMenuIconKeys.toArray(new String[contextMenuIconKeys.size()]);
+        String[] stateTexts = contextMenuStateTexts.toArray(new String[contextMenuStateTexts.size()]);
+        boolean[] headers = new boolean[contextMenuHeaders.size()];
+        for (int i = 0; i < headers.length; i++) headers[i] = contextMenuHeaders.get(i);
+        themedContextMenu.replaceListContent(null, labels, iconKeys, stateTexts, headers,
+                createContextMenuListListener(), false);
+        themedContextMenu.ensureSubmenuListVisible();
+        themedContextMenu.requestOverlayFocus();
+        refreshContextQuickBarIfShowing();
     }
 
     /**
@@ -10810,9 +11968,134 @@ public class MainActivity extends Activity {
         activateContextMenuBack();
     }
 
+    /** Wi-Fi quick tier is open in the global context modal (submenu may be collapsed on quick bar). */
+    private boolean isWifiTierMounted() {
+        return themedContextMenu != null && themedContextMenu.isShowing()
+                && "wifi".equals(contextMenuTopTier());
+    }
+
+    private boolean isBtTierMounted() {
+        return themedContextMenu != null && themedContextMenu.isShowing()
+                && "bt".equals(contextMenuTopTier());
+    }
+
+    private boolean shouldRefreshWifiContextUi() {
+        return isWifiTierMounted() || wifiContextPendingEnable || wifiContextPendingDisable;
+    }
+
+    private boolean shouldRefreshBtContextUi() {
+        return isBtTierMounted() || btContextPendingEnable || btContextPendingDisable;
+    }
+
+    /** After Wi-Fi enable — expand list, rescan, and refresh rows without re-tapping the quick chip. */
+    private void ensureContextWifiListVisibleAfterEnable() {
+        if (themedContextMenu == null || !themedContextMenu.isShowing()) return;
+        if (!shouldRefreshWifiContextUi()) return;
+        refreshContextWifiTierImmediate(false, true);
+        if (isWifiTierMounted()) {
+            themedContextMenu.ensureSubmenuListVisible();
+            themedContextMenu.focusSubmenuList();
+        }
+        scheduleWifiContextScanFollowUps();
+        try {
+            WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            if (wm != null && wm.isWifiEnabled()) wm.startScan();
+        } catch (Exception ignored) {}
+    }
+
+    private void ensureContextBluetoothListVisibleAfterEnable() {
+        if (themedContextMenu == null || !themedContextMenu.isShowing()) return;
+        if (!isBtTierMounted()) return;
+        collectBluetoothDevicesForContext();
+        refreshContextBluetoothTier(false, true);
+        if (isBtTierMounted()) {
+            themedContextMenu.ensureSubmenuListVisible();
+            themedContextMenu.focusSubmenuList();
+            startBtContextDiscoveryIfNeeded();
+        }
+    }
+
     private void cancelPendingContextWifiRefresh() {
         wifiContextRefreshPendingResetFocus = false;
         wifiContextRefreshHandler.removeCallbacks(wifiContextRefreshRunnable);
+        wifiContextScanDebounceHandler.removeCallbacks(wifiContextScanDebounceRunnable);
+    }
+
+    private final Runnable wifiContextScanDebounceRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (contextTierConfirmOpen) return;
+            if (themedContextMenu == null || !themedContextMenu.isShowing()) return;
+            if (!shouldRefreshWifiContextUi()) return;
+            refreshContextWifiTierImmediate(false, true);
+        }
+    };
+
+    /** Coalesce SCAN_RESULTS bursts into one ticker refresh. */
+    private void scheduleContextWifiScanDebounce() {
+        if (contextTierConfirmOpen) return;
+        wifiContextScanDebounceHandler.removeCallbacks(wifiContextScanDebounceRunnable);
+        wifiContextScanDebounceHandler.postDelayed(wifiContextScanDebounceRunnable,
+                WIFI_CONTEXT_SCAN_DEBOUNCE_MS);
+    }
+
+    /** ponytail: fixed delays — upgrade to cancel when scan rows appear if this feels slow on fast radios. */
+    private void scheduleWifiContextScanFollowUps() {
+        cancelWifiContextScanFollowUps();
+        if (!isWifiContextExpanded() && !wifiContextPendingEnable) return;
+        wifiContextScanRetryIndex = 0;
+        wifiContextScanFollowUpHandler.postDelayed(wifiContextScanFollowUpRunnable,
+                WIFI_CONTEXT_SCAN_RETRY_MS[0]);
+    }
+
+    private void cancelWifiContextScanFollowUps() {
+        wifiContextScanRetryIndex = 0;
+        wifiContextScanFollowUpHandler.removeCallbacks(wifiContextScanFollowUpRunnable);
+        wifiContextScanActive = false;
+    }
+
+    private void resetWifiContextScanPacing() {
+        wifiContextScannedRevealLimit = 0;
+        wifiContextScanActive = true;
+    }
+
+    private void finishWifiContextScanPacing() {
+        wifiContextScanActive = false;
+        wifiContextScannedRevealLimit = Integer.MAX_VALUE;
+    }
+
+    /** iOS-style: reveal a few new SSIDs per scan pass while the footer spinner runs. */
+    private java.util.ArrayList<String> wifiContextScannedRowsForDisplay(
+            java.util.List<String> scanned, boolean resetFocus) {
+        java.util.ArrayList<String> visible = new java.util.ArrayList<String>();
+        if (!isWifiContextExpanded()) return visible;
+        if (resetFocus) resetWifiContextScanPacing();
+        if (scanned.isEmpty()) return visible;
+        if (!wifiContextScanActive) {
+            visible.addAll(scanned);
+            return visible;
+        }
+        int total = scanned.size();
+        if (wifiContextScannedRevealLimit <= 0) {
+            wifiContextScannedRevealLimit = Math.min(WIFI_CONTEXT_REVEAL_INITIAL, total);
+        } else if (!resetFocus && total > wifiContextScannedRevealLimit) {
+            wifiContextScannedRevealLimit = Math.min(total,
+                    wifiContextScannedRevealLimit + WIFI_CONTEXT_REVEAL_STEP);
+        }
+        int show = Math.min(wifiContextScannedRevealLimit, total);
+        for (int i = 0; i < show; i++) visible.add(scanned.get(i));
+        return visible;
+    }
+
+    private void appendWifiContextScanningFooter(java.util.ArrayList<String> labels,
+            java.util.ArrayList<String> states, java.util.ArrayList<String> iconKeys,
+            java.util.ArrayList<Boolean> headers, java.util.ArrayList<Runnable> actions) {
+        if (!wifiContextScanActive || !isWifiContextExpanded()) return;
+        headers.add(Boolean.FALSE);
+        labels.add(getString(R.string.context_wifi_scanning));
+        states.add(null);
+        iconKeys.add(ThemedContextMenu.ICON_ROW_LOADING);
+        actions.add(null);
     }
 
     private String contextMenuTopTier() {
@@ -10824,7 +12107,7 @@ public class MainActivity extends Activity {
         if (tier == null || !tier.equals(contextMenuTopTier())) return false;
         if (contextMenuInVolumeSlider) return false;
         if (themedContextMenu == null || !themedContextMenu.isShowing()) return false;
-        if ("wifi".equals(tier) || "bt".equals(tier)) {
+        if ("wifi".equals(tier) || "bt".equals(tier) || "power".equals(tier)) {
             return themedContextMenu.isSubmenuTierOpen() && !contextMenuInQueueTier;
         }
         if ("queue".equals(tier)) return contextMenuInQueueTier;
@@ -10848,7 +12131,7 @@ public class MainActivity extends Activity {
     private void pushContextMenuTier(String tier) {
         cancelPendingContextWifiRefresh();
         if (tier != null && tier.length() > 0 && !tier.equals(contextMenuTopTier())) {
-            contextMenuTierStack.push(tier);
+            contextMenuTierStack.addLast(tier);
         }
         contextMenuInQueueTier = "queue".equals(contextMenuTopTier());
         updateNetworkRescanLoop();
@@ -10856,6 +12139,22 @@ public class MainActivity extends Activity {
 
     private void pushContextNetworkTier(String tier) {
         setContextNetworkTier(tier);
+    }
+
+    /** root → power (drops stale wifi/bt tiers so shutdown rows are not skipped). */
+    private void setContextPowerTier() {
+        cancelPendingContextWifiRefresh();
+        contextMenuInQueueTier = false;
+        while (contextMenuTierStack.size() > 1) {
+            contextMenuTierStack.removeLast();
+        }
+        if (contextMenuTierStack.isEmpty()) {
+            contextMenuTierStack.addLast(CONTEXT_NAV_ROOT);
+        }
+        if (!"power".equals(contextMenuTopTier())) {
+            contextMenuTierStack.addLast("power");
+        }
+        updateNetworkRescanLoop();
     }
 
     /** Replace any piled wifi/bt tiers with a single network tab (root → wifi|bt). */
@@ -10866,10 +12165,10 @@ public class MainActivity extends Activity {
             contextMenuTierStack.removeLast();
         }
         if (contextMenuTierStack.isEmpty()) {
-            contextMenuTierStack.push(CONTEXT_NAV_ROOT);
+            contextMenuTierStack.addLast(CONTEXT_NAV_ROOT);
         }
         if (!tier.equals(contextMenuTopTier())) {
-            contextMenuTierStack.push(tier);
+            contextMenuTierStack.addLast(tier);
         }
         updateNetworkRescanLoop();
     }
@@ -10906,7 +12205,22 @@ public class MainActivity extends Activity {
     }
 
     private void refreshContextWifiTierImmediate(boolean resetFocus, boolean force) {
-        if (!force && !isContextTierActive("wifi")) {
+        // ponytail: never stomp in-tier confirm (Turn off Wi-Fi?) — scans use debounced refresh.
+        if (contextTierConfirmOpen) return;
+        // ponytail: Wi-Fi scan refresh must not replace power tier rows.
+        if (!"wifi".equals(contextMenuTopTier())) {
+            // #region agent log
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("tierTop", contextMenuTopTier());
+                d.put("force", force);
+                DebugAgentLog.log(this, "MainActivity.refreshContextWifiTierImmediate",
+                        "bail wrong tier", "H-POWER-A", d);
+            } catch (Exception ignored) {}
+            // #endregion
+            return;
+        }
+        if (!force && !isContextTierActive("wifi") && !shouldRefreshWifiContextUi()) {
             // #region agent log
             try {
                 org.json.JSONObject d = new org.json.JSONObject();
@@ -10919,6 +12233,9 @@ public class MainActivity extends Activity {
             } catch (Exception ignored) {}
             // #endregion
             return;
+        }
+        if (resetFocus && isWifiContextExpanded()) {
+            scheduleWifiContextScanFollowUps();
         }
         String focusLabel = !resetFocus && themedContextMenu != null
                 ? themedContextMenu.focusItemLabel() : null;
@@ -10938,25 +12255,19 @@ public class MainActivity extends Activity {
         actions.add(new Runnable() {
             @Override public void run() {
                 toggleWifiFromContextMenu();
-                refreshContextWifiTierImmediate(false, true);
             }
         });
 
-        final String focusedSsid = wifiContextSsidFromLabel(focusLabel);
-        if (isWifiPowerOn() && focusedSsid != null && isWifiNetworkSaved(focusedSsid)) {
+        if (isWifiContextExpanded() && connected.isEmpty() && scanned.isEmpty()
+                && (isWifiPowerOn() || wifiContextPendingEnable) && !wifiContextScanActive) {
             headers.add(Boolean.FALSE);
-            labels.add(getString(R.string.context_action_forget_wifi));
-            states.add(focusedSsid);
-            iconKeys.add(null);
-            actions.add(new Runnable() {
-                @Override public void run() {
-                    forgetWifiNetwork(focusedSsid);
-                    refreshContextWifiTier(false);
-                }
-            });
+            labels.add(getString(R.string.context_wifi_scanning));
+            states.add(null);
+            iconKeys.add(ThemedContextMenu.ICON_ROW_LOADING);
+            actions.add(null);
         }
 
-        if (isWifiPowerOn() && !connected.isEmpty()) {
+        if (isWifiContextExpanded() && !connected.isEmpty()) {
             headers.add(Boolean.TRUE);
             labels.add(getString(R.string.context_wifi_connected));
             states.add(null);
@@ -10976,13 +12287,14 @@ public class MainActivity extends Activity {
             }
         }
 
-        if (isWifiPowerOn() && !scanned.isEmpty()) {
+        java.util.ArrayList<String> scannedVisible = wifiContextScannedRowsForDisplay(scanned, resetFocus);
+        if (isWifiContextExpanded() && !scannedVisible.isEmpty()) {
             headers.add(Boolean.TRUE);
             labels.add(getString(R.string.status_wifi_networks));
             states.add(null);
             iconKeys.add(null);
             actions.add(null);
-            for (final String ssid : scanned) {
+            for (final String ssid : scannedVisible) {
                 if (ssid == null || ssid.trim().isEmpty()) continue;
                 headers.add(Boolean.FALSE);
                 labels.add(ssid);
@@ -10996,22 +12308,44 @@ public class MainActivity extends Activity {
                 });
             }
         }
+        appendWifiContextScanningFooter(labels, states, iconKeys, headers, actions);
         // #region agent log
         try {
             org.json.JSONObject d = new org.json.JSONObject();
             d.put("rowCount", labels.size());
             d.put("tierTop", contextMenuTopTier());
+            d.put("wifiOn", isWifiPowerOn());
+            d.put("wifiPendingOff", wifiContextPendingDisable);
+            d.put("wifiPendingOn", wifiContextPendingEnable);
+            d.put("wifiExpanded", isWifiContextExpanded());
+            d.put("toggleLabel", labels.isEmpty() ? "" : labels.get(0));
+            d.put("connected", connected.size());
+            d.put("scanned", scanned.size());
+            d.put("scannedVisible", scannedVisible.size());
+            d.put("wifiScanActive", wifiContextScanActive);
+            d.put("wifiRevealLimit", wifiContextScannedRevealLimit);
             d.put("submenuOpen", themedContextMenu != null && themedContextMenu.isSubmenuTierOpen());
             DebugAgentLog.log(this, "MainActivity.refreshContextWifiTierImmediate", "show wifi tier", "H3", d);
         } catch (Exception ignored) {}
         // #endregion
         showContextMenuTierInPlace(getString(R.string.context_tier_wifi), labels, states, iconKeys, headers, actions,
                 resetFocus);
-        try {
-            WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
-            if (wm != null && wm.isWifiEnabled()) wm.startScan();
-        } catch (Exception ignored) {}
         updateNetworkRescanLoop();
+    }
+
+    /** First scan-list SSID row — rows above stay fixed during ticker refresh. */
+    private int contextNetworkTierAnimateFrom(java.util.List<String> labels,
+            java.util.List<Boolean> headers, String scanSectionHeader) {
+        if (labels == null || headers == null || scanSectionHeader == null) {
+            return labels != null ? labels.size() : 0;
+        }
+        for (int i = 0; i < labels.size(); i++) {
+            if (i < headers.size() && Boolean.TRUE.equals(headers.get(i))
+                    && scanSectionHeader.equals(labels.get(i))) {
+                return i + 1;
+            }
+        }
+        return labels.size();
     }
 
     /** SSID from a context-menu row label, excluding fixed action/header rows. */
@@ -11021,6 +12355,7 @@ public class MainActivity extends Activity {
         if (label.equals(getString(R.string.status_wifi_networks))) return null;
         if (label.equals(getString(R.string.context_wifi_connected))) return null;
         if (label.equals(getString(R.string.context_action_forget_wifi))) return null;
+        if (label.equals(getString(R.string.context_wifi_scanning))) return null;
         return label;
     }
 
@@ -11121,30 +12456,106 @@ public class MainActivity extends Activity {
     }
 
     private void refreshContextBluetoothTier(boolean resetFocus, boolean force) {
-        if (!force && !isContextTierActive("bt")) {
+        if (resetFocus || force) {
+            cancelPendingContextBluetoothRefresh();
+            refreshContextBluetoothTierImmediate(resetFocus, force);
+            return;
+        }
+        scheduleContextBluetoothRefresh(resetFocus, force);
+    }
+
+    private void scheduleContextBluetoothRefresh(boolean resetFocus, boolean force) {
+        btContextRefreshPendingResetFocus = btContextRefreshPendingResetFocus || resetFocus;
+        btContextRefreshPendingForce = btContextRefreshPendingForce || force;
+        btContextRefreshHandler.removeCallbacks(btContextRefreshRunnable);
+        btContextRefreshHandler.postDelayed(btContextRefreshRunnable, BT_CONTEXT_REFRESH_DEBOUNCE_MS);
+    }
+
+    private void cancelPendingContextBluetoothRefresh() {
+        btContextRefreshPendingResetFocus = false;
+        btContextRefreshPendingForce = false;
+        btContextRefreshHandler.removeCallbacks(btContextRefreshRunnable);
+    }
+
+    /** Start inquiry once — never cancel/restart an active scan (was freezing UI in a loop). */
+    @android.annotation.SuppressLint("MissingPermission")
+    private void startBtContextDiscoveryIfNeeded() {
+        if (!isBluetoothContextExpanded()) return;
+        if (hasActiveBluetoothAudioSink()) return;
+        try {
+            BluetoothAdapter ba = BluetoothAdapter.getDefaultAdapter();
+            if (ba == null || !isBluetoothPowerOn() || ba.isDiscovering()) return;
+            ba.startDiscovery();
+        } catch (Exception ignored) {}
+    }
+
+    private void refreshContextBluetoothTierImmediate(boolean resetFocus, boolean force) {
+        syncBluetoothContextPendingFlags();
+        // #region agent log
+        if (DebugAgentLog.ENABLED) {
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("pendingOn", btContextPendingEnable);
+                d.put("pendingOff", btContextPendingDisable);
+                d.put("adapterState", BluetoothAdapter.getDefaultAdapter() != null
+                        ? BluetoothAdapter.getDefaultAdapter().getState() : -1);
+                d.put("globalOn", isBluetoothGlobalOn());
+                d.put("powerOn", isBluetoothPowerOn());
+                d.put("uiOn", isBluetoothPowerOnForUi());
+                d.put("toggleState", bluetoothPowerStateText());
+                d.put("force", force);
+                d.put("resetFocus", resetFocus);
+                DebugAgentLog.log(this, "MainActivity.refreshContextBluetoothTier", "after sync", "H-BT4", d);
+            } catch (Exception ignored) {}
+        }
+        // #endregion
+        // ponytail: pending BT flags + force=true must not stomp power/root tier list rows.
+        if (!"bt".equals(contextMenuTopTier())) {
+            // #region agent log
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("tierTop", contextMenuTopTier());
+                d.put("force", force);
+                d.put("submenuOpen", themedContextMenu != null && themedContextMenu.isSubmenuTierOpen());
+                DebugAgentLog.log(this, "MainActivity.refreshContextBluetoothTier",
+                        "bail wrong tier", "H-POWER-A", d);
+            } catch (Exception ignored) {}
+            // #endregion
+            return;
+        }
+        if (!force && !isContextTierActive("bt") && !shouldRefreshBtContextUi()) {
+            // #region agent log
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("tierTop", contextMenuTopTier());
+                d.put("submenuOpen", themedContextMenu != null && themedContextMenu.isSubmenuTierOpen());
+                DebugAgentLog.log(this, "MainActivity.refreshContextBluetoothTier", "bail inactive", "H-WIFI-BT", d);
+            } catch (Exception ignored) {}
+            // #endregion
             return;
         }
         collectBluetoothDevicesForContext();
+        final String focusLabel = !resetFocus && themedContextMenu != null
+                ? themedContextMenu.focusItemLabel() : null;
         java.util.ArrayList<String> labels = new java.util.ArrayList<String>();
         java.util.ArrayList<String> states = new java.util.ArrayList<String>();
         java.util.ArrayList<Runnable> actions = new java.util.ArrayList<Runnable>();
         java.util.ArrayList<Boolean> headers = new java.util.ArrayList<Boolean>();
 
         headers.add(Boolean.FALSE);
-        labels.add(getString(R.string.wifi_off_confirm));
+        labels.add(bluetoothContextToggleLabel());
         states.add(bluetoothPowerStateText());
         actions.add(new Runnable() {
             @Override public void run() {
                 toggleBluetoothFromContextMenu();
-                refreshContextBluetoothTier(false);
             }
         });
 
-        final BluetoothDevice focused = bluetoothFocusedDevice();
+        final BluetoothDevice focused = bluetoothContextDeviceFromLabel(focusLabel);
         if (focused != null && focused.getBondState() == BluetoothDevice.BOND_BONDED) {
             headers.add(Boolean.FALSE);
             labels.add(getString(R.string.context_action_forget_bluetooth));
-            states.add(focused.getName());
+            states.add(bluetoothDeviceDisplayName(focused));
             actions.add(new Runnable() {
                 @Override public void run() {
                     forgetBluetoothDevice(focused);
@@ -11154,7 +12565,15 @@ public class MainActivity extends Activity {
             });
         }
 
-        if (!foundBtDevices.isEmpty()) {
+        if (isBluetoothContextExpanded() && foundBtDevices.isEmpty()
+                && (isBluetoothPowerOn() || btContextPendingEnable)) {
+            headers.add(Boolean.FALSE);
+            labels.add(getString(R.string.context_bluetooth_scanning));
+            states.add(null);
+            actions.add(null);
+        }
+
+        if (isBluetoothContextExpanded() && !foundBtDevices.isEmpty()) {
             headers.add(Boolean.TRUE);
             labels.add(getString(R.string.status_bluetooth_scan));
             states.add(null);
@@ -11162,7 +12581,7 @@ public class MainActivity extends Activity {
             for (String addr : foundBtDevices) {
                 final BluetoothDevice bt = bluetoothDeviceByAddress(addr);
                 if (bt == null) continue;
-                final String label = bt.getName() != null ? bt.getName() : bt.getAddress();
+                final String label = bluetoothDeviceDisplayName(bt);
                 headers.add(Boolean.FALSE);
                 labels.add(label);
                 states.add(bluetoothStateText(bt));
@@ -11177,46 +12596,279 @@ public class MainActivity extends Activity {
         }
         showContextMenuTierInPlace(getString(R.string.context_tier_bluetooth), labels, states, headers, actions,
                 resetFocus);
-        triggerBluetoothDiscovery(false);
+        refreshContextQuickBarIfShowing();
+        // #region agent log
+        if (DebugAgentLog.ENABLED) {
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("rowCount", labels.size());
+                d.put("btOn", isBluetoothPowerOn());
+                d.put("devices", foundBtDevices.size());
+                d.put("toggleState", bluetoothPowerStateText());
+                d.put("uiOn", isBluetoothPowerOnForUi());
+                DebugAgentLog.log(this, "MainActivity.refreshContextBluetoothTier", "shown", "H-BT3", d);
+            } catch (Exception ignored) {}
+        }
+        // #endregion
         updateNetworkRescanLoop();
     }
 
     private void toggleBluetoothFromContextMenu() {
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("btOn", isBluetoothPowerOn());
+            d.put("pendingOn", btContextPendingEnable);
+            d.put("pendingOff", btContextPendingDisable);
+            d.put("tierTop", contextMenuTopTier());
+            DebugAgentLog.log(this, "MainActivity.toggleBluetoothFromContextMenu", "toggle", "H-BT1", d);
+        } catch (Exception ignored) {}
+        // #endregion
+        applyBluetoothPowerState(!isBluetoothPowerOnForUi());
+        refreshContextBluetoothTier(false, true);
+    }
+
+    /**
+     * Shared BT radio on/off for context quick controls and Settings → Bluetooth.
+     * ponytail: su settings fallback when {@link BluetoothAdapter#enable()} is ignored on production builds.
+     */
+    private void applyBluetoothPowerState(boolean enable) {
         try {
             BluetoothAdapter ba = BluetoothAdapter.getDefaultAdapter();
             if (ba == null) return;
-            if (ba.isEnabled()) {
-                Toast.makeText(this, getString(R.string.toast_bt_turning_off), Toast.LENGTH_SHORT).show();
-                ba.disable();
-            } else {
+            if (enable) {
+                btContextPendingDisable = false;
+                if (isBluetoothPowerOn()) {
+                    btContextPendingEnable = false;
+                } else {
+                    btContextPendingEnable = true;
+                }
                 Toast.makeText(this, getString(R.string.toast_bt_turning_on), Toast.LENGTH_SHORT).show();
-                ba.enable();
+                boolean ok = false;
+                try {
+                    ok = ba.enable();
+                } catch (Exception ignored) {}
+                if (!ok) {
+                    Runtime.getRuntime().exec(new String[] {
+                            "su", "-c", "settings put global bluetooth_on 1"
+                    });
+                }
+                if (themedContextMenu != null && themedContextMenu.isShowing()) {
+                    ensureContextBluetoothListVisibleAfterEnable();
+                }
+            } else {
+                btContextPendingEnable = false;
+                btContextPendingDisable = true;
+                Toast.makeText(this, getString(R.string.toast_bt_turning_off), Toast.LENGTH_SHORT).show();
+                boolean ok = false;
+                try {
+                    ok = ba.disable();
+                } catch (Exception ignored) {}
+                if (!ok) {
+                    Runtime.getRuntime().exec(new String[] {
+                            "su", "-c", "settings put global bluetooth_on 0"
+                    });
+                }
+                if (themedContextMenu != null && themedContextMenu.isShowing()
+                        && isContextTierActive("bt")) {
+                    refreshContextBluetoothTier(false, true);
+                }
             }
+            if (currentScreenState == STATE_BLUETOOTH) {
+                startBluetoothScan();
+            }
+            // #region agent log
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("enable", enable);
+                d.put("adapterOn", ba.isEnabled());
+                d.put("state", ba.getState());
+                DebugAgentLog.log(this, "MainActivity.applyBluetoothPowerState", "applied", "H-BT2", d);
+            } catch (Exception ignored) {}
+            // #endregion
         } catch (Exception ignored) {}
     }
 
     @android.annotation.SuppressLint("MissingPermission")
     private void collectBluetoothDevicesForContext() {
-        foundBtDevices.clear();
+        syncBluetoothContextPendingFlags();
+        java.util.LinkedHashSet<String> addrs = new java.util.LinkedHashSet<String>();
         try {
             BluetoothAdapter ba = BluetoothAdapter.getDefaultAdapter();
-            if (ba == null || !ba.isEnabled()) return;
+            if (ba == null || !isBluetoothPowerOn()) {
+                foundBtDevices.clear();
+                return;
+            }
             java.util.Set<BluetoothDevice> paired = ba.getBondedDevices();
             if (paired != null) {
                 for (BluetoothDevice d : paired) {
-                    if (d != null && d.getAddress() != null) foundBtDevices.add(d.getAddress());
+                    if (d != null && d.getAddress() != null) addrs.add(d.getAddress());
                 }
             }
-            if (!ba.isDiscovering()) ba.startDiscovery();
+            // Keep in-flight discovery hits across tier refreshes (do not wipe ACTION_FOUND rows).
+            for (String addr : foundBtDevices) {
+                if (addr != null && addr.length() > 0) addrs.add(addr);
+            }
+            foundBtDevices.clear();
+            foundBtDevices.addAll(addrs);
         } catch (Exception ignored) {}
     }
 
+    private String bluetoothDeviceDisplayName(BluetoothDevice device) {
+        if (device == null) return "";
+        try {
+            String name = device.getName();
+            if (name != null && name.length() > 0) return name;
+            return device.getAddress();
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private boolean isBluetoothContextToggleLabel(String label) {
+        if (label == null) return false;
+        return label.equals(getString(R.string.context_tier_bluetooth))
+                || label.equals(getString(R.string.context_bluetooth_on))
+                || label.equals(getString(R.string.context_bluetooth_off))
+                || label.equals(getString(R.string.context_bluetooth_busy))
+                || label.equals(getString(R.string.bluetooth_off));
+    }
+
+    private BluetoothDevice bluetoothContextDeviceFromLabel(String label) {
+        if (label == null || label.isEmpty()) return null;
+        if (isBluetoothContextToggleLabel(label)) return null;
+        if (label.equals(getString(R.string.context_action_forget_bluetooth))) return null;
+        if (label.equals(getString(R.string.context_bluetooth_scanning))) return null;
+        if (label.equals(getString(R.string.status_bluetooth_scan))) return null;
+        for (String addr : foundBtDevices) {
+            BluetoothDevice d = bluetoothDeviceByAddress(addr);
+            if (d == null) continue;
+            if (label.equals(addr) || label.equals(bluetoothDeviceDisplayName(d))) return d;
+        }
+        return null;
+    }
+
     private String bluetoothPowerStateText() {
+        if (btContextPendingDisable) {
+            return stateOnOff(false);
+        }
+        if (btContextPendingEnable) {
+            return stateOnOff(true);
+        }
         try {
             BluetoothAdapter ba = BluetoothAdapter.getDefaultAdapter();
-            if (ba != null && ba.isEnabled()) return "ON";
+            if (ba == null) return stateOnOff(false);
+            int state = ba.getState();
+            if (state == BluetoothAdapter.STATE_TURNING_ON
+                    || state == BluetoothAdapter.STATE_TURNING_OFF) {
+                return getString(R.string.context_bluetooth_busy);
+            }
+            return stateOnOff(isBluetoothPowerOnForUi());
+        } catch (Exception ignored) {
+            return stateOnOff(false);
+        }
+    }
+
+    /** Fixed row title — status lives in the right column via {@link #bluetoothPowerStateText()}. */
+    private String bluetoothContextToggleLabel() {
+        return getString(R.string.context_tier_bluetooth);
+    }
+
+    /** True when Bluetooth tier should list paired/discovered devices. */
+    private boolean isBluetoothContextExpanded() {
+        if (btContextPendingDisable) return false;
+        if (btContextPendingEnable) return true;
+        try {
+            BluetoothAdapter ba = BluetoothAdapter.getDefaultAdapter();
+            if (ba != null && ba.getState() == BluetoothAdapter.STATE_TURNING_ON) {
+                return true;
+            }
         } catch (Exception ignored) {}
-        return "OFF";
+        return isBluetoothPowerOnForUi();
+    }
+
+    private boolean isBluetoothPowerOn() {
+        try {
+            BluetoothAdapter ba = BluetoothAdapter.getDefaultAdapter();
+            if (ba != null) {
+                int state = ba.getState();
+                // Adapter off wins — global bluetooth_on lags on Y1 after su disable.
+                if (state == BluetoothAdapter.STATE_OFF
+                        || state == BluetoothAdapter.STATE_TURNING_OFF) {
+                    return false;
+                }
+                if (ba.isEnabled() || state == BluetoothAdapter.STATE_ON) {
+                    return true;
+                }
+                if (state == BluetoothAdapter.STATE_TURNING_ON) {
+                    return true;
+                }
+            }
+            return isBluetoothGlobalOn();
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private boolean isBluetoothGlobalOn() {
+        try {
+            return android.provider.Settings.Global.getInt(
+                    getContentResolver(), "bluetooth_on", 0) == 1;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    /** UI radio state — optimistic while user toggle is still in flight. */
+    private boolean isBluetoothPowerOnForUi() {
+        if (btContextPendingDisable) return false;
+        if (btContextPendingEnable) return true;
+        return isBluetoothPowerOn();
+    }
+
+    /** Clear pending flags only when adapter and global setting agree radio is stable. */
+    private void syncBluetoothContextPendingFlags() {
+        try {
+            BluetoothAdapter ba = BluetoothAdapter.getDefaultAdapter();
+            if (ba == null) return;
+            int state = ba.getState();
+            if (btContextPendingDisable) {
+                // ponytail: STATE_OFF arrives before settings global clears — keep optimistic Off.
+                if (state == BluetoothAdapter.STATE_OFF && !isBluetoothGlobalOn()) {
+                    btContextPendingDisable = false;
+                }
+                return;
+            }
+            if (btContextPendingEnable) {
+                if (state == BluetoothAdapter.STATE_ON && ba.isEnabled()) {
+                    btContextPendingEnable = false;
+                }
+                return;
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private void probeBluetoothUiStateForAdb() {
+        int bonded = 0;
+        boolean adapterEnabled = false;
+        int globalOn = 0;
+        try {
+            BluetoothAdapter ba = BluetoothAdapter.getDefaultAdapter();
+            if (ba != null) {
+                adapterEnabled = ba.isEnabled();
+                java.util.Set<BluetoothDevice> paired = ba.getBondedDevices();
+                if (paired != null) bonded = paired.size();
+            }
+            globalOn = android.provider.Settings.Global.getInt(
+                    getContentResolver(), "bluetooth_on", 0);
+        } catch (Exception ignored) {}
+        collectBluetoothDevicesForContext();
+        SolarAdbTest.pass("bt_probe adapterOn=" + adapterEnabled + " globalOn=" + globalOn
+                + " powerOn=" + isBluetoothPowerOn() + " bonded=" + bonded
+                + " foundBt=" + foundBtDevices.size()
+                + " pendingOn=" + btContextPendingEnable
+                + " pendingOff=" + btContextPendingDisable
+                + " expanded=" + isBluetoothContextExpanded());
     }
 
     private void openPlaybackQueueInContextMenu() {
@@ -11255,6 +12907,7 @@ public class MainActivity extends Activity {
         if (!playback.hasAnyQueue() || fromDisk.size() > memSize) {
             playback.restoreQueueState(fromDisk.items(), fromDisk.index());
             syncNowPlayingHomeVisibility();
+            refreshRestoredQueuePreview();
             // #region agent log
             try {
                 JSONObject d = new JSONObject();
@@ -11267,6 +12920,14 @@ public class MainActivity extends Activity {
     }
 
     private void pushContextQueueTier() {
+        if (!queueTutorialSeen()) {
+            showQueueTutorialTier(false);
+            return;
+        }
+        pushContextQueueTierInternal();
+    }
+
+    private void pushContextQueueTierInternal() {
         contextQueueEditPlaylist = false;
         playlistEditEntry = null;
         playlistEditTracks.clear();
@@ -11275,7 +12936,7 @@ public class MainActivity extends Activity {
             contextMenuTierStack.removeLast();
         }
         if (contextMenuTierStack.isEmpty()) {
-            contextMenuTierStack.push(CONTEXT_NAV_ROOT);
+            contextMenuTierStack.addLast(CONTEXT_NAV_ROOT);
         }
         pushContextMenuTier("queue");
         contextMenuInQueueTier = true;
@@ -11327,7 +12988,95 @@ public class MainActivity extends Activity {
                 themedContextMenu.queueListChildCount());
     }
 
+    private boolean queueTutorialSeen() {
+        return prefs != null && prefs.getBoolean(PREF_QUEUE_TUTORIAL_SEEN, false);
+    }
+
+    private void markQueueTutorialSeen() {
+        if (prefs != null) {
+            prefs.edit().putBoolean(PREF_QUEUE_TUTORIAL_SEEN, true).apply();
+        }
+    }
+
+    /** One-time queue controls intro — compact detail block + Got it (Reach PM style). */
+    private void showQueueTutorialTier(boolean forPlaylistEdit) {
+        contextQueueTutorialForPlaylist = forPlaylistEdit;
+        contextMenuInQueueTier = false;
+        if (themedContextMenu != null) {
+            themedContextMenu.setQuickReturnIndex(CONTEXT_QUICK_QUEUE_INDEX);
+        }
+        while (contextMenuTierStack.size() > 1) {
+            contextMenuTierStack.removeLast();
+        }
+        if (contextMenuTierStack.isEmpty()) {
+            contextMenuTierStack.addLast(CONTEXT_NAV_ROOT);
+        }
+        pushContextMenuTier("queue_tutorial");
+        rebuildContextQueueTutorialTier(true);
+    }
+
+    private void finishQueueTutorialAndOpenQueue() {
+        markQueueTutorialSeen();
+        if ("queue_tutorial".equals(contextMenuTopTier()) && contextMenuTierStack.size() > 1) {
+            contextMenuTierStack.removeLast();
+        }
+        if (contextQueueTutorialForPlaylist) {
+            pushContextPlaylistEditTierInternal();
+        } else {
+            pushContextQueueTierInternal();
+        }
+    }
+
+    private void rebuildContextQueueTutorialTier(boolean focusList) {
+        if (themedContextMenu == null) return;
+        java.util.ArrayList<String> labels = new java.util.ArrayList<String>();
+        java.util.ArrayList<String> states = new java.util.ArrayList<String>();
+        java.util.ArrayList<Boolean> headers = new java.util.ArrayList<Boolean>();
+        java.util.ArrayList<Runnable> actions = new java.util.ArrayList<Runnable>();
+
+        labels.add(getString(R.string.queue_tutorial_line_ok) + "\n"
+                + getString(R.string.queue_tutorial_line_hold));
+        states.add(null);
+        headers.add(Boolean.TRUE);
+        actions.add(null);
+
+        labels.add(getString(R.string.queue_tutorial_got_it));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override public void run() {
+                finishQueueTutorialAndOpenQueue();
+            }
+        });
+
+        String title = contextQueueTutorialForPlaylist && playlistEditEntry != null
+                ? playlistEditEntry.name : getString(R.string.context_quick_queue);
+        showContextMenuTierInPlace(title, labels, states, headers, actions, focusList);
+        themedContextMenu.focusTierRow(1);
+        themedContextMenu.requestOverlayFocus();
+    }
+
+    private boolean isContextQueueTutorialTier() {
+        return themedContextMenu != null && themedContextMenu.isShowing()
+                && "queue_tutorial".equals(contextMenuTopTier());
+    }
+
+    /** OK or Back on the one-time queue intro — open the queue editor/viewer. */
+    private boolean finishQueueTutorialFromInput() {
+        if (!isContextQueueTutorialTier()) return false;
+        finishQueueTutorialAndOpenQueue();
+        return true;
+    }
+
     private void pushContextPlaylistEditTier() {
+        if (!queueTutorialSeen()) {
+            showQueueTutorialTier(true);
+            return;
+        }
+        pushContextPlaylistEditTierInternal();
+    }
+
+    private void pushContextPlaylistEditTierInternal() {
         pushContextMenuTier("queue");
         contextMenuInQueueTier = true;
         if (contextQueueFocusIndex < 0 || contextQueueFocusIndex >= playlistEditTracks.size()) {
@@ -11368,6 +13117,9 @@ public class MainActivity extends Activity {
             base = item.deezerMeta != null ? item.deezerMeta : getString(R.string.status_deezer);
         } else if (item.kind == PlayQueue.ItemKind.PODCAST_EPISODE && item.episode != null) {
             base = item.episode.title;
+        } else if (item.kind == PlayQueue.ItemKind.FM_STATION
+                || item.kind == PlayQueue.ItemKind.INTERNET_RADIO_STATION) {
+            base = item.streamMeta();
         } else {
             base = "";
         }
@@ -11406,7 +13158,7 @@ public class MainActivity extends Activity {
 
     private int streamDownloadPercentForFile(File file) {
         if (file == null) return -1;
-        if (DeezerCache.isTempFile(getCacheDir(), file)) {
+        if (DeezerCache.isTempFile(streamAppCacheRoot(), file)) {
             if (isActiveReachDownloadFile(file)) {
                 if (deezerActiveDownloadPercent >= 0) {
                     return Math.min(100, deezerActiveDownloadPercent);
@@ -11427,7 +13179,7 @@ public class MainActivity extends Activity {
     }
 
     private boolean isStreamTempFile(File file) {
-        return isReachTempFile(file) || DeezerCache.isTempFile(getCacheDir(), file);
+        return isReachTempFile(file) || DeezerCache.isTempFile(streamAppCacheRoot(), file);
     }
 
     private int reachDownloadPercentForFile(File file) {
@@ -11519,6 +13271,13 @@ public class MainActivity extends Activity {
         if (item.kind == PlayQueue.ItemKind.PODCAST_EPISODE) {
             return item.podcastShowTitle != null ? item.podcastShowTitle : getString(R.string.home_menu_podcasts);
         }
+        if (item.kind == PlayQueue.ItemKind.FM_STATION) {
+            return getString(R.string.status_radio_fm);
+        }
+        if (item.kind == PlayQueue.ItemKind.INTERNET_RADIO_STATION) {
+            if (item.radioSubtitle != null && !item.radioSubtitle.isEmpty()) return item.radioSubtitle;
+            return getString(R.string.status_radio_internet);
+        }
         return "";
     }
 
@@ -11555,6 +13314,7 @@ public class MainActivity extends Activity {
         contextQueueMoveFrom = to;
         contextQueueFocusIndex = to;
         contextQueueMoveDirty = true;
+        persistPlaybackQueueDebounced();
         if (themedContextMenu != null && themedContextMenu.isQueueMode()) {
             themedContextMenu.applyQueueReorderLive(from, to, playback.unifiedQueue().index(),
                     isMediaPlaying());
@@ -12200,6 +13960,7 @@ public class MainActivity extends Activity {
         try {
             if (isBluetoothAudioConnected(device)) return "Connected";
             if (device.getBondState() == BluetoothDevice.BOND_BONDED) return "Paired";
+            return "Nearby";
         } catch (Exception ignored) {}
         return "";
     }
@@ -12230,14 +13991,59 @@ public class MainActivity extends Activity {
         String[] icons = iconKeys != null ? iconKeys.toArray(new String[iconKeys.size()]) : null;
         boolean[] headerFlags = new boolean[headers.size()];
         for (int i = 0; i < headers.size(); i++) headerFlags[i] = Boolean.TRUE.equals(headers.get(i));
-        if (!resetFocus && themedContextMenu.refreshListStatesIfSameStructure(arr, states, headerFlags)) {
+        // ponytail: in-tier Wi-Fi/BT confirm uses resetFocus — full replace; scans use diff ticker.
+        if (!resetFocus && !contextTierConfirmOpen
+                && ("wifi".equals(contextMenuTopTier()) || "bt".equals(contextMenuTopTier()))) {
+            if (themedContextMenu.refreshWifiTierInPlace(arr, icons, states, headerFlags)) {
+                themedContextMenu.setSubmenuTierOpen(true);
+                themedContextMenu.ensureSubmenuListVisible();
+                return;
+            }
+            contextMenuInVolumeSlider = false;
+            if (themedContextMenu != null) themedContextMenu.exitMediaSliderTab();
+            themedContextMenu.setScrollableDetailHeader(false);
+            themedContextMenu.mergeNetworkTierListDiff(title, arr, icons, states, headerFlags,
+                    new ThemedContextMenu.Listener() {
+                        @Override
+                        public void onSelected(int index) {
+                            suppressListClickUntil = System.currentTimeMillis()
+                                    + CONTEXT_MENU_CLICK_SUPPRESS_MS;
+                            if (index >= 0 && index < actions.size()) {
+                                final Runnable a = actions.get(index);
+                                if (a != null) a.run();
+                            }
+                        }
+                    }, false);
             themedContextMenu.setSubmenuTierOpen(true);
             themedContextMenu.ensureSubmenuListVisible();
+            themedContextMenu.requestOverlayFocus();
+            return;
+        }
+        if (!resetFocus && !"wifi".equals(contextMenuTopTier()) && !"bt".equals(contextMenuTopTier())
+                && !"power".equals(contextMenuTopTier())
+                && themedContextMenu.refreshListStatesIfSameStructure(arr, states, headerFlags)) {
+            // #region agent log
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("tierTop", contextMenuTopTier());
+                d.put("rowCount", arr.length);
+                d.put("firstLabel", arr.length > 0 ? arr[0] : "");
+                d.put("focusZone", themedContextMenu.focusZone().name());
+                DebugAgentLog.log(this, "MainActivity.showContextMenuTierInPlace",
+                        "structure refresh only", "H4-H7", d);
+            } catch (Exception ignored) {}
+            // #endregion
+            themedContextMenu.setSubmenuTierOpen(true);
+            themedContextMenu.ensureSubmenuListVisible();
+            if (themedContextMenu.focusZone() == ThemedContextMenu.FocusZone.QUICK_BAR) {
+                themedContextMenu.focusSubmenuList();
+            }
             return;
         }
         contextMenuInVolumeSlider = false;
         if (themedContextMenu != null) themedContextMenu.exitMediaSliderTab();
-        themedContextMenu.setScrollableDetailHeader(isReachContextTier(contextMenuTopTier()));
+        themedContextMenu.setScrollableDetailHeader(isReachContextTier(contextMenuTopTier())
+                || "queue_tutorial".equals(contextMenuTopTier()));
         themedContextMenu.replaceListContent(title, arr, icons, states, headerFlags,
                 new ThemedContextMenu.Listener() {
                     @Override
@@ -12267,6 +14073,7 @@ public class MainActivity extends Activity {
     private void handleContextMenuBackKeyUp() {
         if (themedContextMenu == null || !themedContextMenu.isShowing()) return;
         if (contextMenuBlockingHint || themedContextMenu.isHintOnlyMode()) return;
+        if (finishQueueTutorialFromInput()) return;
         if (contextMenuVolumeOnly) {
             dismissThemedContextMenu();
             return;
@@ -12309,8 +14116,19 @@ public class MainActivity extends Activity {
     }
 
     private void persistPlaybackQueue() {
+        // ponytail: failed mount-time restore leaves memory empty while play_queue.json still has items — never wipe disk.
+        if (!playback.hasAnyQueue()
+                && PlayQueueStore.persistedItemCount(getApplicationContext()) > 0) {
+            return;
+        }
         PlayQueueStore.save(getApplicationContext(), playback.unifiedQueue());
         syncNowPlayingHomeVisibility();
+    }
+
+    /** Coalesce rapid queue edits (context-menu move) into one disk write. */
+    private void persistPlaybackQueueDebounced() {
+        persistQueueHandler.removeCallbacks(persistQueueDebouncedRunnable);
+        persistQueueHandler.postDelayed(persistQueueDebouncedRunnable, PERSIST_QUEUE_DEBOUNCE_MS);
     }
 
     private void restorePlaybackQueue() {
@@ -12318,7 +14136,47 @@ public class MainActivity extends Activity {
         if (!PlayQueueStore.restore(getApplicationContext(), q) || q.isEmpty()) return;
         playback.restoreQueueState(q.items(), q.index());
         syncNowPlayingHomeVisibility();
+        refreshRestoredQueuePreview();
         refreshContextQueueTierIfOpen();
+    }
+
+    /** Bind home/player labels from restored queue without starting playback. */
+    private void refreshRestoredQueuePreview() {
+        if (!playback.hasAnyQueue()) return;
+        PlayQueue.QueueItem cur = playback.currentItem();
+        if (cur == null) return;
+        String title = "";
+        String artist = "";
+        if (cur.kind == PlayQueue.ItemKind.PODCAST_EPISODE && cur.episode != null) {
+            title = cur.episode.title != null ? cur.episode.title : "";
+            artist = cur.podcastShowTitle != null ? cur.podcastShowTitle : "";
+        } else if (cur.file != null) {
+            if (cur.kind == PlayQueue.ItemKind.REACH_STREAM) {
+                title = cur.reachMeta != null && !cur.reachMeta.isEmpty()
+                        ? cur.reachMeta : cur.file.getName();
+                artist = cur.reachPeerUsername != null ? cur.reachPeerUsername : "";
+            } else if (cur.kind == PlayQueue.ItemKind.DEEZER_STREAM) {
+                title = cur.deezerMeta != null && !cur.deezerMeta.isEmpty()
+                        ? cur.deezerMeta : cur.file.getName();
+            } else {
+                SongItem si = findSongItem(cur.file);
+                title = si != null && si.title != null ? si.title : cur.file.getName();
+                artist = si != null && si.artist != null ? si.artist : "";
+            }
+        }
+        if (title.isEmpty()) title = "Unknown";
+        if (tvPlayerTitle != null) tvPlayerTitle.setText(title);
+        if (tvPlayerArtist != null) {
+            tvPlayerArtist.setText(artist.isEmpty()
+                    ? getString(R.string.reach_loading_track) : artist);
+        }
+        updateMusicTrackCountUi();
+        refreshNowPlayingPreview();
+    }
+
+    private boolean deferStreamTrackNotReady() {
+        return startupMountRetryAttempt < STARTUP_MOUNT_RETRY_MAX
+                || PlayQueueStore.countMissingPaths(getApplicationContext()) > 0;
     }
 
     private void retryRestorePlaybackQueueAfterMount() {
@@ -12332,6 +14190,7 @@ public class MainActivity extends Activity {
         }
         syncNowPlayingHomeVisibility();
         if (playback.unifiedQueue().size() != before) {
+            refreshRestoredQueuePreview();
             // #region agent log
             try {
                 JSONObject d = new JSONObject();
@@ -12428,6 +14287,26 @@ public class MainActivity extends Activity {
         return true;
     }
 
+    /** After first global context menu open, stop showing hold-Back-for-Options hints. */
+    private void markHoldBackHintDismissed() {
+        if (holdBackHintDismissed) return;
+        holdBackHintDismissed = true;
+        try {
+            prefs.edit().putBoolean(PREF_HOLD_BACK_HINT_DISMISSED, true).commit();
+        } catch (Exception ignored) {}
+        applyHoldBackHintPolicy();
+    }
+
+    private void applyHoldBackHintPolicy() {
+        boolean show = !holdBackHintDismissed;
+        if (playerTransport != null) {
+            playerTransport.setHoldBackHintEnabled(show);
+        }
+        if (videoTransport != null) {
+            videoTransport.setHoldBackHintEnabled(show);
+        }
+    }
+
     private void showThemedContextMenu() {
         if (themedContextMenu == null) return;
         if (layoutLoadingOverlay != null && layoutLoadingOverlay.getVisibility() == View.VISIBLE) return;
@@ -12454,13 +14333,14 @@ public class MainActivity extends Activity {
                 CONTEXT_QUICK_BRIGHTNESS_INDEX);
         themedContextMenu.setSubmenuTierOpen(false);
         contextMenuTierStack.clear();
-        contextMenuTierStack.push(CONTEXT_NAV_ROOT);
+        contextMenuTierStack.addLast(CONTEXT_NAV_ROOT);
         contextMenuInQueueTier = false;
         contextMenuVolumeReturnTier = null;
         if (!contextMenuLabels.isEmpty()) {
             themedContextMenu.focusOptionsList();
         }
         contextMenuOpenedAtMs = System.currentTimeMillis();
+        markHoldBackHintDismissed();
         maybeAutoOpenReachContextTier();
         // #region agent log
         try {
@@ -12475,6 +14355,7 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {}
         // #endregion
         clickFeedback();
+        updateVideoStatusBarPolicy();
     }
 
     private void populateContextMenu() {
@@ -12483,6 +14364,7 @@ public class MainActivity extends Activity {
         contextMenuStateTexts.clear();
         contextMenuHeaders.clear();
         contextMenuActions.clear();
+        contextMenuKeepOpen.clear();
         if (currentScreenState == STATE_MENU) {
             addContextAction(getString(R.string.context_action_edit_home), new Runnable() {
                 @Override
@@ -12571,6 +14453,33 @@ public class MainActivity extends Activity {
                 }
             });
         }
+        if (currentScreenState == STATE_PLAYER && playback.isRadioActive() && mediaSuite != null) {
+            String[] radioLabels = mediaSuite.getRadioContextMenuLabels();
+            for (int i = 0; i < radioLabels.length; i++) {
+                final int actionIdx = i;
+                addContextAction(radioLabels[i], new Runnable() {
+                    @Override
+                    public void run() {
+                        mediaSuite.handleRadioContextAction(actionIdx);
+                    }
+                });
+            }
+            addContextAction(getString(R.string.context_action_play_pause), new Runnable() {
+                @Override
+                public void run() {
+                    mediaSuite.toggleRadioPlayPause();
+                    mediaSuite.bindRadioNowPlayingUi();
+                }
+            });
+        }
+        if (currentScreenState == MediaSuiteHost.STATE_PHOTO_VIEWER && mediaSuite != null) {
+            addContextAction(getString(R.string.settings_select_background), new Runnable() {
+                @Override
+                public void run() {
+                    mediaSuite.setPhotoAsWallpaper();
+                }
+            });
+        }
         if (currentScreenState == STATE_PLAYER && playback.isMusicActive()) {
             addContextAction(getString(R.string.context_action_back_library), null, null, new Runnable() {
                 @Override
@@ -12582,7 +14491,7 @@ public class MainActivity extends Activity {
                 final File currentTrack = playback.musicPlaylist().get(playback.musicIndex());
                 PlayQueue.QueueItem curItem = playback.currentItem();
                 if (curItem != null && curItem.kind == PlayQueue.ItemKind.REACH_STREAM
-                        && ReachCache.isTempFile(getCacheDir(), currentTrack)) {
+                        && ReachCache.isTempFile(streamAppCacheRoot(), currentTrack)) {
                     final String thankPeer = resolveReachPeerForFile(currentTrack);
                     final String thankTitle = resolveReachTitleForFile(currentTrack);
                     if (thankPeer != null && !thankPeer.isEmpty()) {
@@ -12600,7 +14509,7 @@ public class MainActivity extends Activity {
                         }
                     });
                 } else if (curItem != null && curItem.kind == PlayQueue.ItemKind.DEEZER_STREAM
-                        && DeezerCache.isTempFile(getCacheDir(), currentTrack)) {
+                        && DeezerCache.isTempFile(streamAppCacheRoot(), currentTrack)) {
                     addContextAction(getString(R.string.soulseek_add_to_library), new Runnable() {
                         @Override
                         public void run() {
@@ -12620,8 +14529,9 @@ public class MainActivity extends Activity {
                     } catch (Exception ignored) {}
                     playback.reshuffleMusic(isShuffleMode);
                     updatePlayerStatusIndicators();
+                    refreshContextQueueTierIfOpen();
                 }
-            });
+            }, true);
             addContextAction(getString(R.string.settings_repeat_mode), repeatIconKey(),
                     getRepeatModeText(repeatMode), new Runnable() {
                 @Override
@@ -12632,7 +14542,7 @@ public class MainActivity extends Activity {
                     } catch (Exception ignored) {}
                     updatePlayerStatusIndicators();
                 }
-            });
+            }, true);
             addContextAction(getString(R.string.context_action_play_pause), null, null, new Runnable() {
                 @Override
                 public void run() {
@@ -13062,6 +14972,11 @@ public class MainActivity extends Activity {
 
     /** Screen off — root power key only (Y1); shared by hold-center and context menu. */
     private void performScreenSleep(boolean feedback) {
+        if (currentScreenState == MediaSuiteHost.STATE_VIDEO_PLAYER
+                && !com.solar.launcher.video.VideoSettings.getSleepDuringPlayback(this)) {
+            if (feedback) clickFeedback();
+            return;
+        }
         if (feedback) clickFeedback();
         dismissThemedContextMenu();
         if (trySuScreenOff()) {
@@ -13205,13 +15120,36 @@ public class MainActivity extends Activity {
     }
 
     private String wifiContextToggleLabel() {
+        if (wifiContextPendingDisable) {
+            return getString(R.string.context_wifi_off);
+        }
+        if (wifiContextPendingEnable) {
+            return getString(R.string.context_wifi_on);
+        }
         WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
         if (wm == null) return getString(R.string.context_wifi_off);
         int state = wm.getWifiState();
-        if (state == WifiManager.WIFI_STATE_ENABLING || state == WifiManager.WIFI_STATE_DISABLING) {
+        if (state == WifiManager.WIFI_STATE_ENABLING && !wifiContextPendingDisable) {
+            return getString(R.string.context_wifi_on);
+        }
+        if (state == WifiManager.WIFI_STATE_DISABLING && !wifiContextPendingEnable) {
             return getString(R.string.context_wifi_busy);
         }
         return getString(isWifiPowerOn() ? R.string.context_wifi_on : R.string.context_wifi_off);
+    }
+
+    /** True when Wi-Fi tier should list networks (not while user is turning Wi-Fi off). */
+    private boolean isWifiContextExpanded() {
+        if (wifiContextPendingDisable) return false;
+        if (wifiContextPendingEnable) return true;
+        WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+        if (wm != null) {
+            int state = wm.getWifiState();
+            if (state == WifiManager.WIFI_STATE_ENABLING && !wifiContextPendingDisable) {
+                return true;
+            }
+        }
+        return isWifiPowerOn();
     }
 
     private boolean isWifiContextToggleLabel(String label) {
@@ -13261,24 +15199,52 @@ public class MainActivity extends Activity {
         WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
         if (wm == null) return;
         if (enable) {
+            wifiContextPendingDisable = false;
+            wifiContextPendingEnable = true;
             Toast.makeText(this, getString(R.string.toast_wifi_turning_on), Toast.LENGTH_SHORT).show();
             wm.setWifiEnabled(true);
+            if (themedContextMenu != null && themedContextMenu.isShowing()) {
+                contextTierConfirmOpen = false;
+                cancelPendingContextWifiRefresh();
+                ensureContextWifiListVisibleAfterEnable();
+            }
         } else {
+            wifiContextPendingEnable = false;
+            wifiContextPendingDisable = true;
+            cancelWifiContextScanFollowUps();
             Toast.makeText(this, getString(R.string.toast_wifi_turning_off), Toast.LENGTH_SHORT).show();
             wm.setWifiEnabled(false);
+            if (themedContextMenu != null && themedContextMenu.isShowing()
+                    && isContextTierActive("wifi")) {
+                contextTierConfirmOpen = false;
+                cancelPendingContextWifiRefresh();
+                refreshContextWifiTierImmediate(true, true);
+            }
         }
     }
 
     private void toggleWifiFromContextMenu() {
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("wifiOn", isWifiPowerOn());
+            d.put("expanded", isWifiContextExpanded());
+            d.put("tierTop", contextMenuTopTier());
+            d.put("needsWarning", wifiDisableNeedsWarning());
+            DebugAgentLog.log(this, "MainActivity.toggleWifiFromContextMenu", "toggle", "H6-H7", d);
+        } catch (Exception ignored) {}
+        // #endregion
         if (!isWifiPowerOn()) {
             applyWifiPowerState(true);
+            refreshContextWifiTierImmediate(false, true);
             return;
         }
         if (!wifiDisableNeedsWarning()) {
             applyWifiPowerState(false);
+            refreshContextWifiTierImmediate(false, true);
             return;
         }
-        showThemedConfirm(
+        showContextTierConfirm(
                 getString(R.string.wifi_off_warning_title),
                 getString(R.string.wifi_off_warning_message),
                 getString(R.string.wifi_off_confirm),
@@ -13287,8 +15253,61 @@ public class MainActivity extends Activity {
                     @Override
                     public void run() {
                         applyWifiPowerState(false);
+                        refreshContextWifiTierImmediate(false, true);
                     }
-                });
+                },
+                null);
+    }
+
+    /**
+     * Confirm dialog inside an open context tier — keeps quick bar + tier stack (unlike showThemedConfirm).
+     */
+    private void showContextTierConfirm(String title, String message, String confirmLabel, String cancelLabel,
+            final Runnable onConfirm, final Runnable onCancel) {
+        if (themedContextMenu == null) return;
+        contextTierConfirmOpen = true;
+        cancelPendingContextWifiRefresh();
+        java.util.ArrayList<String> labels = new java.util.ArrayList<String>();
+        java.util.ArrayList<String> states = new java.util.ArrayList<String>();
+        java.util.ArrayList<Boolean> headers = new java.util.ArrayList<Boolean>();
+        java.util.ArrayList<Runnable> actions = new java.util.ArrayList<Runnable>();
+        headers.add(Boolean.FALSE);
+        labels.add(confirmLabel);
+        states.add(message != null ? message : "");
+        actions.add(new Runnable() {
+            @Override public void run() {
+                contextTierConfirmOpen = false;
+                if (onConfirm != null) onConfirm.run();
+                if (themedContextMenu != null && themedContextMenu.isShowing()
+                        && isContextTierActive("wifi") && !isWifiPowerOn()) {
+                    refreshContextWifiTierImmediate(true, true);
+                }
+            }
+        });
+        headers.add(Boolean.FALSE);
+        labels.add(cancelLabel);
+        states.add("");
+        actions.add(new Runnable() {
+            @Override public void run() {
+                contextTierConfirmOpen = false;
+                if (onCancel != null) onCancel.run();
+                if (themedContextMenu != null && themedContextMenu.isShowing()
+                        && "wifi".equals(contextMenuTopTier())) {
+                    refreshContextWifiTierImmediate(false, true);
+                }
+            }
+        });
+        showContextMenuTierInPlace(title, labels, states, headers, actions, true);
+        themedContextMenu.focusSubmenuList();
+        themedContextMenu.requestOverlayFocus();
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("title", title);
+            d.put("tierTop", contextMenuTopTier());
+            DebugAgentLog.log(this, "MainActivity.showContextTierConfirm", "in-tier confirm", "H-WIFI", d);
+        } catch (Exception ignored) {}
+        // #endregion
     }
 
     private void showThemedConfirm(final String title, final String message,
@@ -13428,9 +15447,6 @@ public class MainActivity extends Activity {
     private void watchSoulseekPeer(final String username) {
         if (username == null || username.trim().isEmpty()) return;
         final String key = username.trim().toLowerCase(Locale.US);
-        if (soulseekPeerCountry.containsKey(key)) {
-            return;
-        }
         synchronized (soulseekPeerWatchInFlight) {
             if (soulseekPeerWatchInFlight.contains(key)) {
                 return;
@@ -13529,15 +15545,21 @@ public class MainActivity extends Activity {
     }
 
     private void addContextAction(String label, Runnable action) {
-        addContextAction(label, null, null, action);
+        addContextAction(label, null, null, action, false);
     }
 
     private void addContextAction(String label, String iconKey, String stateText, Runnable action) {
+        addContextAction(label, iconKey, stateText, action, false);
+    }
+
+    private void addContextAction(String label, String iconKey, String stateText, Runnable action,
+            boolean keepOpen) {
         contextMenuLabels.add(label);
         contextMenuIconKeys.add(iconKey);
         contextMenuStateTexts.add(stateText);
         contextMenuHeaders.add(Boolean.FALSE);
         contextMenuActions.add(action);
+        contextMenuKeepOpen.add(keepOpen);
     }
 
     private void addContextSectionHeader(String label) {
@@ -13546,6 +15568,7 @@ public class MainActivity extends Activity {
         contextMenuStateTexts.add(null);
         contextMenuHeaders.add(Boolean.TRUE);
         contextMenuActions.add(null);
+        contextMenuKeepOpen.add(Boolean.FALSE);
     }
 
     private File browserFocusedAudioFile() {
@@ -13825,8 +15848,50 @@ public class MainActivity extends Activity {
         return q.length() > 0 ? q : null;
     }
 
+    /** Back during fine scrub cancels the cursor without leaving Now Playing / video. */
+    private boolean cancelActiveFineScrubIfAny() {
+        if (currentScreenState == STATE_PLAYER) {
+            if (playback.isRadioActive() && mediaSuite != null
+                    && mediaSuite.radioScrubMode != com.solar.launcher.radio.RadioScrubMode.NONE) {
+                mediaSuite.radioScrubMode = com.solar.launcher.radio.RadioScrubMode.NONE;
+                playerScrubCursorActive = false;
+                if (playerScrubMarker != null) playerScrubMarker.setVisibility(View.GONE);
+                mediaSuite.updateRadioPlayerProgress();
+                clickFeedback();
+                return true;
+            }
+            if (playerScrubCursorActive) {
+                cancelPlayerScrubCursor();
+                clickFeedback();
+                return true;
+            }
+        }
+        if (currentScreenState == MediaSuiteHost.STATE_VIDEO_PLAYER && mediaSuite != null
+                && mediaSuite.isVideoScrubActive()) {
+            mediaSuite.cancelVideoScrub();
+            clickFeedback();
+            return true;
+        }
+        return false;
+    }
+
     private void handleBackShortPress() {
         if (otaSystemReplaceInProgress) return;
+        if (cancelActiveFineScrubIfAny()) return;
+        if (mediaSuite != null && mediaSuite.handleBack()) return;
+        // ponytail: media roots should always exit via handleBack(); this guards unknown sub-states
+        if (MediaSuiteHost.isMediaListBrowseState(currentScreenState)) {
+            // #region agent log
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("screen", currentScreenState);
+                DebugAgentLog.log(this, "MainActivity.handleBackShortPress",
+                        "media browse fallback home", "H-BACK", d);
+            } catch (Exception ignored) {}
+            // #endregion
+            changeScreen(STATE_MENU);
+            return;
+        }
         if (currentScreenState == STATE_WIFI_KEYBOARD) {
             if (keyboardReturnState == STATE_SETTINGS && keyboardReturnSettingsSubKey != null) {
                 restoreSettingsAfterSoulseekAccount();
@@ -13836,10 +15901,6 @@ public class MainActivity extends Activity {
             return;
         }
         if (currentScreenState == STATE_PLAYER) {
-            if (playerScrubCursorActive) {
-                cancelPlayerScrubCursor();
-                return;
-            }
             returnFromPlayer();
             return;
         }
@@ -14058,6 +16119,7 @@ public class MainActivity extends Activity {
             }
             if (handleHomeScreenEditorBack()) return;
             if (handleLanguageSettingsBack()) return;
+            if (handleRadioSettingsBack()) return;
             if (handleReachSettingsBack()) return;
             if (handleSoulseekSettingsBack()) return;
             if (handleDeezerSettingsBack()) return;
@@ -14205,14 +16267,10 @@ public class MainActivity extends Activity {
                 } catch (Exception e) {
                 }
 
-                if (!playback.musicPlaylist().isEmpty() && !playback.musicOriginal().isEmpty()) {
-                    File currentSong = playback.musicPlaylist().get(playback.musicIndex());
+                if (!playback.musicPlaylist().isEmpty()) {
                     playback.reshuffleMusic(isShuffleMode);
-                    if (playback.musicIndex() < 0 || !playback.musicPlaylist().contains(currentSong)) {
-                        playback.setMusicIndex(playback.musicPlaylist().indexOf(currentSong));
-                        if (playback.musicIndex() < 0) playback.setMusicIndex(0);
-                    }
                 }
+                refreshContextQueueTierIfOpen();
                 refreshSettingsPreview(RowKeys.SHUFFLE);
             }
         });
@@ -14358,6 +16416,26 @@ public class MainActivity extends Activity {
             }
         });
         containerSettingsItems.addView(btnLanguage);
+
+        LinearLayout btnRadio = createSettingsRow(RowKeys.RADIO, R.string.settings_sub_radio, true);
+        btnRadio.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildRadioSettingsUI();
+            }
+        });
+        containerSettingsItems.addView(btnRadio);
+
+        LinearLayout btnVideo = createSettingsRow(RowKeys.VIDEO, R.string.settings_sub_video, true);
+        btnVideo.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildVideoSettingsUI();
+            }
+        });
+        containerSettingsItems.addView(btnVideo);
 
         // (Home Screen, Background, Theme — under Settings → Appearance)
 
@@ -14903,6 +16981,244 @@ public class MainActivity extends Activity {
         return false;
     }
 
+    private void buildRadioSettingsUI() {
+        if (mediaSuite == null) return;
+        setSettingsSubScreen(SettingsScreens.RADIO);
+        updateStatusBarTitle();
+        containerSettingsItems.removeAllViews();
+
+        Button btnBack = createListButton(getString(R.string.common_cancel_back));
+        styleSecondaryLabel(btnBack);
+        btnBack.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildSettingsUI();
+            }
+        });
+        containerSettingsItems.addView(btnBack);
+
+        for (final MediaSuiteHost.SettingsRow row : mediaSuite.buildRadioSettingsRows()) {
+            LinearLayout settingsRow = createSettingsRow(row.rowKey, row.labelResId, row.submenu);
+            if (!row.submenu) {
+                TextView stateView = settingsRow.findViewWithTag("inline_state") instanceof TextView
+                        ? (TextView) settingsRow.findViewWithTag("inline_state") : null;
+                if (stateView != null) {
+                    String state = resolveSettingStateText(row.rowKey);
+                    stateView.setText(state != null ? state : "");
+                }
+            }
+            settingsRow.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    if (SettingsScreens.RADIO_FM_BAND.equals(row.rowKey)) {
+                        buildFmBandSettingsUI();
+                    } else if (SettingsScreens.RADIO_INTERNET_COUNTRY.equals(row.rowKey)) {
+                        buildInternetCountrySettingsUI();
+                    } else if (MediaSuiteHost.ROW_AUTO_DETECT.equals(row.rowKey)) {
+                        mediaSuite.toggleAutoDetectRegion();
+                        buildRadioSettingsUI();
+                        refreshSettingsPreview(row.rowKey);
+                    } else if (MediaSuiteHost.ROW_BUFFER_SD.equals(row.rowKey)) {
+                        mediaSuite.toggleBufferOnSd();
+                        buildRadioSettingsUI();
+                        refreshSettingsPreview(row.rowKey);
+                    }
+                }
+            });
+            containerSettingsItems.addView(settingsRow);
+        }
+
+        if (containerSettingsItems.getChildCount() > 1) {
+            containerSettingsItems.getChildAt(1).requestFocus();
+        }
+    }
+
+    private void buildVideoSettingsUI() {
+        if (mediaSuite == null) return;
+        setSettingsSubScreen(SettingsScreens.VIDEO);
+        updateStatusBarTitle();
+        containerSettingsItems.removeAllViews();
+
+        Button btnBack = createListButton(getString(R.string.common_cancel_back));
+        styleSecondaryLabel(btnBack);
+        btnBack.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildSettingsUI();
+            }
+        });
+        containerSettingsItems.addView(btnBack);
+
+        for (final MediaSuiteHost.SettingsRow row : mediaSuite.buildVideoSettingsRows()) {
+            LinearLayout settingsRow = createSettingsRow(row.rowKey, row.labelResId, row.submenu);
+            if (!row.submenu) {
+                TextView stateView = settingsRow.findViewWithTag("inline_state") instanceof TextView
+                        ? (TextView) settingsRow.findViewWithTag("inline_state") : null;
+                if (stateView != null) {
+                    String state = resolveSettingStateText(row.rowKey);
+                    stateView.setText(state != null ? state : "");
+                }
+            }
+            settingsRow.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    if (MediaSuiteHost.ROW_VIDEO_SLEEP.equals(row.rowKey)) {
+                        mediaSuite.toggleSleepDuringPlayback();
+                        buildVideoSettingsUI();
+                        refreshSettingsPreview(row.rowKey);
+                    }
+                }
+            });
+            containerSettingsItems.addView(settingsRow);
+        }
+
+        if (containerSettingsItems.getChildCount() > 1) {
+            containerSettingsItems.getChildAt(1).requestFocus();
+        }
+    }
+
+    private void buildFmBandSettingsUI() {
+        if (mediaSuite == null) return;
+        setSettingsSubScreen(SettingsScreens.RADIO_FM_BAND);
+        updateStatusBarTitle();
+        containerSettingsItems.removeAllViews();
+
+        Button btnBack = createListButton(getString(R.string.common_cancel_back));
+        styleSecondaryLabel(btnBack);
+        btnBack.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildRadioSettingsUI();
+            }
+        });
+        containerSettingsItems.addView(btnBack);
+
+        for (final MediaSuiteHost.SettingsRow row : mediaSuite.buildFmBandSettingsRows()) {
+            final String region = row.rowKey.substring("radio.fm_band.".length());
+            LinearLayout settingsRow = createSettingsRow(row.rowKey, row.labelResId, false);
+            TextView stateView = settingsRow.findViewWithTag("inline_state") instanceof TextView
+                    ? (TextView) settingsRow.findViewWithTag("inline_state") : null;
+            if (stateView != null) {
+                String current = mediaSuite.fmBandRegionLabel();
+                stateView.setText(region.equalsIgnoreCase(current) ? getString(R.string.common_on) : "");
+            }
+            settingsRow.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    mediaSuite.applyFmBandRegion(region);
+                    buildFmBandSettingsUI();
+                }
+            });
+            containerSettingsItems.addView(settingsRow);
+        }
+
+        if (containerSettingsItems.getChildCount() > 1) {
+            containerSettingsItems.getChildAt(1).requestFocus();
+        }
+    }
+
+    private void buildInternetCountrySettingsUI() {
+        if (mediaSuite == null) return;
+        setSettingsSubScreen(SettingsScreens.RADIO_INTERNET_COUNTRY);
+        updateStatusBarTitle();
+        containerSettingsItems.removeAllViews();
+
+        Button btnBack = createListButton(getString(R.string.common_cancel_back));
+        styleSecondaryLabel(btnBack);
+        btnBack.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildRadioSettingsUI();
+            }
+        });
+        containerSettingsItems.addView(btnBack);
+
+        final LinearLayout loading = createSettingsRow("radio.country.loading",
+                R.string.radio_net_loading_countries, false);
+        TextView loadingState = loading.findViewWithTag("inline_state") instanceof TextView
+                ? (TextView) loading.findViewWithTag("inline_state") : null;
+        if (loadingState != null) loadingState.setText(getString(R.string.common_wait));
+        loading.setEnabled(false);
+        containerSettingsItems.addView(loading);
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final List<com.solar.launcher.radio.net.RadioBrowserClient.Country> countries =
+                        new ArrayList<com.solar.launcher.radio.net.RadioBrowserClient.Country>();
+                String err = null;
+                try {
+                    countries.addAll(new com.solar.launcher.radio.net.RadioBrowserClient(
+                            MainActivity.this).listCountries());
+                } catch (Exception e) {
+                    err = e.getMessage();
+                }
+                final String fErr = err;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (!SettingsScreens.RADIO_INTERNET_COUNTRY.equals(settingsSubScreenKey)) return;
+                        containerSettingsItems.removeView(loading);
+                        if (fErr != null) {
+                            Button errRow = createListButton(getString(R.string.radio_net_load_error, fErr));
+                            errRow.setEnabled(false);
+                            containerSettingsItems.addView(errRow);
+                            return;
+                        }
+                        final String current = mediaSuite.internetCountryLabel();
+                        for (final com.solar.launcher.radio.net.RadioBrowserClient.Country c : countries) {
+                            final String iso = c.isoCode;
+                            LinearLayout row = createSettingsRow("radio.country." + iso,
+                                    c.name + " (" + c.stationcount + ")", false, true);
+                            TextView stateView = row.findViewWithTag("inline_state") instanceof TextView
+                                    ? (TextView) row.findViewWithTag("inline_state") : null;
+                            if (stateView != null) {
+                                stateView.setText(iso.equalsIgnoreCase(current)
+                                        ? getString(R.string.common_on) : "");
+                            }
+                            row.setOnClickListener(new View.OnClickListener() {
+                                @Override
+                                public void onClick(View v) {
+                                    clickFeedback();
+                                    mediaSuite.applyInternetCountry(iso);
+                                    buildInternetCountrySettingsUI();
+                                }
+                            });
+                            containerSettingsItems.addView(row);
+                        }
+                        if (containerSettingsItems.getChildCount() > 1) {
+                            containerSettingsItems.getChildAt(1).requestFocus();
+                        }
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private boolean handleRadioSettingsBack() {
+        if (SettingsScreens.RADIO_FM_BAND.equals(settingsSubScreenKey)
+                || SettingsScreens.RADIO_INTERNET_COUNTRY.equals(settingsSubScreenKey)) {
+            buildRadioSettingsUI();
+            return true;
+        }
+        if (SettingsScreens.RADIO.equals(settingsSubScreenKey)) {
+            buildSettingsUI();
+            return true;
+        }
+        if (SettingsScreens.VIDEO.equals(settingsSubScreenKey)) {
+            buildSettingsUI();
+            return true;
+        }
+        return false;
+    }
+
     /** Reach master on and Soulseek service enabled. */
     private boolean soulseekActive() {
         return soulseekReachEnabled && soulseekEnabled;
@@ -15157,6 +17473,19 @@ public class MainActivity extends Activity {
             }
         });
         containerSettingsItems.addView(btnMessaging);
+
+        if (peerOk) {
+            LinearLayout btnFindReach = createSettingsRow(RowKeys.SOULSEEK_FIND_REACH,
+                    R.string.soulseek_find_reach_users, true);
+            btnFindReach.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    buildSoulseekFindReachUsersUI();
+                }
+            });
+            containerSettingsItems.addView(btnFindReach);
+        }
 
         if (peerOk) {
             LinearLayout btnFindUser = createSettingsRow(RowKeys.SOULSEEK_FIND_USER,
@@ -15727,6 +18056,26 @@ public class MainActivity extends Activity {
         });
         host.addView(btnNote);
 
+        final String peerNote = SoulseekPeerNotes.getNoteSync(this, peer);
+        if (peerNote != null && !peerNote.trim().isEmpty()) {
+            Button btnClearNote = createListButton(getString(R.string.soulseek_clear_user_note));
+            btnClearNote.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    SoulseekPeerNotes.clearNote(MainActivity.this, peer);
+                    Toast.makeText(MainActivity.this,
+                            getString(R.string.soulseek_user_note_saved), Toast.LENGTH_SHORT).show();
+                    if (SettingsScreens.SOULSEEK_USER_PROFILE.equals(settingsSubScreenKey)
+                            && settingsSubScreenExtra != null
+                            && settingsSubScreenExtra.equalsIgnoreCase(peer)) {
+                        loadSoulseekUserProfileData(peer);
+                    }
+                }
+            });
+            host.addView(btnClearNote);
+        }
+
         final boolean ignored = SoulseekPeerPrefs.isIgnored(prefs, peer);
         Button btnIgnore = createListButton(getString(ignored
                 ? R.string.soulseek_unignore_user : R.string.soulseek_ignore_user));
@@ -16048,11 +18397,13 @@ public class MainActivity extends Activity {
         containerSettingsItems.addView(header);
         watchSoulseekPeer(username);
 
+        addProfileMarqueePanel(containerSettingsItems,
+                getString(R.string.soulseek_profile_bio_loading));
+
         appendReachPeerActionButtons(containerSettingsItems, username, null, true);
 
-        applySettingsPreviewCappedText(getString(R.string.soulseek_profile_bio_loading));
-        if (settingsPreviewPane != null && !isFullWidthMenus) {
-            settingsPreviewPane.setVisibility(View.VISIBLE);
+        if (settingsPreviewPane != null) {
+            settingsPreviewPane.setVisibility(View.GONE);
         }
 
         loadSoulseekUserProfileData(username);
@@ -16069,9 +18420,10 @@ public class MainActivity extends Activity {
             return;
         }
         final SoulseekClient client = ensureSoulseekClient();
-        SoulseekProfileSession.fetchBio(client, username, new SoulseekProfileSession.BioCallback() {
+        SoulseekProfileSession.fetchProfile(client, username, new SoulseekProfileSession.ProfileCallback() {
             @Override
-            public void onBio(final String description) {
+            public void onProfile(final SoulseekWire.UserInfoResponse profile) {
+                final String description = profile != null ? profile.description : "";
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
@@ -16141,7 +18493,9 @@ public class MainActivity extends Activity {
 
         String bioText = bio != null && !bio.trim().isEmpty()
                 ? bio.trim() : getString(R.string.soulseek_profile_no_bio);
-        applySettingsPreviewCappedText(formatProfileNoteAndBio(username, bioText));
+        if (settingsPreviewPane != null) {
+            settingsPreviewPane.setVisibility(View.GONE);
+        }
 
         containerSettingsItems.removeAllViews();
         Button btnBack = createListButton(getString(R.string.soulseek_back_settings));
@@ -16159,6 +18513,13 @@ public class MainActivity extends Activity {
         header.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
         applySoulseekCountryFlag(header, soulseekPeerCountryCode(username));
         containerSettingsItems.addView(header);
+
+        String note = SoulseekPeerNotes.getNoteSync(this, username);
+        if (note != null && !note.trim().isEmpty()) {
+            addProfileMarqueePanel(containerSettingsItems,
+                    getString(R.string.soulseek_user_note_label) + "\n" + note.trim());
+        }
+        addProfileMarqueePanel(containerSettingsItems, bioText);
 
         appendReachPeerActionButtons(containerSettingsItems, username, null, true);
 
@@ -16460,8 +18821,6 @@ public class MainActivity extends Activity {
         listConversationThread.setSelection(next);
         if (ad instanceof ConversationThreadAdapter) {
             ((ConversationThreadAdapter) ad).setSelectedPosition(next);
-        } else if (ad instanceof RoomThreadAdapter) {
-            ((RoomThreadAdapter) ad).setSelectedPosition(next);
         } else if (ad instanceof WallThreadAdapter) {
             ((WallThreadAdapter) ad).setSelectedPosition(next);
         }
@@ -16566,6 +18925,15 @@ public class MainActivity extends Activity {
                 new java.util.ArrayList<ConversationDisplayBuilder.Entry>();
         private int[] conversationUnselectedHeights = new int[0];
         private int selectedPosition = -1;
+        private boolean roomMode = false;
+
+        void setRoomMode(boolean room) {
+            roomMode = room;
+        }
+
+        boolean isRoomMode() {
+            return roomMode;
+        }
 
         void setSelectedPosition(int pos) {
             if (pos == selectedPosition) return;
@@ -16574,10 +18942,20 @@ public class MainActivity extends Activity {
         }
 
         void reload() {
-            java.util.List<SoulseekMessaging.Message> raw =
-                    SoulseekMessaging.thread(MainActivity.this, prefs, soulseekMessagePeer);
             SoulseekAccount acct = SoulseekAccount.load(prefs);
-            entries = ConversationDisplayBuilder.build(raw, acct.username, soulseekMessagePeer);
+            if (roomMode) {
+                java.util.List<SoulseekChatRooms.RoomMessage> raw =
+                        SoulseekChatRooms.messagesForRoom(
+                                MainActivity.this, prefs, soulseekChatRoomName);
+                java.util.List<SoulseekMessaging.Message> mapped =
+                        SoulseekChatRooms.toThreadMessages(raw);
+                entries = ConversationDisplayBuilder.build(mapped,
+                        acct.username != null ? acct.username : "", null, true);
+            } else {
+                java.util.List<SoulseekMessaging.Message> raw =
+                        SoulseekMessaging.thread(MainActivity.this, prefs, soulseekMessagePeer);
+                entries = ConversationDisplayBuilder.build(raw, acct.username, soulseekMessagePeer);
+            }
             conversationUnselectedHeights = new int[entries.size()];
             java.util.Arrays.fill(conversationUnselectedHeights, -1);
             notifyDataSetChanged();
@@ -16593,12 +18971,27 @@ public class MainActivity extends Activity {
             final int rowH;
             if (isNewMessage) {
                 rowH = conversationRowHeightPx();
+                String label = roomMode
+                        ? getString(R.string.soulseek_room_new_message)
+                        : getString(R.string.soulseek_new_message);
                 ReachMessageRow.bind(MainActivity.this, row,
-                        getString(R.string.soulseek_new_message), null,
+                        label, null,
                         false, highlighted, null, rowW, rowH, false);
                 return;
             }
             ConversationDisplayBuilder.Entry entry = entries.get(position);
+            SoulseekMessaging.Message m = entry.message;
+            if (m != null && m.statusEvent) {
+                rowH = conversationRowHeightPx();
+                ReachMessageRow.bind(MainActivity.this, row, entry.displayText, null,
+                        false, highlighted, null, rowW, rowH, false);
+                android.widget.TextView line1 =
+                        (android.widget.TextView) row.findViewWithTag(ReachMessageRow.TAG_LINE1);
+                if (line1 != null) {
+                    ThemeManager.applyThemedTextStyle(line1, ThemeManager.getHintTextColor());
+                }
+                return;
+            }
             if (!highlighted && position < conversationUnselectedHeights.length) {
                 int cached = conversationUnselectedHeights[position];
                 if (cached > 0) {
@@ -16615,10 +19008,11 @@ public class MainActivity extends Activity {
                         MainActivity.this, entry, highlighted);
                 PerfDebug.convMeasureCalls++;
             }
-            SoulseekMessaging.Message m = entry.message;
-            Boolean online = m.incoming ? soulseekConversationPeerOnline : null;
+            Boolean online = (!roomMode && m.incoming) ? soulseekConversationPeerOnline : null;
+            String subtitleOverride = roomMode && m.peer != null && !m.peer.isEmpty()
+                    ? m.peer : null;
             ReachMessageRow.bindConversationEntry(MainActivity.this, row, entry,
-                    m.incoming, highlighted, online, rowW, rowH);
+                    m.incoming, highlighted, online, rowW, rowH, subtitleOverride);
         }
 
         SoulseekMessaging.Message getMessageAt(int position) {
@@ -16668,93 +19062,6 @@ public class MainActivity extends Activity {
                 public void bind(boolean highlighted) {
                     boolean show = highlighted || position == selectedPosition;
                     bindConversationRow(rowView, position, show);
-                }
-            });
-            return row;
-        }
-    }
-
-    private final class RoomThreadAdapter extends android.widget.BaseAdapter {
-        private java.util.List<RoomConversationDisplayBuilder.Entry> entries =
-                new java.util.ArrayList<RoomConversationDisplayBuilder.Entry>();
-        private int selectedPosition = -1;
-
-        void setSelectedPosition(int pos) {
-            if (pos == selectedPosition) return;
-            selectedPosition = pos;
-            notifyDataSetChanged();
-        }
-
-        void reload() {
-            SoulseekAccount acct = SoulseekAccount.load(prefs);
-            java.util.List<SoulseekChatRooms.RoomMessage> raw =
-                    SoulseekChatRooms.messagesForRoom(MainActivity.this, prefs, soulseekChatRoomName);
-            entries = RoomConversationDisplayBuilder.build(raw,
-                    acct.username != null ? acct.username : "");
-            notifyDataSetChanged();
-        }
-
-        RoomConversationDisplayBuilder.Entry getEntryAt(int position) {
-            return position >= 0 && position < entries.size() ? entries.get(position) : null;
-        }
-
-        private void bindRoomRow(FrameLayout row, int position, boolean highlighted) {
-            final int rowW = conversationRowWidthPx();
-            final int rowH = conversationRowHeightPx();
-            final boolean isNewMessage = position >= entries.size();
-            if (isNewMessage) {
-                ReachMessageRow.bind(MainActivity.this, row,
-                        getString(R.string.soulseek_room_new_message), null,
-                        false, highlighted, null, rowW, rowH, false);
-                return;
-            }
-            RoomConversationDisplayBuilder.Entry entry = entries.get(position);
-            SoulseekChatRooms.RoomMessage m = entry.message;
-            if (m.statusEvent) {
-                ReachMessageRow.bind(MainActivity.this, row, m.text, null,
-                        false, highlighted, null, rowW, rowH, false);
-                android.widget.TextView line1 =
-                        (android.widget.TextView) row.findViewWithTag(ReachMessageRow.TAG_LINE1);
-                if (line1 != null) {
-                    ThemeManager.applyThemedTextStyle(line1, ThemeManager.getHintTextColor());
-                }
-                return;
-            }
-            boolean incoming = m.incoming;
-            String sender = m.sender != null ? m.sender : "";
-            ReachMessageRow.bindRoomConversationEntry(MainActivity.this, row, entry, incoming,
-                    highlighted, sender, rowW, rowH, soulseekPeerCountryCode(sender));
-        }
-
-        @Override
-        public int getCount() {
-            return entries.size() + 1;
-        }
-
-        @Override
-        public Object getItem(int position) {
-            return getEntryAt(position);
-        }
-
-        @Override
-        public long getItemId(int position) {
-            return position;
-        }
-
-        @Override
-        public View getView(final int position, View convertView, ViewGroup parent) {
-            FrameLayout row;
-            if (convertView instanceof FrameLayout) {
-                row = (FrameLayout) convertView;
-            } else {
-                row = ReachMessageRow.create(MainActivity.this, conversationRowHeightPx());
-            }
-            final FrameLayout rowView = row;
-            ReachMessageRow.attachFocusHighlight(row, new ReachMessageRow.HighlightBind() {
-                @Override
-                public void bind(boolean highlighted) {
-                    boolean show = highlighted || position == selectedPosition;
-                    bindRoomRow(rowView, position, show);
                 }
             });
             return row;
@@ -16902,7 +19209,7 @@ public class MainActivity extends Activity {
             reachChatRoomsAdapter.setLoading(getString(R.string.soulseek_chat_rooms_loading));
             runReachChatRoomSearch(savedQuery, gen);
         } else {
-            applyCachedChatRoomsToAdapter(null);
+            reachChatRoomsAdapter.setAwaitingSearch(getString(R.string.soulseek_chat_rooms_empty));
         }
         if (listReachBrowse != null) {
             listReachBrowse.setAdapter(reachChatRoomsAdapter);
@@ -16932,16 +19239,7 @@ public class MainActivity extends Activity {
                 new ReachDatabase.Callback<java.util.List<SoulseekWire.RoomEntry>>() {
             @Override
             public void onResult(java.util.List<SoulseekWire.RoomEntry> list) {
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (!SettingsScreens.SOULSEEK_CHAT_ROOMS.equals(settingsSubScreenKey)) return;
-                        if (reachChatRoomsAdapter == null) return;
-                        String query = reachChatRoomsAdapter.getSearchQuery();
-                        if (query != null && !query.isEmpty()) return;
-                        applyCachedChatRoomsToAdapter(list);
-                    }
-                });
+                pendingRoomListSnapshot = list;
             }
         });
     }
@@ -17103,7 +19401,7 @@ public class MainActivity extends Activity {
         updateStatusBarTitle();
         applyReachBrowseLayoutMode();
         showReachBrowseList(false);
-        showSoulseekRoomPanel(true);
+        showSoulseekConversationPanel(true);
         ensureSoulseekRoomModeBar();
         if (tvConversationTitle != null) {
             tvConversationTitle.setText(soulseekChatRoomName);
@@ -17141,7 +19439,8 @@ public class MainActivity extends Activity {
                     }
                 });
             } else {
-                RoomThreadAdapter adapter = new RoomThreadAdapter();
+                ConversationThreadAdapter adapter = new ConversationThreadAdapter();
+                adapter.setRoomMode(true);
                 adapter.reload();
                 listConversationThread.setAdapter(adapter);
                 listConversationThread.setOnItemSelectedListener(
@@ -17151,7 +19450,6 @@ public class MainActivity extends Activity {
                             int position, long id) {
                         if (view != null) view.requestFocus();
                         adapter.setSelectedPosition(position);
-                        updateChatRoomMessagePreview(position);
                     }
 
                     @Override
@@ -17166,7 +19464,6 @@ public class MainActivity extends Activity {
                     public void run() {
                         listConversationThread.setSelection(focusPos);
                         FocusScrollHelper.smoothScrollListToPosition(listConversationThread, focusPos);
-                        updateChatRoomMessagePreview(focusPos);
                     }
                 });
             }
@@ -17275,36 +19572,14 @@ public class MainActivity extends Activity {
     }
 
     private void updateChatRoomMessagePreview(int position) {
-        if (!SettingsScreens.SOULSEEK_CHAT_ROOM_THREAD.equals(settingsSubScreenKey)) return;
-        if (listConversationThread == null
-                || !(listConversationThread.getAdapter() instanceof RoomThreadAdapter)) return;
-        RoomThreadAdapter ad = (RoomThreadAdapter) listConversationThread.getAdapter();
-        if (position >= ad.getCount() - 1) {
-            if (tvSettingsPreviewTitle != null) {
-                tvSettingsPreviewTitle.setText(soulseekChatRoomName);
-                tvSettingsPreviewTitle.setSelected(true);
-                enableMarquee(tvSettingsPreviewTitle);
-            }
-            applySettingsPreviewStateText(getString(R.string.soulseek_room_new_message), true);
-            return;
-        }
-        RoomConversationDisplayBuilder.Entry entry = ad.getEntryAt(position);
-        if (entry == null || entry.message == null) return;
-        SoulseekChatRooms.RoomMessage m = entry.message;
-        if (tvSettingsPreviewTitle != null) {
-            tvSettingsPreviewTitle.setText(m.sender);
-            tvSettingsPreviewTitle.setSelected(true);
-            enableMarquee(tvSettingsPreviewTitle);
-        }
-        String ts = SoulseekChatRooms.formatTimestamp(m.timestamp);
-        String body = entry.displayText != null ? entry.displayText : "";
-        applySettingsPreviewStateText(ts.isEmpty() ? body : ts + "\n" + body, true);
+        // Retired: room threads use full-width conversation panel (no preview pane).
     }
 
     private void refreshChatRoomThreadList() {
         if (listConversationThread == null || soulseekChatRoomName == null) return;
-        if (listConversationThread.getAdapter() instanceof RoomThreadAdapter) {
-            ((RoomThreadAdapter) listConversationThread.getAdapter()).reload();
+        if (listConversationThread.getAdapter() instanceof ConversationThreadAdapter) {
+            ConversationThreadAdapter ad = (ConversationThreadAdapter) listConversationThread.getAdapter();
+            if (ad.isRoomMode()) ad.reload();
         }
     }
 
@@ -17316,11 +19591,7 @@ public class MainActivity extends Activity {
             }
             return pos >= listConversationThread.getAdapter().getCount() - 1;
         }
-        if (listConversationThread == null
-                || !(listConversationThread.getAdapter() instanceof RoomThreadAdapter)) {
-            return true;
-        }
-        return pos >= listConversationThread.getAdapter().getCount() - 1;
+        return isConversationNewMessagePosition(pos);
     }
 
     private boolean isRoomThreadScreenActive() {
@@ -17428,33 +19699,25 @@ public class MainActivity extends Activity {
     }
 
     private void openReachRoomMessageContextMenu(int messagePosition) {
-        contextReachRoomWallMode = SettingsScreens.SOULSEEK_CHAT_ROOM_WALL.equals(settingsSubScreenKey);
-        contextReachRoomMessagePosition = messagePosition;
-        contextReachPeerUser = null;
-        rebuildContextReachRoomMessageTier(true);
+        if (SettingsScreens.SOULSEEK_CHAT_ROOM_WALL.equals(settingsSubScreenKey)) {
+            contextReachRoomWallMode = true;
+            contextReachRoomMessagePosition = messagePosition;
+            contextReachPeerUser = null;
+            rebuildContextReachRoomMessageTier(true);
+            return;
+        }
+        contextReachMessageIsRoom = true;
+        openReachMessageContextMenu(messagePosition);
     }
 
     private void rebuildContextReachRoomMessageTier(boolean focusList) {
-        final String quoteText;
-        final String quoteAuthor;
-        final String profileUser;
-        if (contextReachRoomWallMode) {
-            if (!(listConversationThread.getAdapter() instanceof WallThreadAdapter)) return;
-            WallThreadAdapter ad = (WallThreadAdapter) listConversationThread.getAdapter();
-            SoulseekRoomWall.RoomTicker t = ad.getTickerAt(contextReachRoomMessagePosition);
-            if (t == null) return;
-            quoteText = t.text;
-            quoteAuthor = t.username;
-            profileUser = t.username;
-        } else {
-            if (!(listConversationThread.getAdapter() instanceof RoomThreadAdapter)) return;
-            RoomThreadAdapter ad = (RoomThreadAdapter) listConversationThread.getAdapter();
-            RoomConversationDisplayBuilder.Entry entry = ad.getEntryAt(contextReachRoomMessagePosition);
-            if (entry == null || entry.message == null || entry.message.statusEvent) return;
-            quoteText = entry.displayText;
-            quoteAuthor = entry.message.sender;
-            profileUser = entry.message.sender;
-        }
+        if (!contextReachRoomWallMode) return;
+        if (!(listConversationThread.getAdapter() instanceof WallThreadAdapter)) return;
+        WallThreadAdapter ad = (WallThreadAdapter) listConversationThread.getAdapter();
+        SoulseekRoomWall.RoomTicker t = ad.getTickerAt(contextReachRoomMessagePosition);
+        if (t == null) return;
+        final String quoteText = t.text;
+        final String profileUser = t.username;
 
         java.util.ArrayList<String> labels = new java.util.ArrayList<String>();
         java.util.ArrayList<String> states = new java.util.ArrayList<String>();
@@ -17466,7 +19729,7 @@ public class MainActivity extends Activity {
         headers.add(Boolean.TRUE);
         actions.add(null);
 
-        final String authorFinal = quoteAuthor;
+        final String authorFinal = profileUser;
         final String quoteFinal = quoteText;
         labels.add(getString(R.string.soulseek_reply_to_message));
         states.add(null);
@@ -17554,6 +19817,7 @@ public class MainActivity extends Activity {
         soulseekConversationPeerOnline = null;
         if (listConversationThread != null) {
             ConversationThreadAdapter adapter = new ConversationThreadAdapter();
+            adapter.setRoomMode(false);
             adapter.reload();
             listConversationThread.setAdapter(adapter);
             listConversationThread.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
@@ -17961,6 +20225,17 @@ public class MainActivity extends Activity {
 
         btnBack.requestFocus();
         updateSoulseekConnectionInfoPreview();
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("sharingLabel", soulseekSharingStatusLabel());
+            d.put("natLabel", soulseekNatStatusLabel());
+            d.put("peerState", ReachPeerConnectivity.state().name());
+            d.put("clientNull", soulseekClient == null);
+            d.put("clientShutDown", soulseekClient != null && soulseekClient.isShutDown());
+            DebugAgentLog.log(this, "buildSoulseekConnectionInfoUI", "connection preview", "H1-H3", d);
+        } catch (Exception ignored) {}
+        // #endregion
     }
 
     private void setSettingsAboutFullWidth(boolean fullWidth) {
@@ -18182,11 +20457,30 @@ public class MainActivity extends Activity {
                         enable ? R.string.settings_debug_jj_themes_hint : R.string.settings_sub_themes,
                         Toast.LENGTH_LONG).show();
                 applyThemeToMainMenu();
-                rebuildHomeMenuIfVisible();
+                scheduleRebuildHomeMenuIfVisible();
             }
         });
         containerSettingsItems.addView(btnJjThemes);
         refreshSettingsPreview(RowKeys.DEBUG_JJ_THEMES);
+
+        final LinearLayout btnErrorToasts = createSettingsRow(RowKeys.DEBUG_SHOW_ERROR_TOASTS,
+                R.string.settings_debug_show_error_toasts, false);
+        btnErrorToasts.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                boolean enable = !prefs.getBoolean(PREF_DEBUG_SHOW_ERROR_TOASTS, false);
+                prefs.edit().putBoolean(PREF_DEBUG_SHOW_ERROR_TOASTS, enable).apply();
+                refreshSettingsPreview(RowKeys.DEBUG_SHOW_ERROR_TOASTS);
+                Toast.makeText(MainActivity.this,
+                        enable ? R.string.settings_debug_show_error_toasts_hint
+                                : R.string.settings_debug_show_error_toasts,
+                        Toast.LENGTH_LONG).show();
+            }
+        });
+        containerSettingsItems.addView(btnErrorToasts);
+        refreshSettingsPreview(RowKeys.DEBUG_SHOW_ERROR_TOASTS);
+
         btnJjThemes.requestFocus();
     }
 
@@ -19637,9 +21931,8 @@ public class MainActivity extends Activity {
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
                         if (gen != deezerPlaylistSaveGen) return;
-                        Toast.makeText(MainActivity.this,
-                                getString(R.string.deezer_playlist_save_failed, message),
-                                Toast.LENGTH_LONG).show();
+                        showGlobalContextAlert(playlist.title,
+                                getString(R.string.deezer_playlist_save_failed, message));
                         buildDeezerPlaylistDetailUI("");
                     }
                 });
@@ -19805,7 +22098,7 @@ public class MainActivity extends Activity {
 
     private boolean isMusicBrowseContextFile(File f) {
         return f != null && f.isFile() && isAudioFile(f) && !isPodcastMediaFile(f)
-                && !isReachTempFile(f) && !DeezerCache.isTempFile(getCacheDir(), f);
+                && !isReachTempFile(f) && !DeezerCache.isTempFile(streamAppCacheRoot(), f);
     }
 
     private SongItem resolveSongMetadata(File f) {
@@ -20015,11 +22308,13 @@ public class MainActivity extends Activity {
             if (!dir.exists()) dir.mkdirs();
             String name = "Queue " + System.currentTimeMillis();
             File dest = new File(dir, name.replace(' ', '_') + ".m3u");
+            java.util.List<PlayQueue.QueueItem> musicItems = collectMusicQueueItemsForPlaylist();
             PlaylistManager.saveM3u(PlaylistManager.fromTracks(name, playback.musicPlaylist()), dest);
+            materializePlaylistStreamTracksAsync(dest, musicItems);
             Toast.makeText(this, getString(R.string.library_playlist_saved, dest.getName()), Toast.LENGTH_SHORT).show();
             if (currentBrowserMode == BROWSER_PLAYLISTS) buildPlaylistsUI();
         } catch (Exception e) {
-            Toast.makeText(this, getString(R.string.library_playlist_save_failed), Toast.LENGTH_SHORT).show();
+            toastStreamDownloadWarning(getString(R.string.library_playlist_save_failed));
         }
     }
 
@@ -21094,6 +23389,9 @@ public class MainActivity extends Activity {
 
     private SoulseekClient ensureSoulseekClient() {
         if (!soulseekActive()) return null;
+        if (soulseekClient != null && soulseekClient.isShutDown()) {
+            soulseekClient = null;
+        }
         if (soulseekClient == null) {
             ReachPeerConnectivity.reset();
             ConnectivityHelper.setReachPeerOk(true);
@@ -21191,27 +23489,32 @@ public class MainActivity extends Activity {
         if (!wifi || !wantReach) {
             if (soulseekClient != null && !soulseekClient.isBusy() && !soulseekSearchInProgress) {
                 soulseekClient.pauseWhenIdle();
-            }
-            return;
-        }
-        if (!peerOk && !peerProbe) {
-            if (soulseekClient != null && !soulseekClient.isBusy() && !soulseekSearchInProgress) {
-                soulseekClient.pauseWhenIdle();
-            }
-            return;
-        }
-        if (soulseekSearchInProgress || (soulseekClient != null && soulseekClient.isSearchActive())) {
-            SoulseekClient c = soulseekClient;
-            if (c == null) c = ensureSoulseekClient();
-            if (c != null) {
-                c.setSharePolicy(soulseekSharePolicy);
-                c.setShareIndex(soulseekShareIndex);
+                soulseekClient = null;
             }
             return;
         }
         SoulseekClient client = ensureSoulseekClient();
         if (client == null) return;
         client.setSharePolicy(soulseekSharePolicy);
+        if (soulseekSharingEnabled || soulseekMessagingEnabled) {
+            client.warmConnectionAsync();
+        }
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("warmConnection", soulseekSharingEnabled || soulseekMessagingEnabled);
+            d.put("messaging", soulseekMessagingEnabled);
+            d.put("sharing", soulseekSharingEnabled);
+            d.put("clientShutDown", client.isShutDown());
+            d.put("peerState", ReachPeerConnectivity.state().name());
+            d.put("sharingNeedsWarm", soulseekSharingEnabled && !soulseekMessagingEnabled);
+            DebugAgentLog.log(this, "MainActivity.updateSoulseekSharePolicy", "warm decision", "H1", d);
+        } catch (Exception ignored) {}
+        // #endregion
+        if (soulseekSearchInProgress || client.isSearchActive()) {
+            client.setShareIndex(soulseekShareIndex);
+            return;
+        }
         if (soulseekSharingEnabled) {
             boolean scanWasRunning = soulseekShareScanRunning;
             runSoulseekShareScanIfNeeded();
@@ -21286,6 +23589,21 @@ public class MainActivity extends Activity {
         @Override
         public void onUserStatusUpdate(String username, int status, boolean privileged) {
             // optional UI refresh
+        }
+
+        @Override
+        public void onUserStatsUpdate(final String username, int avgSpeed, final int files, int dirs) {
+            if (username == null || username.trim().isEmpty()) return;
+            final String key = username.trim().toLowerCase(Locale.US);
+            soulseekPeerSharedFiles.put(key, files);
+            ReachDatabase.getInstance(MainActivity.this).putPeerCache(
+                    username, soulseekPeerCountryCode(username), files, true);
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    refreshSoulseekPeerCountryUi(username);
+                }
+            });
         }
 
         @Override
@@ -21776,13 +24094,13 @@ public class MainActivity extends Activity {
                     if (currentScreenState == STATE_SOULSEEK && failed != null) {
                         showSoulseekDownloadFailure(failed, msg);
                     } else if (currentScreenState == STATE_SOULSEEK) {
-                        Toast.makeText(MainActivity.this, msg, Toast.LENGTH_LONG).show();
+                        toastReachDownloadError(msg);
                         if (soulseekUiMode == SOULSEEK_UI_DOWNLOAD || soulseekDownloadUiFailed) {
                             soulseekDownloadUiFailed = false;
                             buildSoulseekResultsUI();
                         }
                     } else {
-                        Toast.makeText(MainActivity.this, msg, Toast.LENGTH_LONG).show();
+                        toastReachDownloadError(msg);
                     }
                     if (!isSoulseekUiActive() && !shouldDeferSoulseekOffScreenCleanup()) {
                         soulseekOffScreenCleanup();
@@ -23113,11 +25431,11 @@ public class MainActivity extends Activity {
     }
 
     private File reachCacheDir() {
-        return ReachCache.dir(getCacheDir());
+        return ReachCache.dir(streamAppCacheRoot());
     }
 
     private boolean isReachTempFile(File f) {
-        return ReachCache.isTempFile(getCacheDir(), f);
+        return ReachCache.isTempFile(streamAppCacheRoot(), f);
     }
 
     private void purgeUnreferencedReachCache() {
@@ -23125,9 +25443,10 @@ public class MainActivity extends Activity {
     }
 
     private void purgeStreamTempFiles() {
-        StreamTempCache.purgeReach(getCacheDir(), playback.musicPlaylist(),
+        java.util.List<File> queueFiles = playback.musicPlaylist();
+        StreamTempCache.purgeReach(streamAppCacheRoot(), queueFiles,
                 reachGrowingCacheFile, reachQueuePartialFile);
-        List<File> keep = StreamTempCache.reachKeepList(playback.musicPlaylist(),
+        List<File> keep = StreamTempCache.reachKeepList(queueFiles,
                 reachGrowingCacheFile, reachQueuePartialFile);
         if (deezerActiveGrowingFile != null && deezerActiveGrowingFile.isFile()) {
             keep.add(deezerActiveGrowingFile);
@@ -23135,8 +25454,8 @@ public class MainActivity extends Activity {
         if (deezerScreen != null && deezerScreen.growingFile() != null) {
             keep.add(deezerScreen.growingFile());
         }
-        DeezerCache.purgeUnreferenced(getCacheDir(), keep);
-        StreamTempCache.purgePodcastStream(getCacheDir(),
+        DeezerCache.purgeUnreferenced(streamAppCacheRoot(), keep);
+        StreamTempCache.purgePodcastStream(streamAppCacheRoot(),
                 podcastGrowingCacheFile, podcastGrowingCacheFinal);
     }
 
@@ -23209,7 +25528,7 @@ public class MainActivity extends Activity {
     }
 
     private boolean isDeezerTrackStillBuffering(File src) {
-        if (!DeezerCache.isTempFile(getCacheDir(), src)) return false;
+        if (!DeezerCache.isTempFile(streamAppCacheRoot(), src)) return false;
         if (deezerScreen != null && deezerScreen.isDownloadActive()
                 && deezerActiveGrowingFile != null && deezerActiveGrowingFile.equals(src)) {
             return true;
@@ -23270,7 +25589,7 @@ public class MainActivity extends Activity {
         });
         if (!themedContextMenu.isShowing()) showThemedContextMenu();
         contextMenuTierStack.clear();
-        contextMenuTierStack.push(CONTEXT_NAV_ROOT);
+        contextMenuTierStack.addLast(CONTEXT_NAV_ROOT);
         pushContextMenuTier("reach_pm");
         showContextMenuTierInPlace(folderLabel, labels, states, headers, actions, true);
     }
@@ -23306,7 +25625,7 @@ public class MainActivity extends Activity {
             soulseekPendingSaveToLibrary = true;
             soulseekPendingThankYouResult = new SoulseekClient.Result(
                     peer, title, 0, 0, 0, true, true, 0, 0);
-            Toast.makeText(this, getString(R.string.soulseek_save_wait_download), Toast.LENGTH_SHORT).show();
+            toastStreamDownloadWarning(getString(R.string.soulseek_save_wait_download));
             return;
         }
         if (saveStreamTrackToLibraryInternal(src)) {
@@ -23321,7 +25640,7 @@ public class MainActivity extends Activity {
     private void saveStreamTrackToLibrary(final File src) {
         if (isStreamTrackStillBuffering(src)) {
             soulseekPendingSaveToLibrary = true;
-            Toast.makeText(this, getString(R.string.soulseek_save_wait_download), Toast.LENGTH_SHORT).show();
+            toastStreamDownloadWarning(getString(R.string.soulseek_save_wait_download));
             return;
         }
         saveStreamTrackToLibraryInternal(src);
@@ -23329,7 +25648,7 @@ public class MainActivity extends Activity {
 
     private boolean saveStreamTrackToLibraryInternal(final File src) {
         if (isStreamTrackStillBuffering(src)) {
-            Toast.makeText(this, getString(R.string.soulseek_save_wait_download), Toast.LENGTH_SHORT).show();
+            toastStreamDownloadWarning(getString(R.string.soulseek_save_wait_download));
             return false;
         }
         if (!isStreamTempFile(src) || !src.isFile()) return false;
@@ -23347,7 +25666,7 @@ public class MainActivity extends Activity {
                 out.close();
                 src.delete();
             } catch (Exception e) {
-                Toast.makeText(this, getString(R.string.soulseek_save_failed), Toast.LENGTH_SHORT).show();
+                toastReachDownloadError(getString(R.string.soulseek_save_failed));
                 return false;
             }
         }
@@ -23886,7 +26205,7 @@ public class MainActivity extends Activity {
         if (partial == null || !partial.isFile()) return;
         String path = partial.getAbsolutePath();
         if (!DeezerMetadata.hasMetadata(prefs, path)
-                && !DeezerCache.isTempFile(getCacheDir(), partial)) return;
+                && !DeezerCache.isTempFile(streamAppCacheRoot(), partial)) return;
 
         int pct = streamDownloadPercentForFile(partial);
         String title = DeezerMetadata.title(prefs, path, "");
@@ -23986,10 +26305,25 @@ public class MainActivity extends Activity {
         if (reachGrowingCacheFile == null || !reachGrowingCacheFile.isFile()) return;
         reachGrowingPreparedBytes = reachGrowingCacheFile.length();
         reachGrowingTotalBytes = reachGrowingPreparedBytes;
-        progressHandler.removeCallbacks(reachGrowingEdgePoll);
         refreshReachPlayerTitleProgress();
         updateReachGrowingDurationUi();
-        if (DeezerCache.isTempFile(getCacheDir(), reachGrowingCacheFile)) {
+        // Keep edge poll until MediaPlayer catches up with the full file (avoids early nextTrack).
+        if (reachPartialPlaybackStarted && mediaPlayer != null) {
+            try {
+                int mpDur = mediaPlayer.getDuration();
+                int tagDur = reachStreamTagDurationMs();
+                if (tagDur > mpDur + 1500 || mpDur <= 0) {
+                    progressHandler.postDelayed(reachGrowingEdgePoll, 200);
+                } else {
+                    progressHandler.removeCallbacks(reachGrowingEdgePoll);
+                }
+            } catch (Exception ignored) {
+                progressHandler.removeCallbacks(reachGrowingEdgePoll);
+            }
+        } else {
+            progressHandler.removeCallbacks(reachGrowingEdgePoll);
+        }
+        if (DeezerCache.isTempFile(streamAppCacheRoot(), reachGrowingCacheFile)) {
             applyDeezerStreamMetadata(reachGrowingCacheFile, false);
         } else {
             applyReachId3Metadata(reachGrowingCacheFile);
@@ -24032,9 +26366,10 @@ public class MainActivity extends Activity {
                 return;
             }
         }
+        final int decodeEdgeMs = reachGrowingDecodeEdgeMs();
         if (!force) {
             if (playing) {
-                if (durationMs <= 0 || positionMs < durationMs - REACH_GROWING_EXTEND_MS) return;
+                if (decodeEdgeMs <= 0 || positionMs < decodeEdgeMs - REACH_GROWING_EXTEND_MS) return;
                 if (growth < REACH_GROWING_MIN_GROW_BYTES && reachDownloadInProgress()) {
                     progressHandler.postDelayed(reachGrowingEdgePoll, 300);
                     return;
@@ -24060,12 +26395,37 @@ public class MainActivity extends Activity {
         startReachFromGrowingFile(reachGrowingCacheFile, reachGrowingSeekMs);
     }
 
+    private boolean shouldReprepareReachGrowingAtEnd(MediaPlayer mp) {
+        if (reachGrowingCacheFile == null || !reachGrowingCacheFile.isFile()) return false;
+        try {
+            int mpDur = mp != null ? mp.getDuration() : 0;
+            int tagDur = reachStreamTagDurationMs();
+            if (tagDur > mpDur + 1500) return true;
+            long fileLen = reachGrowingCacheFile.length();
+            if (fileLen > reachGrowingPreparedBytes + REACH_GROWING_MIN_GROW_BYTES) return true;
+        } catch (Exception ignored) {}
+        return false;
+    }
+
+    /** ID3/embedded duration for a finished or nearly-finished stream temp file. */
+    private int reachStreamTagDurationMs() {
+        if (reachGrowingCacheFile == null || !reachGrowingCacheFile.isFile()) return 0;
+        try {
+            AudioTags.Info tags = AudioTags.read(reachGrowingCacheFile, prefs);
+            if (tags.durationMs != null && tags.durationMs.length() > 0) {
+                return Integer.parseInt(tags.durationMs);
+            }
+        } catch (Exception ignored) {}
+        return 0;
+    }
+
     private void startReachFromGrowingFile(File growingFile, int seekMs) {
         try {
             progressHandler.removeCallbacks(reachGrowingEdgePoll);
             reachGrowingReprepareInFlight = true;
             reachGrowingSeekMs = seekMs;
             reachGrowingPreparedBytes = growingFile.length();
+            if (seekMs <= 0) reachGrowingFinalReprepareDone = false;
             int previousSessionId = mediaPlayer != null ? mediaPlayer.getAudioSessionId() : 0;
             if (mediaPlayer == null) mediaPlayer = new MediaPlayer();
             else mediaPlayer.reset();
@@ -24077,9 +26437,32 @@ public class MainActivity extends Activity {
             mediaPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
                 @Override
                 public void onCompletion(MediaPlayer mp) {
-                    if (reachDownloadInProgress() && reachGrowingCacheFile != null) {
-                        progressHandler.postDelayed(reachGrowingEdgePoll, 200);
-                        return;
+                    if (reachGrowingCacheFile != null && reachGrowingCacheFile.isFile()) {
+                        if (reachDownloadInProgress()) {
+                            // #region agent log
+                            try {
+                                org.json.JSONObject d = new org.json.JSONObject();
+                                d.put("pos", mp.getCurrentPosition());
+                                d.put("dur", mp.getDuration());
+                                d.put("fileLen", reachGrowingCacheFile != null ? reachGrowingCacheFile.length() : 0);
+                                DebugAgentLog.log(MainActivity.this, "MainActivity.reachOnCompletion",
+                                        "completion during download — extend", "H-STREAM-C", d);
+                            } catch (Exception ignored) {}
+                            // #endregion
+                            maybeExtendReachGrowingPlayback(true);
+                            return;
+                        }
+                        if (!reachGrowingFinalReprepareDone && shouldReprepareReachGrowingAtEnd(mp)) {
+                            reachGrowingFinalReprepareDone = true;
+                            int pos = 0;
+                            try {
+                                pos = mp.getCurrentPosition();
+                                if (pos <= 0) pos = Math.max(0, mp.getDuration() - 500);
+                            } catch (Exception ignored) {}
+                            reachGrowingSeekMs = pos;
+                            maybeExtendReachGrowingPlayback(true);
+                            return;
+                        }
                     }
                     nextTrack();
                 }
@@ -24113,14 +26496,14 @@ public class MainActivity extends Activity {
                         d.put("dur", dur);
                         d.put("seekMs", growingSeek);
                         d.put("fileLen", growingFile.length());
-                        d.put("deezer", DeezerCache.isTempFile(getCacheDir(), growingFile));
+                        d.put("deezer", DeezerCache.isTempFile(streamAppCacheRoot(), growingFile));
                         d.put("playing", mp.isPlaying());
                         DebugAgentLog.log(MainActivity.this, "MainActivity.reachGrowingOnPrepared",
                                 "media prepared", "H-PREPARE", d);
                     } catch (Exception ignored) {}
                     // #endregion
                     if (reachGrowingCacheFile != null
-                            && DeezerCache.isTempFile(getCacheDir(), reachGrowingCacheFile)) {
+                            && DeezerCache.isTempFile(streamAppCacheRoot(), reachGrowingCacheFile)) {
                         applyDeezerStreamMetadata(reachGrowingCacheFile, reachDownloadInProgress());
                     }
                     if (reachDownloadInProgress()) {
@@ -24158,7 +26541,11 @@ public class MainActivity extends Activity {
         soulseekDownloadStalled = false;
         soulseekDownloadUiFailed = false;
         soulseekFailedResult = null;
-        fetchSoulseekResults(query);
+        if (isGetMusicUnifiedUi()) {
+            fetchGetMusicResults(query);
+        } else {
+            fetchSoulseekResults(query);
+        }
     }
 
     private void appendSoulseekReSearchRows(SoulseekClient.Result r) {
@@ -24207,6 +26594,7 @@ public class MainActivity extends Activity {
         reachGrowingPreparedBytes = 0;
         reachGrowingTotalBytes = 0;
         reachGrowingSeekMs = 0;
+        reachGrowingFinalReprepareDone = false;
         reachQueuePartialFile = null;
         deezerActiveGrowingFile = null;
         deezerActiveDownloadPercent = -1;
@@ -24258,7 +26646,7 @@ public class MainActivity extends Activity {
 
     void teardownPodcastSession() {
         stopPodcastDownloadFully();
-        StreamTempCache.purgePodcastStream(getCacheDir(), null, null);
+        StreamTempCache.purgePodcastStream(streamAppCacheRoot(), null, null);
         podcastGrowingCacheFile = null;
         podcastGrowingCacheFinal = null;
         podcastUiGen++;
@@ -24363,7 +26751,7 @@ public class MainActivity extends Activity {
     }
 
     private void updateReachPlayerBufferUi(int pct, long done, long total) {
-        if (reachGrowingCacheFile != null && DeezerCache.isTempFile(getCacheDir(), reachGrowingCacheFile)) {
+        if (reachGrowingCacheFile != null && DeezerCache.isTempFile(streamAppCacheRoot(), reachGrowingCacheFile)) {
             deezerActiveDownloadPercent = pct;
         } else {
             soulseekActiveDownloadPercent = pct;
@@ -24373,7 +26761,7 @@ public class MainActivity extends Activity {
         if (pct >= 95 || !reachDownloadInProgress()) {
             clearReachLoadingArtistLabel();
             if (reachGrowingCacheFile != null
-                    && DeezerCache.isTempFile(getCacheDir(), reachGrowingCacheFile)) {
+                    && DeezerCache.isTempFile(streamAppCacheRoot(), reachGrowingCacheFile)) {
                 applyDeezerStreamMetadata(reachGrowingCacheFile, false);
             }
         } else {
@@ -24400,7 +26788,7 @@ public class MainActivity extends Activity {
     private void restoreStreamArtistFromMetadata() {
         if (tvPlayerArtist == null || reachGrowingCacheFile == null) return;
         String path = reachGrowingCacheFile.getAbsolutePath();
-        if (DeezerCache.isTempFile(getCacheDir(), reachGrowingCacheFile)) {
+        if (DeezerCache.isTempFile(streamAppCacheRoot(), reachGrowingCacheFile)) {
             String artist = DeezerMetadata.artist(prefs, path, "");
             if (artist.isEmpty()) {
                 artist = deezerArtistFromQueueMeta();
@@ -24924,7 +27312,7 @@ public class MainActivity extends Activity {
             Toast.makeText(this, getString(R.string.podcasts_stream_failed), Toast.LENGTH_LONG).show();
             return;
         }
-        File cacheDir = new File(getCacheDir(), "podcast");
+        File cacheDir = new File(streamAppCacheRoot(), "podcast");
         String cacheKey = Integer.toHexString(ep.audioUrl.hashCode());
         File partial = new File(cacheDir, "pod_" + cacheKey + ".part");
         if (partial.isFile() && partial.length() > PODCAST_GROWING_MIN_GROW_BYTES) {
@@ -25089,7 +27477,7 @@ public class MainActivity extends Activity {
             @Override
             public void run() {
                 try {
-                    final File cacheDir = new File(getCacheDir(), "podcast");
+                    final File cacheDir = new File(streamAppCacheRoot(), "podcast");
                     final File audioFile = OpenRssClient.downloadAudio(cacheDir, ep.audioUrl,
                             new OpenRssClient.AudioDownloadListener() {
                                 @Override
@@ -25739,9 +28127,29 @@ public class MainActivity extends Activity {
         currentAlbumColor = ThemeManager.getListButtonFocusedBg() | 0xFF000000;
         // 🚀 [추가된 부분] 손상된 파일 방어막: 파일이 없거나 용량이 1KB(1024 bytes) 미만인 껍데기 파일일 경우
         if (!track.exists() || track.length() < 1024) {
-            if (isReachTempFile(track)) {
-                playback.removeQueueItemAt(index);
-                persistPlaybackQueue();
+            PlayQueue.QueueItem curItem = playback.currentItem();
+            boolean isStreamItem = curItem != null
+                    && (curItem.kind == PlayQueue.ItemKind.REACH_STREAM
+                    || curItem.kind == PlayQueue.ItemKind.DEEZER_STREAM);
+            if (isStreamItem && deferStreamTrackNotReady()) {
+                String waitTitle = curItem.streamMeta();
+                if (waitTitle == null || waitTitle.isEmpty()) waitTitle = track.getName();
+                tvPlayerTitle.setText(waitTitle);
+                tvPlayerArtist.setText(getString(R.string.reach_loading_track));
+                clearNowPlayingAlbumLine();
+                ivAlbumArt.setImageResource(R.drawable.default_album);
+                return;
+            }
+            if (isReachTempFile(track) || isStreamItem) {
+                if (!deferStreamTrackNotReady()) {
+                    playback.removeQueueItemAt(playback.unifiedQueue().index());
+                    persistPlaybackQueue();
+                    nextTrack();
+                    return;
+                }
+                tvPlayerTitle.setText(curItem != null ? curItem.streamMeta() : track.getName());
+                tvPlayerArtist.setText(getString(R.string.reach_loading_track));
+                return;
             }
             tvPlayerTitle.setText("Corrupted File");
             tvPlayerArtist.setText("Skipping...");
@@ -25778,7 +28186,7 @@ public class MainActivity extends Activity {
             File coverFile = coverFileForTrack(track);
             final String trackPath = track.getAbsolutePath();
             final boolean hasDeezerMeta = DeezerMetadata.hasMetadata(prefs, trackPath)
-                    || DeezerCache.isTempFile(getCacheDir(), track);
+                    || DeezerCache.isTempFile(streamAppCacheRoot(), track);
 
             boolean hasValidTags = AudioTags.hasValidTags(tags);
 
@@ -25946,11 +28354,38 @@ public class MainActivity extends Activity {
                         }
                         tvPlayerTimeTotal.setText(formatTime(mp.getDuration()));
                         updateMusicTrackCountUi();
+                        try {
+                            final AudioTags.Info preparedTags = AudioTags.read(track, prefs);
+                            if (preparedTags.title != null && !preparedTags.title.trim().isEmpty()) {
+                                tvPlayerTitle.setText(preparedTags.title);
+                            }
+                            if (preparedTags.artist != null && !preparedTags.artist.trim().isEmpty()) {
+                                tvPlayerArtist.setText(preparedTags.artist);
+                            }
+                            if (preparedTags.album != null && !preparedTags.album.trim().isEmpty()
+                                    && !"Unknown Album".equalsIgnoreCase(preparedTags.album.trim())) {
+                                if (tvPlayerAlbum != null) tvPlayerAlbum.setText(preparedTags.album);
+                            }
+                            refreshPlayerMarquee();
+                            syncVisualizerMetadata();
+                            // #region agent log
+                            try {
+                                org.json.JSONObject d = new org.json.JSONObject();
+                                d.put("file", track.getName());
+                                d.put("title", preparedTags.title);
+                                d.put("artist", preparedTags.artist);
+                                d.put("album", preparedTags.album);
+                                DebugAgentLog.log(MainActivity.this, "MainActivity.onPrepared",
+                                        "prepared tags", "H-B", d);
+                            } catch (Exception ignored) {}
+                            // #endregion
+                        } catch (Exception ignored) {}
                         if (!isPausedByHand) {
                             mp.start();
                         }
                         syncNowPlayingHomeVisibility();
                         updatePlayerUI();
+                        syncAvrcpTrackInfo(true);
                     } catch (Exception ignored) {}
                 }
             });
@@ -26122,6 +28557,12 @@ public class MainActivity extends Activity {
     }
     private void updatePlayerUI() {
         try {
+            if (playback.isRadioActive() && mediaSuite != null) {
+                mediaSuite.bindRadioNowPlayingUi();
+                updatePlayerStatusIndicators();
+                updatePlaybackStatusIcon();
+                return;
+            }
             if (mediaPlayer != null && mediaPlayer.isPlaying()) {
                 ivAlbumArt.setAlpha(1.0f);
                 ivPauseOverlay.setVisibility(View.GONE);
@@ -26146,8 +28587,192 @@ public class MainActivity extends Activity {
             updatePlayerStatusIndicators();
             updatePlaybackStatusIcon();
             if (isVisualizerShowing) syncVisualizerMetadata();
+            syncAvrcpTrackInfo(false);
         } catch (Exception e) {
         }
+    }
+
+    /** Push title/artist/position to y1-track-info for Y1Bridge + AVRCP trampolines. */
+    private void syncAvrcpTrackInfo(boolean trackChanged) {
+        if (avrcpTrackInfoWriter == null) return;
+        boolean playing = false;
+        boolean hasPlayer = mediaPlayer != null;
+        try {
+            playing = hasPlayer && mediaPlayer.isPlaying();
+        } catch (Exception ignored) {}
+        if (!hasPlayer && !playback.hasAnyQueue()) return;
+        try {
+            String title = "";
+            String artist = "";
+            String album = "";
+            // Match Now Playing screen text exactly (what the user expects on the TV).
+            if (tvPlayerTitle != null) {
+                title = stripReachProgressPrefix(String.valueOf(tvPlayerTitle.getText()));
+            }
+            if (tvPlayerArtist != null) {
+                artist = String.valueOf(tvPlayerArtist.getText());
+            }
+            if (tvPlayerAlbum != null) {
+                album = String.valueOf(tvPlayerAlbum.getText());
+            }
+            title = filterAvrcpDisplayField(title);
+            artist = filterAvrcpDisplayField(artist);
+            album = filterAvrcpDisplayField(album);
+            if (title.isEmpty()) {
+                PlayQueue.QueueItem cur = playback.currentItem();
+                if (cur != null) {
+                    if (cur.kind == PlayQueue.ItemKind.PODCAST_EPISODE && cur.episode != null) {
+                        title = cur.episode.title != null ? cur.episode.title : "";
+                        artist = cur.podcastShowTitle != null ? cur.podcastShowTitle : "";
+                    } else if (cur.file != null) {
+                        title = cur.streamMeta();
+                        if (cur.kind == PlayQueue.ItemKind.REACH_STREAM
+                                && cur.reachPeerUsername != null) {
+                            artist = cur.reachPeerUsername;
+                        }
+                    }
+                }
+            }
+            if (title.isEmpty()) title = "Unknown";
+            int duration = 0;
+            int position = 0;
+            if (hasPlayer) {
+                try {
+                    duration = mediaPlayer.getDuration();
+                    position = mediaPlayer.getCurrentPosition();
+                } catch (Exception ignored) {}
+            }
+            if (duration <= 0) duration = playbackDurationForScrub();
+            if (connectedA2dpAddress != null) {
+                kickY1BridgeMediaService();
+            }
+            avrcpTrackInfoWriter.syncFromPlayback(
+                    title, artist, album, duration, position, playing, trackChanged);
+            // #region agent log
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("titleLen", title.length());
+                d.put("artistLen", artist.length());
+                d.put("duration", duration);
+                d.put("playing", playing);
+                d.put("a2dp", connectedA2dpAddress != null);
+                d.put("trackChanged", trackChanged);
+                DebugAgentLog.log(this, "MainActivity.syncAvrcpTrackInfo", "sync", "H-AV1", d);
+            } catch (Exception ignored) {}
+            // #endregion
+        } catch (Exception ignored) {}
+    }
+
+  /** Drop loading/buffering placeholder copy — TVs reject empty-looking metadata. */
+    private static String filterAvrcpDisplayField(String s) {
+        if (s == null) return "";
+        String t = s.trim();
+        if (t.isEmpty() || "Loading...".equals(t) || "Loading…".equals(t)
+                || "Buffering...".equals(t) || "Buffering…".equals(t) || "null".equalsIgnoreCase(t)) return "";
+        if (t.startsWith("Corrupted")) return "";
+        return t;
+    }
+
+    /** Start Koensayr Y1Bridge so mtkbt can bind MediaPlaybackService for AVRCP metadata. */
+    private void kickY1BridgeMediaService() {
+        try {
+            Intent bridge = new Intent("com.android.music.MediaPlaybackService");
+            bridge.setClassName("com.koensayr.y1.bridge", "com.koensayr.y1.bridge.MediaBridgeService");
+            startService(bridge);
+        } catch (Exception ignored) {}
+    }
+
+    /** adb: am start -n com.solar.launcher/.MainActivity --ez solar_adb_avrcp_harness true */
+    private void finishAvrcpHarnessPlayback(String btAddr) {
+        BluetoothAdapter ba = BluetoothAdapter.getDefaultAdapter();
+        BluetoothDevice dev = ba != null ? ba.getRemoteDevice(btAddr) : null;
+        boolean a2dp = dev != null && isBluetoothAudioConnected(dev);
+        SolarAdbTest.avrcpHarness("a2dp", "connected=" + a2dp + " addr=" + connectedA2dpAddress);
+        if (!a2dp) {
+            SolarAdbTest.fail("a2dp_not_connected");
+            return;
+        }
+        if (avrcpTrackInfoWriter != null) avrcpTrackInfoWriter.ensureReady();
+        kickY1BridgeMediaService();
+        if (!playback.hasAnyQueue()) {
+            SolarAdbTest.fail("no_queue_play_music_first");
+            return;
+        }
+        if (currentScreenState != STATE_PLAYER) {
+            changeScreen(STATE_PLAYER);
+        }
+        boolean mpPlaying = false;
+        try {
+            mpPlaying = mediaPlayer != null && mediaPlayer.isPlaying();
+        } catch (Exception ignored) {}
+        if (!mpPlaying) {
+            if (playback.musicPlaylist().isEmpty()) {
+                SolarAdbTest.fail("music_playlist_empty");
+                return;
+            }
+            isPausedByHand = false;
+            routeAudioToBluetoothA2dp();
+            prepareMusicTrack(playback.musicIndex());
+            new Handler().postDelayed(new Runnable() {
+                @Override public void run() {
+                    verifyAvrcpHarnessPlayback();
+                }
+            }, 6000);
+            return;
+        }
+        verifyAvrcpHarnessPlayback();
+    }
+
+    private void verifyAvrcpHarnessPlayback() {
+        routeAudioToBluetoothA2dp();
+        syncAvrcpTrackInfo(true);
+        boolean playing = false;
+        try {
+            playing = mediaPlayer != null && mediaPlayer.isPlaying();
+        } catch (Exception ignored) {}
+        SolarAdbTest.avrcpHarness("playback", "playing=" + playing
+                + " btName=" + (audioManager != null ? audioManager.getParameters("bluetooth_a2dp") : "null"));
+        if (playing) {
+            SolarAdbTest.pass("playing_a2dp_metadata_synced");
+        } else {
+            SolarAdbTest.fail("playback_not_started");
+        }
+    }
+
+    private void scheduleAdbAvrcpHarness(final String btAddr) {
+        SolarAdbTest.avrcpHarness("start", "addr=" + btAddr);
+        new Handler().postDelayed(new Runnable() {
+            @Override public void run() {
+                applyBluetoothPowerState(true);
+                ensureA2dpProfile();
+                new Handler().postDelayed(new Runnable() {
+                    @Override public void run() {
+                        BluetoothAdapter ba = BluetoothAdapter.getDefaultAdapter();
+                        if (ba == null || !ba.isEnabled()) {
+                            SolarAdbTest.fail("bt_not_on");
+                            return;
+                        }
+                        BluetoothDevice dev = ba.getRemoteDevice(btAddr);
+                        connectBluetoothAudio(dev, true);
+                        new Handler().postDelayed(new Runnable() {
+                            @Override public void run() {
+                                boolean a2dp = isBluetoothAudioConnected(dev);
+                                if (!a2dp) {
+                                    connectBluetoothAudio(dev, true);
+                                    new Handler().postDelayed(new Runnable() {
+                                        @Override public void run() {
+                                            finishAvrcpHarnessPlayback(btAddr);
+                                        }
+                                    }, 8000);
+                                    return;
+                                }
+                                finishAvrcpHarnessPlayback(btAddr);
+                            }
+                        }, 8000);
+                    }
+                }, 6000);
+            }
+        }, 2000);
     }
 
     /** Called from MediaSessionShim (API 21+) for screen-off transport keys. */
@@ -26169,6 +28794,16 @@ public class MainActivity extends Activity {
 
     private void playOrPauseMusic() {
         try {
+            if (playback.isRadioActive() && mediaSuite != null) {
+                mediaSuite.toggleRadioPlayPause();
+                clickFeedback();
+                return;
+            }
+            if (currentScreenState == MediaSuiteHost.STATE_VIDEO_PLAYER && mediaSuite != null) {
+                mediaSuite.toggleVideoPlayPause();
+                clickFeedback();
+                return;
+            }
             // #region agent log
             boolean mpNull = mediaPlayer == null;
             boolean musicEmpty = !playback.isPodcastActive() && playback.musicPlaylist().isEmpty();
@@ -26186,9 +28821,13 @@ public class MainActivity extends Activity {
                         "playOrPauseMusic entry", "H7", d);
             } catch (Exception ignored) {}
             // #endregion
-            if (mediaPlayer == null) return;
             if (!playback.isPodcastActive() && playback.musicPlaylist().isEmpty()) return;
             if (playback.isPodcastActive() && playback.podcastQueue().isEmpty()) return;
+            if (mediaPlayer == null) {
+                isPausedByHand = false;
+                prepareMusicTrack(playback.musicIndex());
+                return;
+            }
             if (mediaPlayer.isPlaying()) {
                 mediaPlayer.pause();
                 isPausedByHand = true;
@@ -26196,7 +28835,9 @@ public class MainActivity extends Activity {
             } else {
                 mediaPlayer.start();
                 isPausedByHand = false;
-
+                if (connectedA2dpAddress != null) {
+                    routeAudioToBluetoothA2dp();
+                }
             }
             updatePlayerUI();
         } catch (Throwable e) {
@@ -26204,6 +28845,7 @@ public class MainActivity extends Activity {
     }
     private void nextTrack() {
         lastTrackChangeTime = System.currentTimeMillis();
+        if (avrcpTrackInfoWriter != null) avrcpTrackInfoWriter.markTrackChange();
         finalizeReachStreamHandoff();
         int next = playback.nextIndex(repeatMode > 0);
         if (next < 0) {
@@ -26238,6 +28880,7 @@ public class MainActivity extends Activity {
 
     private void prevTrack() {
         lastTrackChangeTime = System.currentTimeMillis();
+        if (avrcpTrackInfoWriter != null) avrcpTrackInfoWriter.markTrackChange();
         finalizeReachStreamHandoff();
         int prev = playback.prevIndex(repeatMode > 0);
         if (prev < 0) return;
@@ -26267,50 +28910,6 @@ public class MainActivity extends Activity {
 
     private boolean isMediaPlayPauseKey(int keyCode) {
         return Y1InputKeys.isPlayPauseKey(keyCode);
-    }
-
-    /**
-     * Side track keys while context menu is open — navigate the modal, never skip tracks.
-     * ponytail: 88/87 replaced wheel-as-skip after Y1-Rockbox.kl; must drive quick-bar / dialog focus.
-     */
-    private boolean handleContextMenuMediaKeyDown(int keyCode, KeyEvent event) {
-        if (isMediaPlayPauseKey(keyCode)) {
-            return false;
-        }
-        if (isMediaSkipKey(keyCode)) {
-            return routeContextMenuDirectionalKey(isMediaNextKey(keyCode) ? 1 : -1, isMediaNextKey(keyCode));
-        }
-        return false;
-    }
-
-    /** Route track prev/next (or vertical wheel delta) within an open context / confirm modal. */
-    private boolean routeContextMenuDirectionalKey(int verticalDelta, boolean horizontalNext) {
-        if (themedContextMenu == null || !themedContextMenu.isShowing()) return false;
-        ThemedContextMenu.FocusZone zone = themedContextMenu.focusZone();
-        if (themedContextMenu.isDialogStyle()) {
-            themedContextMenu.moveFocus(verticalDelta);
-            syncContextVolumeSliderWithFocus();
-            if (contextMenuInQueueTier) contextQueueFocusIndex = themedContextMenu.focusIndex();
-            clickFeedback();
-            return true;
-        }
-        if (zone == ThemedContextMenu.FocusZone.QUICK_BAR) {
-            int hKey = horizontalNext ? KeyEvent.KEYCODE_DPAD_RIGHT : KeyEvent.KEYCODE_DPAD_LEFT;
-            if (themedContextMenu.handleKeyHorizontal(hKey)) {
-                syncContextVolumeSliderWithFocus();
-                clickFeedback();
-                return true;
-            }
-        }
-        if (zone == ThemedContextMenu.FocusZone.TIER_CONTENT
-                || zone == ThemedContextMenu.FocusZone.OPTIONS_TITLE) {
-            themedContextMenu.moveFocus(verticalDelta);
-            syncContextVolumeSliderWithFocus();
-            if (contextMenuInQueueTier) contextQueueFocusIndex = themedContextMenu.focusIndex();
-            clickFeedback();
-            return true;
-        }
-        return false;
     }
 
     private boolean hasActiveMediaPlayback() {
@@ -26379,13 +28978,33 @@ public class MainActivity extends Activity {
             int mpDur = mediaPlayer.getDuration();
             if (mpDur <= 0) return 0;
             long fileLen = reachGrowingCacheFile.length();
-            if (reachGrowingTotalBytes > fileLen && fileLen > 0) {
-                return (int) Math.min(mpDur, (long) mpDur * fileLen / reachGrowingTotalBytes);
-            }
-            return mpDur;
+            return reachDecodeEdgeMs(mpDur, fileLen, reachGrowingTotalBytes, reachDownloadInProgress());
         } catch (Exception e) {
             return 0;
         }
+    }
+
+    /** Furthest ms MediaPlayer can decode today — header duration capped by downloaded bytes. */
+    private int reachGrowingDecodeEdgeMs() {
+        if (!reachPartialPlaybackStarted || reachGrowingCacheFile == null) return 0;
+        try {
+            if (mediaPlayer == null) return 0;
+            int mpDur = mediaPlayer.getDuration();
+            if (mpDur <= 0) return 0;
+            long fileLen = reachGrowingCacheFile.length();
+            return reachDecodeEdgeMs(mpDur, fileLen, reachGrowingTotalBytes, reachDownloadInProgress());
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    /** ponytail: static for unit test — MP3 duration in header often exceeds decodable bytes. */
+    static int reachDecodeEdgeMs(int mpDur, long fileLen, long totalBytes, boolean downloading) {
+        if (mpDur <= 0) return 0;
+        if (downloading && totalBytes > fileLen && fileLen > 0) {
+            return (int) Math.min(mpDur, (long) mpDur * fileLen / totalBytes);
+        }
+        return mpDur;
     }
 
     static int clampScrubPositionMs(int positionMs, int durationMs) {
@@ -26537,6 +29156,67 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {}
     }
 
+    /** AVRCP uinput device only — mtk-tpd-kpd wheel keeps list navigation (126/127). */
+    private boolean handleBluetoothTransportKeyDown(int keyCode, KeyEvent event) {
+        if (!Y1BluetoothInput.isBluetoothTransportKey(event)) return false;
+        if (event.getRepeatCount() > 0) return true;
+        if (Y1InputKeys.isDiscreteMediaPlay(keyCode)) {
+            if (hasActiveMediaPlayback() && mediaPlayer != null && !mediaPlayer.isPlaying()) {
+                mediaPlayer.start();
+                isPausedByHand = false;
+                updatePlayerUI();
+            } else {
+                playOrPauseMusic();
+            }
+            clickFeedback();
+            return true;
+        }
+        if (Y1InputKeys.isDiscreteMediaPause(keyCode)) {
+            if (mediaPlayer != null && mediaPlayer.isPlaying()) {
+                mediaPlayer.pause();
+                isPausedByHand = true;
+                updatePlayerUI();
+            }
+            clickFeedback();
+            return true;
+        }
+        if (keyCode == KeyEvent.KEYCODE_MEDIA_STOP || keyCode == 86) {
+            playOrPauseMusic();
+            clickFeedback();
+            return true;
+        }
+        if (Y1InputKeys.isAvrcpSkipKey(keyCode)) {
+            if (hasActiveMediaPlayback()) {
+                return handleMediaSkipKeyDown(keyCode, event);
+            }
+            return true;
+        }
+        if (keyCode == KeyEvent.KEYCODE_HEADSETHOOK || keyCode == 79) {
+            playOrPauseMusic();
+            clickFeedback();
+            return true;
+        }
+        if (Y1InputKeys.isVolumeDownKey(keyCode)) {
+            adjustVolume(false);
+            clickFeedback();
+            return true;
+        }
+        if (Y1InputKeys.isVolumeUpKey(keyCode)) {
+            adjustVolume(true);
+            clickFeedback();
+            return true;
+        }
+        return false;
+    }
+
+    private boolean handleBluetoothTransportKeyUp(int keyCode, KeyEvent event) {
+        if (!Y1BluetoothInput.isBluetoothTransportKey(event)) return false;
+        if (Y1InputKeys.isAvrcpSkipKey(keyCode) && hasActiveMediaPlayback()) {
+            return handleMediaSkipKeyUp(keyCode, event);
+        }
+        return true;
+    }
+
     /** Hold prev/next to scrub; short press skips track. */
     boolean handleMediaSkipKeyDown(int keyCode, KeyEvent event) {
         if (!isMediaSkipKey(keyCode)) return false;
@@ -26548,6 +29228,47 @@ public class MainActivity extends Activity {
             } else {
                 mediaPrevKeyDownTime = System.currentTimeMillis();
                 mediaPrevScrubActive = false;
+            }
+            return true;
+        }
+        if (!hasActiveMediaPlayback() && !(playback.isRadioActive() && currentScreenState == STATE_PLAYER)
+                && currentScreenState != MediaSuiteHost.STATE_VIDEO_PLAYER
+                && currentScreenState != MediaSuiteHost.STATE_PHOTO_VIEWER) return true;
+        if (currentScreenState == MediaSuiteHost.STATE_PHOTO_VIEWER && mediaSuite != null) {
+            return true;
+        }
+        if (currentScreenState == MediaSuiteHost.STATE_VIDEO_PLAYER && mediaSuite != null) {
+            long downAt = next ? mediaNextKeyDownTime : mediaPrevKeyDownTime;
+            boolean scrubbing = next ? mediaNextScrubActive : mediaPrevScrubActive;
+            long now = System.currentTimeMillis();
+            if (event.getRepeatCount() > 0) {
+                if (!scrubbing && now - downAt >= MEDIA_SKIP_LONG_PRESS_MS) {
+                    scrubbing = true;
+                    if (next) mediaNextScrubActive = true;
+                    else mediaPrevScrubActive = true;
+                    clickFeedback();
+                    mediaSuite.pulseVideoTransport();
+                }
+                if (scrubbing) {
+                    mediaSuite.seekVideoMs(next ? MEDIA_SCRUB_STEP_MS : -MEDIA_SCRUB_STEP_MS);
+                }
+            }
+            return true;
+        }
+        if (currentScreenState == STATE_PLAYER && playback.isRadioActive() && mediaSuite != null) {
+            long downAt = next ? mediaNextKeyDownTime : mediaPrevKeyDownTime;
+            boolean scrubbing = next ? mediaNextScrubActive : mediaPrevScrubActive;
+            long now = System.currentTimeMillis();
+            if (event.getRepeatCount() > 0) {
+                if (!scrubbing && now - downAt >= MEDIA_SKIP_LONG_PRESS_MS) {
+                    scrubbing = true;
+                    if (next) mediaNextScrubActive = true;
+                    else mediaPrevScrubActive = true;
+                    clickFeedback();
+                }
+                if (scrubbing) {
+                    mediaSuite.handleRadioPrevNext(next, true);
+                }
             }
             return true;
         }
@@ -26575,12 +29296,27 @@ public class MainActivity extends Activity {
         else mediaPrevScrubActive = false;
         if (scrubbing) {
             if (playback.isPodcastActive()) flushPodcastResumeIfNeeded();
+            if (currentScreenState == MediaSuiteHost.STATE_VIDEO_PLAYER && mediaSuite != null) return true;
+            if (playback.isRadioActive() && mediaSuite != null) return true;
             return true;
         }
         if (playerScrubCursorActive) clearPlayerScrubCursorMode(true);
         long downAt = next ? mediaNextKeyDownTime : mediaPrevKeyDownTime;
         if (System.currentTimeMillis() - downAt < MEDIA_SKIP_LONG_PRESS_MS) {
             clickFeedback();
+            if (currentScreenState == MediaSuiteHost.STATE_PHOTO_VIEWER && mediaSuite != null) {
+                if (next) mediaSuite.photoViewerNext();
+                else mediaSuite.photoViewerPrev();
+                return true;
+            }
+            if (currentScreenState == MediaSuiteHost.STATE_VIDEO_PLAYER && mediaSuite != null) {
+                mediaSuite.seekVideoFile(next);
+                return true;
+            }
+            if (currentScreenState == STATE_PLAYER && playback.isRadioActive() && mediaSuite != null) {
+                mediaSuite.handleRadioPrevNext(next, false);
+                return true;
+            }
             if (next) nextTrack();
             else prevTrack();
         }
@@ -26612,9 +29348,17 @@ public class MainActivity extends Activity {
             if (themedContextMenu != null && themedContextMenu.isShowing() && contextMenuInVolumeSlider
                     && !contextMenuVolumeOnly) {
                 refreshContextVolumeSliderUi();
-            } else {
-                showPlayerVolumeContextOverlay();
+            } else if (playerTransport != null) {
+                int max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+                int cur = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+                playerTransport.showVolumePulse(cur, max);
+                layoutVolumeOverlay.setVisibility(View.GONE);
             }
+        } else if (currentScreenState == MediaSuiteHost.STATE_VIDEO_PLAYER && videoTransport != null) {
+            int max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+            int cur = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+            videoTransport.showVolumeInTrack(cur, max);
+            layoutVolumeOverlay.setVisibility(View.GONE);
         } else {
             showDynamicVolumeOverlay();
         }
@@ -26692,7 +29436,12 @@ public class MainActivity extends Activity {
         }
         if (Y1InputKeys.isWheelDown(keyCode)) {
             if (themedContextMenu.focusZone() == ThemedContextMenu.FocusZone.QUICK_BAR) {
-                themedContextMenu.moveQuickBarFocus(1);
+                if (themedContextMenu.isOnLastVisibleQuickChip()
+                        && !themedContextMenu.isMediaSliderStripVisible()) {
+                    themedContextMenu.enterListFromLastQuickChip();
+                } else {
+                    themedContextMenu.moveQuickBarFocus(1);
+                }
             } else {
                 themedContextMenu.moveFocus(1);
             }
@@ -26704,10 +29453,17 @@ public class MainActivity extends Activity {
         if (Y1InputKeys.isBackKey(keyCode)) {
             return handleBackKeyDown(event);
         }
-        if (handleContextMenuMediaKeyDown(keyCode, event)) {
-            return true;
+        // Side prev/next — horizontal quick-bar navigation (was swallowed, leaving focus on the list).
+        if (Y1InputKeys.isTrackPreviousKey(keyCode) || Y1InputKeys.isTrackNextKey(keyCode)) {
+            int horiz = Y1InputKeys.isTrackNextKey(keyCode) ? 22 : 21;
+            if (themedContextMenu.handleKeyHorizontal(horiz)) {
+                syncContextVolumeSliderWithFocus();
+                clickFeedback();
+                return true;
+            }
         }
-        if (isMediaPlayPauseKey(keyCode)) {
+        // ponytail: wheel navigates the modal; transport keys fall through to playback handlers.
+        if (isMediaPlayPauseKey(keyCode) || isMediaSkipKey(keyCode)) {
             return false;
         }
         return true;
@@ -26716,6 +29472,7 @@ public class MainActivity extends Activity {
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (handleThemedContextMenuKeyDown(keyCode, event)) return true;
+        if (handleBluetoothTransportKeyDown(keyCode, event)) return true;
 
         PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
         boolean isScreenOn = true;
@@ -26823,10 +29580,37 @@ public class MainActivity extends Activity {
         }
 
         if (Y1InputKeys.isTrackPreviousKey(keyCode) || Y1InputKeys.isTrackNextKey(keyCode)) {
-            if (currentScreenState == STATE_PLAYER || hasActiveMediaPlayback()) {
+            if (currentScreenState == STATE_PLAYER || hasActiveMediaPlayback()
+                    || currentScreenState == MediaSuiteHost.STATE_VIDEO_PLAYER) {
                 return handleMediaSkipKeyDown(keyCode, event);
             }
             return true; // ponytail: consume side buttons on menus — not wheel (21/22)
+        }
+
+        if (currentScreenState == MediaSuiteHost.STATE_VIDEO_PLAYER && mediaSuite != null) {
+            if (themedContextMenu != null && themedContextMenu.isShowing()
+                    && Y1InputKeys.isWheelKey(keyCode)) {
+                return true;
+            }
+            if (Y1InputKeys.isWheelUp(keyCode)) {
+                if (mediaSuite.isVideoScrubActive()) {
+                    mediaSuite.moveVideoScrubCursor(-MEDIA_SCRUB_STEP_MS);
+                } else {
+                    adjustVolume(false);
+                }
+                clickFeedback();
+                return true;
+            }
+            if (Y1InputKeys.isWheelDown(keyCode)) {
+                if (mediaSuite.isVideoScrubActive()) {
+                    mediaSuite.moveVideoScrubCursor(MEDIA_SCRUB_STEP_MS);
+                } else {
+                    adjustVolume(true);
+                }
+                clickFeedback();
+                return true;
+            }
+            return true;
         }
 
         if (currentScreenState == STATE_PLAYER) {
@@ -26846,6 +29630,17 @@ public class MainActivity extends Activity {
                 return true;
             }
             if (Y1InputKeys.isWheelUp(keyCode)) {
+                // #region agent log
+                if (event.getRepeatCount() == 0) {
+                    try {
+                        org.json.JSONObject d = new org.json.JSONObject();
+                        d.put("keyCode", keyCode);
+                        d.put("screen", currentScreenState);
+                        d.put("hasWindowFocus", hasWindowFocus());
+                        DebugAgentLog.log(this, "MainActivity.onKeyDown", "wheel up", "H-KEYMAP", d);
+                    } catch (Exception ignored) {}
+                }
+                // #endregion
                 if (playerScrubCursorActive) {
                     movePlayerScrubCursor(-MEDIA_SCRUB_STEP_MS);
                 } else {
@@ -26893,7 +29688,8 @@ public class MainActivity extends Activity {
         if (currentScreenState == STATE_MENU || currentScreenState == STATE_BROWSER
                 || currentScreenState == STATE_SETTINGS || currentScreenState == STATE_BLUETOOTH
                 || currentScreenState == STATE_WIFI || currentScreenState == STATE_PODCASTS
-                || currentScreenState == STATE_SOULSEEK || currentScreenState == STATE_DEEZER) {
+                || currentScreenState == STATE_SOULSEEK || currentScreenState == STATE_DEEZER
+                || MediaSuiteHost.isMediaListBrowseState(currentScreenState)) {
             // Playlist move strip replaces the ListView — handle wheel while list is hidden.
             if (currentScreenState == STATE_BROWSER && isPlaylistMoveActive()) {
                 if (playlistMoveStrip != null && playlistMoveStrip.isAnimating()) return true;
@@ -26910,7 +29706,9 @@ public class MainActivity extends Activity {
                 }
             }
             // 🚀 [여기서부터 덮어쓰기!] 초고속 리스트뷰가 켜져있을 때는, 시스템 본연의 부드러운 스크롤 엔진에 휠 신호를 넘깁니다!
-            if (currentScreenState == STATE_BROWSER && listVirtualSongs != null && listVirtualSongs.getVisibility() == View.VISIBLE) {
+            if ((currentScreenState == STATE_BROWSER
+                    || MediaSuiteHost.isMediaListBrowseState(currentScreenState))
+                    && listVirtualSongs != null && listVirtualSongs.getVisibility() == View.VISIBLE) {
 
                 if (!isFocusValidForCurrentScreen()) {
                     ensureBrowserListFocus();
@@ -26993,7 +29791,8 @@ public class MainActivity extends Activity {
             }
             if ((currentScreenState == STATE_BROWSER || currentScreenState == STATE_PODCASTS
                     || currentScreenState == STATE_SOULSEEK || currentScreenState == STATE_DEEZER
-                    || currentScreenState == STATE_APPS || currentScreenState == STATE_MORE)
+                    || currentScreenState == STATE_APPS || currentScreenState == STATE_MORE
+                    || MediaSuiteHost.isMediaListBrowseState(currentScreenState))
                     && (listVirtualSongs == null || listVirtualSongs.getVisibility() != View.VISIBLE)
                     && !isFocusValidForCurrentScreen()) {
                 ensureBrowserListFocus();
@@ -27001,7 +29800,8 @@ public class MainActivity extends Activity {
             View c = getCurrentFocus();
             if (c == null && (currentScreenState == STATE_BROWSER || currentScreenState == STATE_PODCASTS
                     || currentScreenState == STATE_SOULSEEK || currentScreenState == STATE_DEEZER
-                    || currentScreenState == STATE_APPS || currentScreenState == STATE_MORE)) {
+                    || currentScreenState == STATE_APPS || currentScreenState == STATE_MORE
+                    || MediaSuiteHost.isMediaListBrowseState(currentScreenState))) {
                 ensureBrowserListFocus();
                 c = getCurrentFocus();
             }
@@ -27057,11 +29857,27 @@ public class MainActivity extends Activity {
             return super.onKeyDown(keyCode, event);
         }
 
+        // #region agent log
+        if (MediaSuiteHost.isMediaListBrowseState(currentScreenState) && Y1InputKeys.isWheelKey(keyCode)) {
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("screen", currentScreenState);
+                d.put("keyCode", keyCode);
+                d.put("branch", "handled");
+                DebugAgentLog.log(this, "MainActivity.onKeyDown", "media wheel", "H-A", d);
+            } catch (Exception ignored) {}
+        }
+        // #endregion
+
         return super.onKeyDown(keyCode, event);
     }
 
     @Override
     public boolean onKeyUp(int keyCode, KeyEvent event) {
+        if (Y1BluetoothInput.isBluetoothTransportKey(event)
+                && handleBluetoothTransportKeyUp(keyCode, event)) {
+            return true;
+        }
         if (Y1InputKeys.isBackKey(keyCode)) {
             clockHandler.removeCallbacks(backLongPressRunnable);
             clockHandler.removeCallbacks(backForceQuitRunnable);
@@ -27195,8 +30011,36 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (intent != null && intent.getBooleanExtra("solar_adb_goto", false)) {
+            final int screen = intent.getIntExtra("solar_adb_screen", STATE_MENU);
+            intent.removeExtra("solar_adb_goto");
+            intent.removeExtra("solar_adb_screen");
+            new Handler().postDelayed(new Runnable() {
+                @Override public void run() {
+                    changeScreen(screen);
+                    SolarAdbTest.pass("goto_screen=" + screen);
+                }
+            }, 500);
+        }
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
+        if (usbFocusHelper != null) usbFocusHelper.onResume();
+        try {
+            ensurePlaybackQueueSyncedFromStore();
+            if (PlayQueueStore.countMissingPaths(getApplicationContext()) > 0) {
+                scheduleStartupMountRetry();
+            }
+            if (connectedA2dpAddress != null && avrcpTrackInfoWriter != null) {
+                avrcpTrackInfoWriter.ensureReady();
+                kickY1BridgeMediaService();
+            }
+        } catch (Exception ignored) {}
         if (!launchExtrasHandled) {
             launchExtrasHandled = true;
             handleLaunchIntentExtras();
@@ -27212,7 +30056,18 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onStop() {
+        super.onStop();
+        try {
+            persistQueueHandler.removeCallbacks(persistQueueDebouncedRunnable);
+            persistPlaybackQueue();
+        } catch (Exception ignored) {}
+    }
+
+    @Override
     protected void onDestroy() {
+        if (usbFocusHelper != null) usbFocusHelper.onDestroy();
+        if (mediaSuite != null) mediaSuite.release();
         stopSettingsPreviewVerticalMarquee();
         try {
             persistPlaybackQueue();
@@ -27613,36 +30468,87 @@ public class MainActivity extends Activity {
     public static class MediaBtnReceiver extends BroadcastReceiver {
         @Override
         public void onReceive(Context context, Intent intent) {
-            if (Intent.ACTION_MEDIA_BUTTON.equals(intent.getAction()) && MainActivity.instance != null) {
-                KeyEvent event = intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT);
+            if (!Intent.ACTION_MEDIA_BUTTON.equals(intent.getAction()) || MainActivity.instance == null) {
+                return;
+            }
+            KeyEvent event = intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT);
+            if (event == null) return;
+            MainActivity activity = MainActivity.instance;
+            int keyCode = event.getKeyCode();
+            boolean allowBt = activity.isScreenOffControlEnabled || activity.hasActiveMediaPlayback();
+            if (!allowBt) return;
 
-                if (event != null && MainActivity.instance.isScreenOffControlEnabled) {
-                    int keyCode = event.getKeyCode();
-                    if (MainActivity.instance.isMediaSkipKey(keyCode)) {
-                        if (event.getAction() == KeyEvent.ACTION_DOWN) {
-                            MainActivity.instance.handleMediaSkipKeyDown(keyCode, event);
-                        } else if (event.getAction() == KeyEvent.ACTION_UP) {
-                            MainActivity.instance.handleMediaSkipKeyUp(keyCode, event);
-                        }
-                        return;
+            if (Y1BluetoothInput.isMediaButtonTransportKeyCode(keyCode)) {
+                if (Y1InputKeys.isAvrcpSkipKey(keyCode)) {
+                    if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                        activity.handleMediaSkipKeyDown(keyCode, event);
+                    } else if (event.getAction() == KeyEvent.ACTION_UP) {
+                        activity.handleMediaSkipKeyUp(keyCode, event);
                     }
-                    if (event.getAction() != KeyEvent.ACTION_DOWN) return;
-
-                    // ⏯ 재생/일시정지 버튼
-                    if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || keyCode == 85 || keyCode == 86) {
-                        MainActivity.instance.playOrPauseMusic();
-                        MainActivity.instance.clickFeedback();
-                    }
-                    // 🔊 혹시 기기가 휠 조작(21, 22)을 미디어 신호로 보내줄 경우를 대비한 방어 코드
-                    else if (Y1InputKeys.isVolumeDownKey(keyCode)) {
-                        MainActivity.instance.adjustVolume(false);
-                        MainActivity.instance.clickFeedback();
-                    }
-                    else if (Y1InputKeys.isVolumeUpKey(keyCode)) {
-                        MainActivity.instance.adjustVolume(true);
-                        MainActivity.instance.clickFeedback();
-                    }
+                    return;
                 }
+                if (event.getAction() != KeyEvent.ACTION_DOWN) return;
+                if (event.getRepeatCount() > 0) return;
+                if (Y1InputKeys.isDiscreteMediaPlay(keyCode)) {
+                    if (activity.hasActiveMediaPlayback() && activity.mediaPlayer != null
+                            && !activity.mediaPlayer.isPlaying()) {
+                        activity.mediaPlayer.start();
+                        activity.isPausedByHand = false;
+                        activity.updatePlayerUI();
+                    } else {
+                        activity.playOrPauseMusic();
+                    }
+                    activity.clickFeedback();
+                    return;
+                }
+                if (Y1InputKeys.isDiscreteMediaPause(keyCode)) {
+                    if (activity.mediaPlayer != null && activity.mediaPlayer.isPlaying()) {
+                        activity.mediaPlayer.pause();
+                        activity.isPausedByHand = true;
+                        activity.updatePlayerUI();
+                    }
+                    activity.clickFeedback();
+                    return;
+                }
+                if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || keyCode == 85
+                        || keyCode == 86 || keyCode == KeyEvent.KEYCODE_HEADSETHOOK || keyCode == 79) {
+                    activity.playOrPauseMusic();
+                    activity.clickFeedback();
+                    return;
+                }
+                if (Y1InputKeys.isVolumeDownKey(keyCode)) {
+                    activity.adjustVolume(false);
+                    activity.clickFeedback();
+                    return;
+                }
+                if (Y1InputKeys.isVolumeUpKey(keyCode)) {
+                    activity.adjustVolume(true);
+                    activity.clickFeedback();
+                    return;
+                }
+            }
+
+            if (!activity.isScreenOffControlEnabled) return;
+
+            if (activity.isMediaSkipKey(keyCode)) {
+                if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                    activity.handleMediaSkipKeyDown(keyCode, event);
+                } else if (event.getAction() == KeyEvent.ACTION_UP) {
+                    activity.handleMediaSkipKeyUp(keyCode, event);
+                }
+                return;
+            }
+            if (event.getAction() != KeyEvent.ACTION_DOWN) return;
+
+            if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || keyCode == 85 || keyCode == 86) {
+                activity.playOrPauseMusic();
+                activity.clickFeedback();
+            } else if (Y1InputKeys.isVolumeDownKey(keyCode)) {
+                activity.adjustVolume(false);
+                activity.clickFeedback();
+            } else if (Y1InputKeys.isVolumeUpKey(keyCode)) {
+                activity.adjustVolume(true);
+                activity.clickFeedback();
             }
         }
     }
@@ -27767,13 +30673,6 @@ public class MainActivity extends Activity {
                 .replaceAll("\\s[0-9]{2}\\s", " ")
                 .trim();
 
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                Toast.makeText(MainActivity.this, getString(R.string.toast_album_art_searching, cleanQuery), Toast.LENGTH_SHORT).show();
-            }
-        });
-
         new Thread(new Runnable() {
             @Override
             public void run() {
@@ -27841,7 +30740,6 @@ public class MainActivity extends Activity {
                             @Override
                             public void run() {
                                 if (playback.musicPlaylist().isEmpty()) return;
-                                Toast.makeText(MainActivity.this, getString(R.string.toast_album_art_updated), Toast.LENGTH_SHORT).show();
                                 if (playback.musicPlaylist().get(playback.musicIndex()).getAbsolutePath().equals(track.getAbsolutePath())) {
                                     // 🚀 화면의 글씨도 즉각 공식 정보로 갈아치웁니다!
                                     tvPlayerTitle.setText(finalTitle);
@@ -27851,12 +30749,7 @@ public class MainActivity extends Activity {
                             }
                         });
                     } else {
-                        runOnUiThread(new Runnable() {
-                            @Override
-                            public void run() {
-                                Toast.makeText(MainActivity.this, getString(R.string.toast_album_art_none), Toast.LENGTH_SHORT).show();
-                            }
-                        });
+                        // ponytail: no toast — art fetch is silent when nothing found
                     }
                 } catch (final Exception e) {
                     runOnUiThread(new Runnable() {
@@ -28555,4 +31448,56 @@ public class MainActivity extends Activity {
         }
 
     }
+
+    // --- Media suite adapters (radio / video / photos) — public for MediaSuiteHostAdapter ---
+
+    public SharedPreferences getPrefs() { return prefs; }
+    public PlaybackCoordinator getPlayback() { return playback; }
+    public int getCurrentScreenState() { return currentScreenState; }
+    public int getScreenWidthPx() { return screenWidthPx; }
+    public android.widget.ListView getListVirtualSongs() { return listVirtualSongs; }
+    public int mediaY1RowHeightPx() { return y1RowHeightPx; }
+
+    public void setBrowserStatusTitle(String title) {
+        browserStatusTitle = title;
+        updateStatusBarTitle();
+    }
+
+    public void mediaChangeScreen(int state) { changeScreen(state); }
+    public void mediaClickFeedback() { clickFeedback(); }
+    public void mediaDelegateShowReachBrowseList(boolean show) { showReachBrowseList(show); }
+    public void mediaApplyReachBrowseLayoutMode() { applyReachBrowseLayoutMode(); }
+    public int mediaMessagingRowWidthPx() { return messagingRowWidthPx(); }
+
+    public Button mediaCreateListButton(String label) { return createListButton(label); }
+    public boolean mediaRequireInternet(int toastRes) { return requireInternet(toastRes); }
+
+    public void mediaPauseMusicPlayback() {
+        try {
+            if (mediaPlayer != null && mediaPlayer.isPlaying()) {
+                mediaPlayer.pause();
+                isPausedByHand = true;
+            }
+        } catch (Exception ignored) {}
+    }
+
+    public void mediaStopMusicPlayback() {
+        try {
+            if (mediaPlayer != null) {
+                if (mediaPlayer.isPlaying()) mediaPlayer.stop();
+                mediaPlayer.reset();
+                isPausedByHand = false;
+            }
+        } catch (Exception ignored) {}
+    }
+
+    public void mediaExitToHomeMenu() { changeScreen(STATE_MENU); }
+
+    public void mediaRefreshPlayerUi() {
+        updatePlayerUI();
+        if (playback.isRadioActive() && mediaSuite != null) {
+            mediaSuite.updateRadioPlayerProgress();
+        }
+    }
+
 }

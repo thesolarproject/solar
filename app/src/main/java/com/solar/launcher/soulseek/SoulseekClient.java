@@ -241,6 +241,8 @@ public final class SoulseekClient extends Thread {
   public interface SocialListener {
     void onPrivateMessage(int messageId, int timestamp, String fromUser, String text);
     void onUserStatusUpdate(String username, int status, boolean privileged);
+    /** Server MSG_GET_USER_STATS (36) or explicit stats refresh for a watched user. */
+    void onUserStatsUpdate(String username, int avgSpeed, int files, int dirs);
     void onRoomList(List<SoulseekWire.RoomEntry> rooms);
     void onRoomMessage(String room, String sender, String text, int timestamp);
     void onRoomJoined(String room);
@@ -317,7 +319,8 @@ public final class SoulseekClient extends Thread {
   private final AtomicInteger incomingPeerHandlers = new AtomicInteger();
   private static final int MAX_PIERCE = 8;
   private static final int MAX_INCOMING_PEERS = 12;
-  private static final int MAX_UPLOAD_SLOTS = 20;
+  /** Fixed upload slot cap advertised in peer user-info (nicotine uploadslots). */
+  private static final int MAX_UPLOAD_SLOTS = 6;
   private final Set<String> deniedPeers = Collections.synchronizedSet(new HashSet<String>());
   private volatile SoulseekShareIndex shareIndex = SoulseekShareIndex.empty();
   private volatile SoulseekSharePolicy sharePolicy = new SoulseekSharePolicy();
@@ -339,6 +342,10 @@ public final class SoulseekClient extends Thread {
   private final java.util.HashMap<String, UserInterestsCallback> pendingUserInterests =
           new java.util.HashMap<String, UserInterestsCallback>();
   private volatile InterestUsersCallback pendingInterestUsersCallback;
+  /** Users we have MSG_WATCH_USER'd; server may push GetUserStats for these. */
+  private final Set<String> watchedUsers = Collections.synchronizedSet(new HashSet<String>());
+  /** Last known status per watched user (for offline→online stats refresh). */
+  private final ConcurrentHashMap<String, Integer> peerLastStatus = new ConcurrentHashMap<String, Integer>();
 
   public void setSocialListener(SocialListener listener) {
     socialListener = listener;
@@ -484,6 +491,7 @@ public final class SoulseekClient extends Thread {
   }
 
   private void announceShareCountsLocked(int dirs, int files) throws IOException {
+    // ponytail: remote peers only see non-zero counts when announceShares() is true (Wi‑Fi + NAT-PMP).
     sendServerLocked(SoulseekWire.MSG_SHARED_FOLDER_FILES,
         SoulseekWire.packSharedFolderCounts(dirs, files));
     debugLog("share announce dirs=" + dirs + " files=" + files);
@@ -719,6 +727,44 @@ public final class SoulseekClient extends Thread {
   /** Shutdown listen/server threads when no download, upload, search, or sharing duty. */
   public void pauseWhenIdle() {
     if (!isBusy()) shutdown();
+  }
+
+  public boolean isShutDown() {
+    return !running.get();
+  }
+
+  /** Connect to Soulseek server in background (PMs, rooms — no peer NAT required). */
+  public void warmConnectionAsync() {
+    if (!running.get()) return;
+    // #region agent log
+    try {
+      agentLog("SoulseekClient.warmConnectionAsync", "start", "H1",
+          new JSONObject().put("running", running.get()).put("loggedIn", loggedIn)
+              .put("listenPort", listenPort));
+    } catch (Exception ignored) {}
+    // #endregion
+    new Thread(new Runnable() {
+      @Override
+      public void run() {
+        try {
+          ensureConnected();
+          // #region agent log
+          try {
+            agentLog("SoulseekClient.warmConnectionAsync", "ok", "H1",
+                new JSONObject().put("loggedIn", loggedIn).put("listenPort", listenPort)
+                    .put("nat", lastNatpmp != null ? lastNatpmp.status : "null"));
+          } catch (Exception ignored) {}
+          // #endregion
+        } catch (Exception e) {
+          // #region agent log
+          try {
+            agentLog("SoulseekClient.warmConnectionAsync", "fail", "H1",
+                new JSONObject().put("err", formatError(e)));
+          } catch (Exception ignored) {}
+          // #endregion
+        }
+      }
+    }, "SoulseekWarm").start();
   }
 
   public void search(final String query) {
@@ -998,6 +1044,13 @@ public final class SoulseekClient extends Thread {
     startListenSocket();
     SoulseekNatpmp.Result nat = mapListenPortWithRetry();
     lastNatpmp = nat;
+    // #region agent log
+    try {
+      agentLog("SoulseekClient.connectAndLoginLocked", "nat mapped", "H5",
+          new JSONObject().put("listen", listenPort).put("mapped", nat.mapped())
+              .put("status", nat.status != null ? nat.status : ""));
+    } catch (Exception ignored) {}
+    // #endregion
     int reported = nat.publicPort > 0 ? nat.publicPort : listenPort;
     reportedListenPort = reported;
     if (nat.mapped()) {
@@ -1108,6 +1161,13 @@ public final class SoulseekClient extends Thread {
         }
         if (appContext != null) {
           SoulseekNatpmp.Result fin = lastNatpmp;
+          // #region agent log
+          try {
+            agentLog("SoulseekClient.startNatpmpRetryUntilMapped", "exhausted", "H5",
+                new JSONObject().put("mapped", fin != null && fin.mapped())
+                    .put("status", fin != null ? fin.status : "null"));
+          } catch (Exception ignored) {}
+          // #endregion
           if (fin == null || !fin.mapped()) {
             ReachPeerConnectivity.onNatRetriesExhausted(appContext, fin);
           }
@@ -1603,6 +1663,8 @@ public final class SoulseekClient extends Thread {
       }
     } else if (frame.code == SoulseekWire.MSG_WATCH_USER) {
       handleWatchUserResponse(frame.body);
+    } else if (frame.code == SoulseekWire.MSG_GET_USER_STATS) {
+      handleGetUserStatsResponse(frame.body);
     } else if (frame.code == SoulseekWire.MSG_GET_USER_STATUS) {
       handleGetUserStatus(frame.body);
     } else if (frame.code == SoulseekWire.MSG_MESSAGE_USER) {
@@ -1656,16 +1718,58 @@ public final class SoulseekClient extends Thread {
     }
   }
 
+  private void handleGetUserStatsResponse(byte[] body) {
+    try {
+      SoulseekWire.GetUserStatsResponse stats = SoulseekWire.parseGetUserStats(body);
+      if (stats == null || stats.username == null || stats.username.isEmpty()) return;
+      if (socialListener != null) {
+        socialListener.onUserStatsUpdate(stats.username, stats.avgSpeed, stats.files, stats.dirs);
+      }
+    } catch (Exception ignored) {}
+  }
+
   private void handleGetUserStatus(byte[] body) {
     try {
       SoulseekWire.Reader r = new SoulseekWire.Reader(body);
       String user = r.readString();
       int status = r.readUInt32();
       boolean priv = r.readBool();
+      String key = user != null ? user.toLowerCase(Locale.US) : "";
+      if (!key.isEmpty() && watchedUsers.contains(key)) {
+        Integer prev = peerLastStatus.get(key);
+        // nicotine users._user_status: server won't resend stats after reconnect — request them.
+        if (status != SoulseekWire.STATUS_OFFLINE && prev != null
+                && prev == SoulseekWire.STATUS_OFFLINE) {
+          requestUserStatsAsync(user);
+        }
+        peerLastStatus.put(key, status);
+      }
       if (socialListener != null) {
         socialListener.onUserStatusUpdate(user, status, priv);
       }
     } catch (Exception ignored) {}
+  }
+
+  private void requestUserStatsAsync(final String username) {
+    if (username == null || username.trim().isEmpty()) return;
+    new Thread(new Runnable() {
+      @Override
+      public void run() {
+        try {
+          synchronized (serverLock) {
+            ensureConnected();
+            requestUserStatsLocked(username.trim());
+          }
+        } catch (Exception e) {
+          debugLog("requestUserStats fail: " + e.getMessage());
+        }
+      }
+    }, "SoulseekUserStats").start();
+  }
+
+  private void requestUserStatsLocked(String username) throws IOException {
+    sendServerLocked(SoulseekWire.MSG_GET_USER_STATS,
+        SoulseekWire.packGetUserStatsRequest(username));
   }
 
   private void handleRoomList(byte[] body) {
@@ -1798,6 +1902,11 @@ public final class SoulseekClient extends Thread {
     SoulseekUserDirectory.Callback cb = pendingUserWatch;
     pendingUserWatch = null;
     pendingWatchUser = null;
+    if (info != null && info.exists && info.username != null) {
+      String key = info.username.toLowerCase(Locale.US);
+      watchedUsers.add(key);
+      peerLastStatus.put(key, info.status);
+    }
     if (cb != null) cb.onUserInfo(info);
   }
 
@@ -1994,12 +2103,19 @@ public final class SoulseekClient extends Thread {
     if (callback != null) callback.onError(reason);
   }
 
-  void notifyProfileBio(final SoulseekProfileSession.BioCallback callback, final String bio) {
-    if (callback != null) callback.onBio(bio);
+  void notifyProfile(final SoulseekProfileSession.ProfileCallback callback,
+          final SoulseekWire.UserInfoResponse info) {
+    if (callback != null) callback.onProfile(info);
   }
 
-  void notifyProfileBioError(final SoulseekProfileSession.BioCallback callback, final String reason) {
+  void notifyProfileError(final SoulseekProfileSession.ProfileCallback callback,
+          final String reason) {
     if (callback != null) callback.onError(reason);
+  }
+
+  /** Outbound peer user-info description (auto Reach bio from construction time). */
+  private String buildOutboundUserBio() {
+    return userBio != null ? userBio : clientDescription;
   }
 
   public void addLike(final String item) {
@@ -2457,7 +2573,7 @@ public final class SoulseekClient extends Thread {
     int permitted = sharePolicy.acceptNewUploads()
             ? SoulseekWire.UPLOAD_PERM_EVERYONE : SoulseekWire.UPLOAD_PERM_NO_ONE;
     byte[] pic = ReachProfilePicture.load(appContext);
-    byte[] body = SoulseekWire.packUserInfoResponse(userBio, pic,
+    byte[] body = SoulseekWire.packUserInfoResponse(buildOutboundUserBio(), pic,
             slots, queued, MAX_UPLOAD_SLOTS, permitted);
     // #region agent log
     try {
@@ -2472,16 +2588,18 @@ public final class SoulseekClient extends Thread {
   }
 
   private void replySharesList(Socket peer) throws Exception {
+    boolean serve = sharePolicy.serveSharesToPeer();
     boolean announce = sharePolicy.announceShares();
     int files = shareIndex.fileCount();
     int dirs = shareIndex.dirCount();
     // #region agent log
     try {
       agentLog("SoulseekClient.replySharesList", "shares request", "H4",
-          new JSONObject().put("announce", announce).put("files", files).put("dirs", dirs));
+          new JSONObject().put("serve", serve).put("announce", announce)
+              .put("files", files).put("dirs", dirs));
     } catch (Exception ignored) {}
     // #endregion
-    byte[] raw = announce
+    byte[] raw = serve
         ? shareIndex.buildShareListUncompressed()
         : SoulseekShareIndex.empty().buildShareListUncompressed();
     byte[] body = SoulseekShareIndex.zlibCompress(raw);
@@ -2500,7 +2618,7 @@ public final class SoulseekClient extends Thread {
     SoulseekWire.Reader r = new SoulseekWire.Reader(body);
     int token = r.readUInt32();
     String folder = r.readString();
-    byte[] raw = sharePolicy.announceShares()
+    byte[] raw = sharePolicy.serveSharesToPeer()
         ? shareIndex.buildFolderContentsUncompressed(token, folder)
         : shareIndex.buildFolderContentsUncompressed(token, "");
     byte[] compressed = SoulseekShareIndex.zlibCompress(raw);

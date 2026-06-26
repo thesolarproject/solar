@@ -28,6 +28,9 @@ switch_to_rockbox() {
 }
 
 switch_to_stock() {
+    if [ -f /system/etc/solar/sync-y1-keymap.sh ]; then
+        sh /system/etc/solar/sync-y1-keymap.sh
+    fi
     echo "Enabling Solar"
     pm enable "$SOLAR_PKG"
     echo "Starting Solar"

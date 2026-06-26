@@ -305,6 +305,13 @@ public final class ReachMessageRow {
     public static void bindConversationEntry(Activity activity, FrameLayout row,
             ConversationDisplayBuilder.Entry entry, boolean incoming, boolean selected,
             Boolean peerOnline, int rowWidthPx, int rowHeightPx) {
+        bindConversationEntry(activity, row, entry, incoming, selected, peerOnline,
+                rowWidthPx, rowHeightPx, null);
+    }
+
+    public static void bindConversationEntry(Activity activity, FrameLayout row,
+            ConversationDisplayBuilder.Entry entry, boolean incoming, boolean selected,
+            Boolean peerOnline, int rowWidthPx, int rowHeightPx, String subtitleOverride) {
         if (row == null || entry == null) return;
         stopVerticalMarquee(row);
         applyRowBackground(activity, row, selected, rowWidthPx, rowHeightPx);
@@ -349,9 +356,10 @@ public final class ReachMessageRow {
         }
 
         if (sub != null) {
-            sub.setText(entry.timestamp != null ? entry.timestamp : "");
-            sub.setVisibility(entry.timestamp == null || entry.timestamp.isEmpty()
-                    ? View.GONE : View.VISIBLE);
+            String subText = subtitleOverride != null ? subtitleOverride
+                    : (entry.timestamp != null ? entry.timestamp : "");
+            sub.setText(subText);
+            sub.setVisibility(subText.isEmpty() ? View.GONE : View.VISIBLE);
             sub.setSelected(selected);
         }
 

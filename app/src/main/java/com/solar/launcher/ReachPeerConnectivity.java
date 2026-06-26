@@ -132,6 +132,14 @@ public final class ReachPeerConnectivity {
         }
         state = next;
         reason = reasonCode != null ? reasonCode : "";
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("state", next.name());
+            d.put("reason", reason);
+            DebugAgentLog.log(null, "ReachPeerConnectivity.setState", "peer state", "H2", d);
+        } catch (Exception ignored) {}
+        // #endregion
         Callback cb = callback;
         if (cb != null) {
             cb.onReachPeerStateChanged(next, reason);

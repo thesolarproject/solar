@@ -1,5 +1,7 @@
 package com.solar.launcher;
 
+import com.solar.launcher.media.MediaSuiteHost;
+
 /** Stable row identifiers for settings UI (locale-independent). */
 public final class RowKeys {
     public static final String SHUFFLE = "settings.shuffle";
@@ -38,6 +40,7 @@ public final class RowKeys {
     public static final String ABOUT = "settings.about";
     public static final String DEBUG = "settings.debug";
     public static final String DEBUG_JJ_THEMES = "settings.debug.jj_themes";
+    public static final String DEBUG_SHOW_ERROR_TOASTS = "settings.debug.show_error_toasts";
     public static final String SYSTEM_UPDATE = "settings.system_update";
     public static final String BLUETOOTH_SETUP = "settings.bluetooth_setup";
     public static final String BRIGHTNESS = "settings.brightness";
@@ -48,6 +51,8 @@ public final class RowKeys {
     public static final String CLEAR_CACHE = "settings.clear_cache";
     public static final String DATETIME = "settings.datetime";
     public static final String LANGUAGE = "settings.language";
+    public static final String RADIO = "settings.radio";
+    public static final String VIDEO = "settings.video";
     public static final String HOME_SCREEN = "settings.home_screen";
     public static final String SOULSEEK_SEARCH = "soulseek.search";
     public static final String SOULSEEK_ACCOUNT = "soulseek.account";
@@ -148,6 +153,11 @@ public final class RowKeys {
         if (CLEAR_CACHE.equals(rowKey)) return R.string.settings_clear_cache;
         if (DATETIME.equals(rowKey)) return R.string.settings_datetime;
         if (LANGUAGE.equals(rowKey)) return R.string.settings_language;
+        if (RADIO.equals(rowKey)) return R.string.settings_sub_radio;
+        if (VIDEO.equals(rowKey)) return R.string.settings_sub_video;
+        if (MediaSuiteHost.ROW_AUTO_DETECT.equals(rowKey)) return R.string.radio_settings_auto_region;
+        if (MediaSuiteHost.ROW_BUFFER_SD.equals(rowKey)) return R.string.radio_settings_buffer_sd;
+        if (MediaSuiteHost.ROW_VIDEO_SLEEP.equals(rowKey)) return R.string.video_settings_sleep_during_playback;
         if (HOME_SCREEN.equals(rowKey)) return R.string.home_screen_editor;
         if (SOULSEEK_SEARCH.equals(rowKey)) return R.string.soulseek_search_row;
         if (SOULSEEK_ACCOUNT.equals(rowKey)) return R.string.soulseek_account_row;

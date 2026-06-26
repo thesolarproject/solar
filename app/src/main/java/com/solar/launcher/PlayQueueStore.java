@@ -21,6 +21,11 @@ public final class PlayQueueStore {
 
     public static void save(Context ctx, PlayQueue queue) {
         if (ctx == null || queue == null) return;
+        saveToDir(ctx.getFilesDir(), queue);
+    }
+
+    static void saveToDir(File dir, PlayQueue queue) {
+        if (dir == null || queue == null) return;
         try {
             JSONArray arr = new JSONArray();
             for (PlayQueue.QueueItem q : queue.items()) {
@@ -42,7 +47,6 @@ public final class PlayQueueStore {
             JSONObject root = new JSONObject();
             root.put("index", queue.index());
             root.put("items", arr);
-            File dir = ctx.getFilesDir();
             File f = new File(dir, FILE);
             File tmp = new File(dir, FILE + ".tmp");
             BufferedWriter w = new BufferedWriter(new FileWriter(tmp));
@@ -57,7 +61,12 @@ public final class PlayQueueStore {
 
     public static boolean restore(Context ctx, PlayQueue queue) {
         if (ctx == null || queue == null) return false;
-        File f = new File(ctx.getFilesDir(), FILE);
+        return restoreFromDir(ctx.getFilesDir(), queue);
+    }
+
+    static boolean restoreFromDir(File dir, PlayQueue queue) {
+        if (dir == null || queue == null) return false;
+        File f = new File(dir, FILE);
         if (!f.isFile()) return false;
         try {
             StringBuilder sb = new StringBuilder();
@@ -87,10 +96,6 @@ public final class PlayQueueStore {
                         continue;
                     }
                     File file = new File(path);
-                    if (!file.isFile()) {
-                        if (i < savedIndex) savedIndex--;
-                        continue;
-                    }
                     if ("REACH_STREAM".equals(kind)) {
                         String peer = o.optString("reachPeer", "");
                         items.add(PlayQueue.QueueItem.reach(file, o.optString("reachMeta", file.getName()),

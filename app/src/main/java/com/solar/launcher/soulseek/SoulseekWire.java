@@ -83,6 +83,7 @@ public final class SoulseekWire {
 
     static final int STATUS_ONLINE = 2;
     static final int MSG_SHARED_FOLDER_FILES = 35;
+    static final int MSG_GET_USER_STATS = 36;
     static final int MSG_SEND_UPLOAD_SPEED = 121;
     static final int MSG_SAY_CHATROOM = 13;
     static final int MSG_JOIN_ROOM = 14;
@@ -101,6 +102,7 @@ public final class SoulseekWire {
     static final int PEER_USER_INFO_REQUEST = 15;
     static final int PEER_USER_INFO_RESPONSE = 16;
 
+    static final int STATUS_OFFLINE = 0;
     static final int STATUS_AWAY = 1;
     static final int TRANSFER_DOWNLOAD = 0;
     static final int TRANSFER_UPLOAD = 1;
@@ -248,6 +250,10 @@ public final class SoulseekWire {
 
         boolean hasRemaining() {
             return offset < data.length;
+        }
+
+        int remaining() {
+            return data.length - offset;
         }
 
         int readUInt32() throws IOException {
@@ -690,10 +696,53 @@ public final class SoulseekWire {
 
     public static final class UserInfoResponse {
         public final String description;
+        public final int totalUploadSlots;
+        public final int queueSize;
+        public final boolean slotsAvailable;
+        public final int uploadAllowed;
 
-        UserInfoResponse(String description) {
+        UserInfoResponse(String description, int totalUploadSlots, int queueSize,
+                boolean slotsAvailable, int uploadAllowed) {
             this.description = description != null ? description : "";
+            this.totalUploadSlots = totalUploadSlots;
+            this.queueSize = queueSize;
+            this.slotsAvailable = slotsAvailable;
+            this.uploadAllowed = uploadAllowed;
         }
+    }
+
+    /** Server code 36 response body (also used when client requests stats). */
+    public static final class GetUserStatsResponse {
+        public final String username;
+        public final int avgSpeed;
+        public final int uploadNum;
+        public final int files;
+        public final int dirs;
+
+        GetUserStatsResponse(String username, int avgSpeed, int uploadNum, int files, int dirs) {
+            this.username = username != null ? username : "";
+            this.avgSpeed = avgSpeed;
+            this.uploadNum = uploadNum;
+            this.files = files;
+            this.dirs = dirs;
+        }
+    }
+
+    static byte[] packGetUserStatsRequest(String username) throws IOException {
+        return packString(username != null ? username : "");
+    }
+
+    static GetUserStatsResponse parseGetUserStats(byte[] body) throws IOException {
+        Reader r = new Reader(body);
+        String user = r.readString();
+        int avgspeed = r.readUInt32();
+        int uploadnum = r.readUInt32();
+        if (r.hasRemaining()) {
+            r.readUInt32(); // unknown field
+        }
+        int files = r.hasRemaining() ? r.readUInt32() : 0;
+        int dirs = r.hasRemaining() ? r.readUInt32() : 0;
+        return new GetUserStatsResponse(user, avgspeed, uploadnum, files, dirs);
     }
 
     static UserInfoResponse parseUserInfoResponse(byte[] body) throws IOException {
@@ -708,7 +757,24 @@ public final class SoulseekWire {
                 }
             }
         }
-        return new UserInfoResponse(descr);
+        int totalUploadSlots = 0;
+        int queueSize = 0;
+        boolean slotsAvailable = false;
+        int uploadAllowed = 0;
+        if (r.hasRemaining()) {
+            totalUploadSlots = r.readUInt32();
+        }
+        if (r.hasRemaining()) {
+            queueSize = r.readUInt32();
+        }
+        if (r.hasRemaining()) {
+            slotsAvailable = r.readBool();
+        }
+        // nicotine: Museek+ may leave <4 bytes — guard before uploadallowed
+        if (r.remaining() >= 4) {
+            uploadAllowed = r.readUInt32();
+        }
+        return new UserInfoResponse(descr, totalUploadSlots, queueSize, slotsAvailable, uploadAllowed);
     }
 
     private static void writeString(DataOutputStream out, String s) throws IOException {

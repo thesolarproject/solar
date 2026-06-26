@@ -89,10 +89,28 @@ public class SoulseekSharePolicyTest {
   }
 
   @Test
-  public void noKeepAliveWithoutNat() {
+  public void messagingKeepsAliveWithoutNat() {
     SoulseekSharePolicy p = new SoulseekSharePolicy();
     p.setMessagingEnabled(true);
     p.update(true, false, false);
-    if (p.shouldKeepClientAlive()) throw new AssertionError("no nat keepalive");
+    if (!p.shouldKeepClientAlive()) throw new AssertionError("messaging needs server not NAT");
+  }
+
+  @Test
+  public void sharingKeepsAliveWithoutNatForNatProbe() {
+    SoulseekSharePolicy p = new SoulseekSharePolicy();
+    p.setMessagingEnabled(false);
+    p.update(true, false, false);
+    if (!p.shouldKeepClientAlive()) throw new AssertionError("sharing needs connect for NAT probe");
+    if (p.announceShares()) throw new AssertionError("no server announce without nat");
+    if (!p.serveSharesToPeer()) throw new AssertionError("serve browse when sharing on");
+  }
+
+  @Test
+  public void serveSharesToPeerFalseWhenSharingDisabled() {
+    SoulseekSharePolicy p = new SoulseekSharePolicy();
+    p.setUserEnabled(false);
+    p.update(true, true, false);
+    if (p.serveSharesToPeer()) throw new AssertionError("user sharing off");
   }
 }

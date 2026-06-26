@@ -313,6 +313,12 @@ audit_rom_contents() {
         errors=$((errors + 1))
     fi
 
+    # FM radio — warn when mtk FM stack is absent (Solar FM browse still opens; tune may fail).
+    if ! find "$sys_mount/lib" -maxdepth 1 -name 'libfm*.so' 2>/dev/null | grep -q . \
+            && ! find "$sys_mount" \( -iname '*mediatek*fm*' -o -iname '*FMRadio*' \) 2>/dev/null | grep -q .; then
+        echo "audit warn: no libfm* or MediaTek FM package found on /system (hardware FM may be unavailable)" >&2
+    fi
+
     # ponytail: codec plugins ship inside org.rockbox.apk (lib/armeabi/*.so) — must survive ROM build.
     if [ -f "$sys_mount/app/org.rockbox.apk" ]; then
         rb_so_count=$(unzip -l "$sys_mount/app/org.rockbox.apk" 2>/dev/null \
@@ -517,13 +523,24 @@ sudo chown root:root "$MOUNT_SYS/etc/init.d/99Y1ButtonScript"
 
 [ -f "$SCRIPT_DIR/Y1-Rockbox.kl" ] || die "missing $SCRIPT_DIR/Y1-Rockbox.kl"
 # ponytail: one unified map for Solar + Rockbox-y1 — wheel 105/106→126/127, side 165/163→88/87.
-for _kl in Stock.kl Rockbox.kl Y1-Rockbox.kl Generic.kl; do
+for _kl in Stock.kl Rockbox.kl Y1-Rockbox.kl Generic.kl mtk-tpd-kpd.kl; do
     sudo cp "$SCRIPT_DIR/Y1-Rockbox.kl" "$MOUNT_SYS/usr/keylayout/$_kl"
 done
 sudo chmod 644 "$MOUNT_SYS/usr/keylayout/Stock.kl" "$MOUNT_SYS/usr/keylayout/Rockbox.kl" \
-    "$MOUNT_SYS/usr/keylayout/Y1-Rockbox.kl" "$MOUNT_SYS/usr/keylayout/Generic.kl"
+    "$MOUNT_SYS/usr/keylayout/Y1-Rockbox.kl" "$MOUNT_SYS/usr/keylayout/Generic.kl" \
+    "$MOUNT_SYS/usr/keylayout/mtk-tpd-kpd.kl"
 sudo chown root:root "$MOUNT_SYS/usr/keylayout/Stock.kl" "$MOUNT_SYS/usr/keylayout/Rockbox.kl" \
-    "$MOUNT_SYS/usr/keylayout/Y1-Rockbox.kl" "$MOUNT_SYS/usr/keylayout/Generic.kl"
+    "$MOUNT_SYS/usr/keylayout/Y1-Rockbox.kl" "$MOUNT_SYS/usr/keylayout/Generic.kl" \
+    "$MOUNT_SYS/usr/keylayout/mtk-tpd-kpd.kl"
+# Patch wheel scancodes in mtk-kpd.kl without replacing GPIO key map.
+if [ -f "$MOUNT_SYS/usr/keylayout/mtk-kpd.kl" ]; then
+    sed -i 's/^key 105[[:space:]].*/key 105   MEDIA_PLAY/' "$MOUNT_SYS/usr/keylayout/mtk-kpd.kl"
+    sed -i 's/^key 106[[:space:]].*/key 106   MEDIA_PAUSE/' "$MOUNT_SYS/usr/keylayout/mtk-kpd.kl"
+fi
+
+echo "==> AVRCP Bluetooth stack (Y1Bridge + mtkbt patches; hardware keylayout unchanged)"
+chmod +x "$SCRIPT_DIR/apply-avrcp-patches.sh"
+sudo "$SCRIPT_DIR/apply-avrcp-patches.sh" "$MOUNT_SYS"
 
 install_solar_boot_assets "$BASE_DIR" "$MOUNT_SYS"
 

@@ -156,13 +156,20 @@ public final class ReachMessageFormat {
   /** Match a reply/reaction quote to an earlier message in the thread. */
   public static int findQuotedMessageIndex(List<SoulseekMessaging.Message> messages, String quote,
       int beforeIndex) {
+    return findQuotedMessageIndex(messages, quote, null, beforeIndex);
+  }
+
+  public static int findQuotedMessageIndex(List<SoulseekMessaging.Message> messages, String quote,
+      String quoteAuthor, int beforeIndex) {
     if (quote == null || quote.isEmpty() || messages == null) return -1;
     String q = ReachIntroMessage.stripFromQuote(quote.trim());
+    String author = quoteAuthor != null ? quoteAuthor.trim() : "";
     int last = Math.min(beforeIndex - 1, messages.size() - 1);
     for (int i = last; i >= 0; i--) {
       SoulseekMessaging.Message m = messages.get(i);
-      if (m == null || m.text == null) continue;
+      if (m == null || m.text == null || m.statusEvent) continue;
       if (isIntroOrReaction(m.text)) continue;
+      if (!author.isEmpty() && m.peer != null && !m.peer.equalsIgnoreCase(author)) continue;
       String raw = m.text.trim();
       String display = displayText(raw);
       if (q.equals(raw) || q.equals(display)) return i;
@@ -172,8 +179,9 @@ public final class ReachMessageFormat {
     }
     for (int i = last; i >= 0; i--) {
       SoulseekMessaging.Message m = messages.get(i);
-      if (m == null || m.text == null) continue;
+      if (m == null || m.text == null || m.statusEvent) continue;
       if (isIntroOrReaction(m.text)) continue;
+      if (!author.isEmpty() && m.peer != null && !m.peer.equalsIgnoreCase(author)) continue;
       String raw = m.text.trim();
       String display = displayText(raw);
       if (display.startsWith(q) || raw.startsWith(q)) return i;
