@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compute the next Solar release version from git tags (sequential, not local gradle)."""
+"""Compute the next Solar release version from git tags (timestamp-based main + nightly)."""
 from __future__ import annotations
 
 import os
@@ -7,11 +7,11 @@ import re
 import subprocess
 import sys
 from datetime import datetime, timezone
-from decimal import Decimal
 from typing import Iterable, List, Optional, Tuple
 
 NIGHTLY_NUM_TAG_RE = re.compile(r"^nightly-(\d+)$")
-NIGHTLY_TS_TAG_RE = re.compile(r"^nightly-(\d{8}-\d{4})$")
+# nightly-YYYYMMDD-HHMM or plain YYYYMMDD-HHMM (main)
+TS_TAG_RE = re.compile(r"^(?:nightly-)?(\d{8}-\d{4})$")
 STABLE_TAG_RE = re.compile(r"^v(\d+\.\d+(?:\.\d+)?)$")
 
 
@@ -20,21 +20,12 @@ def git_tags() -> List[str]:
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
-def max_nightly_number(tags: Iterable[str]) -> int:
-    nums: List[int] = []
-    for tag in tags:
-        match = NIGHTLY_NUM_TAG_RE.match(tag)
-        if match:
-            nums.append(int(match.group(1)))
-    return max(nums) if nums else 0
-
-
-def nightly_ts_minutes(version_name: str) -> int:
-    match = NIGHTLY_TS_TAG_RE.match(version_name)
+def release_ts_minutes(version_or_tag: str) -> int:
+    match = TS_TAG_RE.match(version_or_tag)
     if not match:
         return 0
-    # Tag body is YYYYMMDD-HHMM in a single capture group.
-    parts = match.group(1).split("-", 1)
+    body = match.group(1)
+    parts = body.split("-", 1)
     if len(parts) != 2 or len(parts[0]) != 8 or len(parts[1]) < 4:
         return 0
     date_part, time_part = parts[0], parts[1]
@@ -48,38 +39,15 @@ def nightly_ts_minutes(version_name: str) -> int:
     return int((dt - epoch).total_seconds() // 60)
 
 
-def max_nightly_code(tags: Iterable[str]) -> int:
+def max_release_ts_code(tags: Iterable[str]) -> int:
     codes: List[int] = []
     for tag in tags:
-        match = NIGHTLY_TS_TAG_RE.match(tag)
-        if match:
-            codes.append(nightly_ts_minutes(tag))
+        if TS_TAG_RE.match(tag):
+            codes.append(release_ts_minutes(tag))
         match = NIGHTLY_NUM_TAG_RE.match(tag)
         if match:
             codes.append(int(match.group(1)))
     return max(codes) if codes else 0
-
-
-def max_stable_version(tags: Iterable[str]) -> Optional[Decimal]:
-    versions: List[Decimal] = []
-    v0_track: List[Decimal] = []
-    for tag in tags:
-        match = STABLE_TAG_RE.match(tag)
-        if match:
-            ver = Decimal(match.group(1))
-            versions.append(ver)
-            if tag.startswith("v0."):
-                v0_track.append(ver)
-    pool = v0_track if v0_track else versions
-    return max(pool) if pool else None
-
-
-def bump_semver_patch_tenth(current: Decimal) -> str:
-    nxt = current + Decimal("0.1")
-    text = format(nxt, "f").rstrip("0").rstrip(".")
-    if "." not in text:
-        text += ".0"
-    return text
 
 
 def read_gradle_version_code(gradle_path: str) -> int:
@@ -88,56 +56,56 @@ def read_gradle_version_code(gradle_path: str) -> int:
     return int(match.group(1)) if match else 0
 
 
-def nightly_timestamp_name() -> str:
+def release_timestamp_name(*, nightly: bool) -> str:
     ts = os.environ.get("SOURCE_DATE_EPOCH")
     if ts:
         dt = datetime.fromtimestamp(int(ts), tz=timezone.utc)
     else:
         dt = datetime.now(timezone.utc)
-    return dt.strftime("nightly-%Y%m%d-%H%M")
+    base = dt.strftime("%Y%m%d-%H%M")
+    return f"nightly-{base}" if nightly else base
 
 
 def resolve(branch: str, gradle_path: str, tags: Optional[Iterable[str]] = None) -> Tuple[str, str, int, str]:
     """Return (channel, version_name, version_code, tag)."""
     tag_list = list(tags) if tags is not None else git_tags()
-    nightly_max = max_nightly_number(tag_list)
     gradle_code = read_gradle_version_code(gradle_path)
+    prior_code = max(max_release_ts_code(tag_list), gradle_code)
 
     if branch == "nightly":
-        version_name = nightly_timestamp_name()
-        ts_code = nightly_ts_minutes(version_name)
-        version_code = max(max_nightly_code(tag_list), gradle_code, ts_code)
+        version_name = release_timestamp_name(nightly=True)
+        ts_code = release_ts_minutes(version_name)
+        version_code = max(prior_code, ts_code)
         return "nightly", version_name, version_code, version_name
 
     if branch == "main":
-        latest = max_stable_version(tag_list)
-        version_name = bump_semver_patch_tenth(latest) if latest is not None else "0.1"
-        version_code = max(nightly_max, gradle_code) + 1
-        return "stable", version_name, version_code, f"v{version_name}"
+        version_name = release_timestamp_name(nightly=False)
+        ts_code = release_ts_minutes(version_name)
+        version_code = max(prior_code, ts_code)
+        return "stable", version_name, version_code, version_name
 
     raise SystemExit(f"releases only from main or nightly (branch: {branch})")
 
 
 def self_test() -> None:
-    tags = ["nightly-39", "nightly-49", "nightly-52", "v0.2", "v1.5"]
-    channel, name, code, tag = resolve("nightly", __file__, tags)
-    assert channel == "nightly" and tag == name, (channel, name, code, tag)
-    assert NIGHTLY_TS_TAG_RE.match(name), name
-    assert code >= 52, code
+    os.environ["SOURCE_DATE_EPOCH"] = "1719069900"  # 2024-06-22 15:25 UTC
+    try:
+        channel, name, code, tag = resolve("nightly", __file__, ["nightly-39", "nightly-49"])
+        assert channel == "nightly" and tag == name, (channel, name, code, tag)
+        assert name == "nightly-20240622-1525", name
+        assert code >= 49, code
 
-    channel, name, code, tag = resolve("nightly", __file__, [])
-    assert NIGHTLY_TS_TAG_RE.match(name), (name, code)
-    assert code >= 1, code
+        channel, name, code, tag = resolve("main", __file__, ["20240622-1530", "nightly-20240622-1545"])
+        assert channel == "stable" and tag == name, (channel, name, code, tag)
+        assert name == "20240622-1525", name
+        assert not name.startswith("nightly-"), name
+        assert code >= release_ts_minutes("20240622-1545"), code
 
-    channel, name, code, tag = resolve("main", __file__, ["nightly-52", "v1.5", "v0.2"])
-    assert name == "0.3" and tag == "v0.3" and code == 53, (name, code, tag)
-
-    channel, name, code, tag = resolve("main", __file__, ["nightly-10"])
-    assert name == "0.1" and tag == "v0.1", (name, tag)
-
-    ts_tags = ["nightly-20240622-1530", "nightly-20240622-1545"]
-    channel, name, code, tag = resolve("nightly", __file__, ts_tags)
-    assert code >= nightly_ts_minutes("nightly-20240622-1545"), (name, code)
+        channel, name, code, tag = resolve("nightly", __file__, [])
+        assert TS_TAG_RE.match(name), (name, code)
+        assert code >= 1, code
+    finally:
+        os.environ.pop("SOURCE_DATE_EPOCH", None)
 
     print("resolve-release-version: self-test ok")
 

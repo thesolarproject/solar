@@ -22,7 +22,7 @@ version = meta.get("version_name", "")
 channel = meta.get("channel", "stable")
 sha = meta.get("short_sha", "")
 
-label = "nightly" if channel == "nightly" else "stable"
+label = "nightly" if channel == "nightly" else "main"
 print(f"# Solar {version} ({sha}) — {label}")
 print()
 print("## Assets")

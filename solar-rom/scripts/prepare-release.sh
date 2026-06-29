@@ -34,6 +34,12 @@ SHORT_SHA="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unkn
 
 [ "$BRANCH" = "nightly" ] || [ "$BRANCH" = "main" ] || die "releases only from main or nightly (branch: ${BRANCH:-unknown})"
 
+# ponytail: same commit on main/nightly gets identical YYYYMMDD-HHMM (only nightly- prefix differs).
+if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
+    SOURCE_DATE_EPOCH="$(git -C "$REPO_ROOT" log -1 --format=%ct 2>/dev/null || date +%s)"
+    export SOURCE_DATE_EPOCH
+fi
+
 echo "== Resolve release version from git tags (branch: $BRANCH) =="
 eval "$(python3 "$RESOLVE" "$BRANCH" "$GRADLE")"
 [ -n "${channel:-}" ] || die "resolve-release-version produced no channel"

@@ -36,13 +36,14 @@ if not base.endswith("/"):
 
 legacy_re = re.compile(r"solar-(v[\d.]+|nightly-\d+)\.apk$")
 variant_re = re.compile(
-    r"solar-(y1|y2)-((?:v[\d.]+)|(?:nightly-\d+)|(?:nightly-\d{8}-\d{4}))\.apk$"
+    r"solar-(y1|y2)-((?:v[\d.]+)|(?:nightly-\d+)|(?:nightly-\d{8}-\d{4})|(?:\d{8}-\d{4}))\.apk$"
 )
 unified_re = re.compile(
-    r"solar-((?:v[\d.]+)|(?:nightly-\d+)|(?:nightly-\d{8}-\d{4}))\.apk$"
+    r"solar-((?:v[\d.]+)|(?:nightly-\d+)|(?:nightly-\d{8}-\d{4})|(?:\d{8}-\d{4}))\.apk$"
 )
-ts_re = re.compile(r"^nightly-(\d{8})-(\d{4})$")
+ts_re = re.compile(r"^(?:nightly-)?(\d{8})-(\d{4})$")
 num_re = re.compile(r"^nightly-(\d+)$")
+stable_ts_re = re.compile(r"^(\d{8}-\d{4})$")
 
 entries = []
 for path in sorted(glob.glob(os.path.join(out_dir, "solar-*.apk"))):
@@ -80,17 +81,28 @@ for path in sorted(glob.glob(os.path.join(out_dir, "solar-*.apk"))):
             version_code = int(num.group(1)) if num else 0
     else:
         version_name = tag[1:] if tag.startswith("v") else tag
-        version_code = 0
+        ts = stable_ts_re.match(version_name)
+        if ts:
+            y, mo, d = int(ts.group(1)[:4]), int(ts.group(1)[4:6]), int(ts.group(1)[6:8])
+            hh, mm = int(ts.group(2)[:2]), int(ts.group(2)[2:])
+            from datetime import datetime, timezone
+            dt = datetime(y, mo, d, hh, mm, tzinfo=timezone.utc)
+            epoch = datetime(2020, 1, 1, tzinfo=timezone.utc)
+            version_code = int((dt - epoch).total_seconds() // 60)
+        else:
+            version_code = 0
     entries.append((tag, version_name, version_code, nightly, name, variant or "universal"))
 
 def sort_key(item):
     tag, version_name, version_code, nightly, _, _ = item
     if nightly:
         return (0, version_code, tag)
+    if stable_ts_re.match(version_name) and version_code > 0:
+        return (1, version_code, tag)
     parts = [int(x) for x in version_name.split(".") if x.isdigit()]
     while len(parts) < 3:
         parts.append(0)
-    return (1, tuple(parts))
+    return (2, tuple(parts))
 
 entries.sort(key=sort_key, reverse=True)
 
