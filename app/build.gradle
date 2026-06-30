@@ -54,7 +54,7 @@ android {
         minSdk 17
         targetSdk 35
         versionCode 3416080
-        versionName "20260630-0640"
+        versionName "nightly-20260630-0640"
         buildConfigField "boolean", "FEATURE_OTA_UPDATE", "true"
         buildConfigField "String", "OTA_UPDATES_URL", "\"https://thesolarproject.github.io/solar-update/updates.xml\""
         def podcastIndexKey = project.findProperty("PODCAST_INDEX_API_KEY") ?: ""
