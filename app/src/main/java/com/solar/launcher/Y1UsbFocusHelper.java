@@ -82,11 +82,12 @@ public final class Y1UsbFocusHelper {
                 lastConnectedState = connected;
                 usbConnected = connected;
                 if (connected) {
-                    // ponytail: staggered moveTaskToFront calls. The system's
-                    // UsbStorageActivity may appear at different times depending on
-                    // device state. Each attempt checks hasWindowFocus — if Solar
-                    // already has focus, the call is a no-op (no scroll reset).
-                    final int[] delays = {300, 600, 1000, 1500};
+                    // ponytail: fire BOTH moveTaskToFront + HOME key at staggered intervals.
+                    // Immediate (0ms) preempts the system dialog before it appears.
+                    // Later intervals catch it if it slips through.
+                    // HOME key is safe — Rockbox is disabled on startup, Solar is the only launcher.
+                    bringToFront("usbState-immediate");
+                    final int[] delays = {200, 500, 1000};
                     for (final int delay : delays) {
                         handler.postDelayed(new Runnable() {
                             @Override
@@ -119,22 +120,31 @@ public final class Y1UsbFocusHelper {
     }
 
     /**
-     * Bring Solar's task to the front of the task stack using moveTaskToFront().
-     * This is a system-level API that works across tasks — it moves Solar above
-     * the system's UsbStorageActivity without crashing SystemUI.
+     * Bring Solar to front using BOTH mechanisms simultaneously:
+     * 1. moveTaskToFront() — system API, moves Solar's task above UsbStorageActivity
+     * 2. HOME key — system-level, always brings the default launcher to front
      *
-     * Does NOT use:
-     *  - ACTION_CLOSE_SYSTEM_DIALOGS (crashes SystemUI)
-     *  - HOME key injection (launches Rockbox)
-     *  - pm disable (SystemUI crash loop)
+     * Rockbox is disabled on startup so HOME always resolves to Solar.
      */
     private void bringToFront(String reason) {
+        // 1. moveTaskToFront — instant, no process spawn
         try {
             ActivityManager am = (ActivityManager) activity.getSystemService(Context.ACTIVITY_SERVICE);
             if (am != null) {
                 am.moveTaskToFront(activity.getTaskId(), 0);
             }
         } catch (Exception ignored) {}
+
+        // 2. HOME key via root — handled at low level by ActivityManager
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Runtime.getRuntime().exec(
+                            new String[]{"su", "-c", "input keyevent 3"}).waitFor();
+                } catch (Exception ignored) {}
+            }
+        }, "HomeKey").start();
 
         try {
             activity.getWindow().getDecorView().requestFocus();
@@ -147,7 +157,7 @@ public final class Y1UsbFocusHelper {
             d.put("hasWindowFocus", activity.hasWindowFocus());
             d.put("taskId", activity.getTaskId());
             DebugAgentLog.log(activity, "Y1UsbFocusHelper.bringToFront",
-                    "usb focus reclaim (moveTaskToFront)", "H-USB-FOCUS", d);
+                    "usb focus reclaim (moveTaskToFront+HOME)", "H-USB-FOCUS", d);
         } catch (Exception ignored) {}
         // #endregion
     }
