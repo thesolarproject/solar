@@ -71,10 +71,18 @@ public final class LauncherSwitch {
      */
     public static void ensureRockboxDisabled(final Context context) {
         if (context == null) return;
-        if (!isRockboxEnabled(context)) return; // Already disabled or not installed
         new Thread(new Runnable() {
             @Override
             public void run() {
+                // ponytail: always re-enable SystemUI's UsbStorageActivity.
+                // A previous Solar version used pm disable on this component which
+                // causes SystemUI to crash in a loop. This undoes that on upgrade.
+                try {
+                    Runtime.getRuntime().exec(new String[]{"su", "-c",
+                            "pm enable com.android.systemui/com.android.systemui.usb.UsbStorageActivity"}).waitFor();
+                } catch (Exception ignored) {}
+
+                if (!isRockboxEnabled(context)) return; // Already disabled or not installed
                 try {
                     // am force-stop cleanly kills all components — no crash dialog
                     Runtime.getRuntime().exec(
