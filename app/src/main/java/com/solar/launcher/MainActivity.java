@@ -1620,6 +1620,7 @@ public class MainActivity extends Activity {
 
             } else if (Intent.ACTION_MEDIA_MOUNTED.equals(action)) {
                 reloadThemeAfterStorageReady();
+                scanMediaLibraryAsync();
             }
         }
     };
