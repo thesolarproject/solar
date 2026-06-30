@@ -23,11 +23,24 @@ public final class SoulseekInterests {
     }
 
     /** Auto-synced on login — never shown in editor or dislikes. */
-    public static List<String> systemLikes() {
+    public static List<String> systemLikes(android.content.Context context) {
         List<String> out = new ArrayList<String>();
         out.add("innioasis");
         out.add("reach client");
+        if (context != null) {
+            try {
+                String version = com.solar.launcher.AppVersion.installedVersionName(context);
+                if (version != null && !version.isEmpty()) {
+                    out.add("reach " + version);
+                }
+            } catch (Exception ignored) {}
+        }
         return out;
+    }
+
+    /** Overload for cases where Context is unavailable. */
+    public static List<String> systemLikes() {
+        return systemLikes(null);
     }
 
     public static boolean isSystemInterest(String item) {

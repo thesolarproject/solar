@@ -1,6 +1,7 @@
 package com.solar.launcher;
 
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -11,26 +12,23 @@ import android.os.Looper;
 import org.json.JSONObject;
 
 /**
- * Prevents the system's UsbStorageActivity from ever appearing while Solar is active.
+ * Prevents the system's UsbStorageActivity from staying visible while Solar is active.
  *
- * ponytail: previous approaches tried to dismiss the system dialog after it appeared:
+ * ponytail: approach history:
  *  - ACTION_CLOSE_SYSTEM_DIALOGS → crashed SystemUI on API 17
- *  - HOME key injection → launched Rockbox instead of Solar (both are launchers)
- *  - startActivity race → timing-dependent, still lost the race sometimes
+ *  - HOME key injection → launched Rockbox (also a launcher)
+ *  - startActivity REORDER_TO_FRONT → no effect across different tasks
+ *  - pm disable component → SystemUI crash loop (system retries endlessly)
  *
- * Current approach: disable the system component entirely via pm disable on startup.
- * The system simply cannot launch what's disabled — no racing, no crashes.
- * Solar handles USB storage mode itself via its own UI.
+ * Current approach: moveTaskToFront() — a system-level API that moves Solar's
+ * entire task above the system's UsbStorageActivity. Works across tasks, doesn't
+ * crash anything, and Solar is a system app so it has REORDER_TASKS permission.
+ * Fired at staggered intervals to catch the system dialog regardless of when it appears.
  */
 public final class Y1UsbFocusHelper {
 
     private static final String ACTION_USB_STATE = "android.hardware.usb.action.USB_STATE";
     private static final String EXTRA_USB_CONNECTED = "connected";
-
-    /** SystemUI components to suppress while Solar is the active launcher. */
-    private static final String[] SUPPRESSED_COMPONENTS = {
-            "com.android.systemui/com.android.systemui.usb.UsbStorageActivity",
-    };
 
     public interface UsbListener {
         void onUsbStateChanged(boolean connected);
@@ -46,8 +44,6 @@ public final class Y1UsbFocusHelper {
     public Y1UsbFocusHelper(Activity activity, UsbListener listener) {
         this.activity = activity;
         this.listener = listener;
-        // Disable system USB dialog on construction — before it ever has a chance to appear
-        suppressSystemComponents();
     }
 
     public void onResume() {
@@ -86,18 +82,31 @@ public final class Y1UsbFocusHelper {
                 lastConnectedState = connected;
                 usbConnected = connected;
                 if (connected) {
-                    if (listener != null) listener.onUsbStateChanged(true);
+                    // ponytail: staggered moveTaskToFront calls. The system's
+                    // UsbStorageActivity may appear at different times depending on
+                    // device state. Each attempt checks hasWindowFocus — if Solar
+                    // already has focus, the call is a no-op (no scroll reset).
+                    final int[] delays = {300, 600, 1000, 1500};
+                    for (final int delay : delays) {
+                        handler.postDelayed(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (!activity.hasWindowFocus() && usbConnected) {
+                                    bringToFront("usbState-" + delay);
+                                }
+                            }
+                        }, delay);
+                    }
+                    // Notify listener after last attempt
+                    handler.postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (listener != null) listener.onUsbStateChanged(true);
+                        }
+                    }, delays[delays.length - 1] + 100);
                 } else {
                     if (listener != null) listener.onUsbStateChanged(false);
                 }
-                // #region agent log
-                try {
-                    JSONObject d = new JSONObject();
-                    d.put("connected", connected);
-                    DebugAgentLog.log(activity, "Y1UsbFocusHelper.onUsbState",
-                            "USB state changed", "H-USB-STATE", d);
-                } catch (Exception ignored) {}
-                // #endregion
             }
         };
         activity.registerReceiver(receiver, new IntentFilter(ACTION_USB_STATE));
@@ -110,47 +119,36 @@ public final class Y1UsbFocusHelper {
     }
 
     /**
-     * Disable system components that interfere with Solar's USB handling.
-     * Uses pm disable via root — the component simply can't launch, no crash.
-     * This is the "guided access" approach: prevent rather than dismiss.
+     * Bring Solar's task to the front of the task stack using moveTaskToFront().
+     * This is a system-level API that works across tasks — it moves Solar above
+     * the system's UsbStorageActivity without crashing SystemUI.
+     *
+     * Does NOT use:
+     *  - ACTION_CLOSE_SYSTEM_DIALOGS (crashes SystemUI)
+     *  - HOME key injection (launches Rockbox)
+     *  - pm disable (SystemUI crash loop)
      */
-    private void suppressSystemComponents() {
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                for (String component : SUPPRESSED_COMPONENTS) {
-                    try {
-                        Runtime.getRuntime().exec(
-                                new String[]{"su", "-c", "pm disable " + component}).waitFor();
-                    } catch (Exception ignored) {}
-                }
-                // #region agent log
-                try {
-                    JSONObject d = new JSONObject();
-                    d.put("components", SUPPRESSED_COMPONENTS.length);
-                    DebugAgentLog.log(activity, "Y1UsbFocusHelper.suppressSystemComponents",
-                            "system USB dialog disabled", "H-USB-SUPPRESS", d);
-                } catch (Exception ignored) {}
-                // #endregion
+    private void bringToFront(String reason) {
+        try {
+            ActivityManager am = (ActivityManager) activity.getSystemService(Context.ACTIVITY_SERVICE);
+            if (am != null) {
+                am.moveTaskToFront(activity.getTaskId(), 0);
             }
-        }, "SuppressSystemUI").start();
-    }
+        } catch (Exception ignored) {}
 
-    /**
-     * Re-enable suppressed system components. Call this when Solar is about to
-     * relinquish its launcher role (e.g. switching to Rockbox).
-     */
-    public static void restoreSystemComponents() {
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                for (String component : SUPPRESSED_COMPONENTS) {
-                    try {
-                        Runtime.getRuntime().exec(
-                                new String[]{"su", "-c", "pm enable " + component}).waitFor();
-                    } catch (Exception ignored) {}
-                }
-            }
-        }, "RestoreSystemUI").start();
+        try {
+            activity.getWindow().getDecorView().requestFocus();
+        } catch (Exception ignored) {}
+
+        // #region agent log
+        try {
+            JSONObject d = new JSONObject();
+            d.put("reason", reason);
+            d.put("hasWindowFocus", activity.hasWindowFocus());
+            d.put("taskId", activity.getTaskId());
+            DebugAgentLog.log(activity, "Y1UsbFocusHelper.bringToFront",
+                    "usb focus reclaim (moveTaskToFront)", "H-USB-FOCUS", d);
+        } catch (Exception ignored) {}
+        // #endregion
     }
 }
