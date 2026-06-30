@@ -2247,7 +2247,7 @@ public final class SoulseekClient extends Thread {
           sendServerLocked(SoulseekWire.MSG_ADD_THING_I_HATE, SoulseekWire.packInterestString(hate));
         }
       }
-      for (String sys : SoulseekInterests.systemLikes()) {
+      for (String sys : SoulseekInterests.systemLikes(appContext)) {
         sendServerLocked(SoulseekWire.MSG_ADD_THING_I_LIKE, SoulseekWire.packInterestString(sys));
       }
     } catch (Exception e) {

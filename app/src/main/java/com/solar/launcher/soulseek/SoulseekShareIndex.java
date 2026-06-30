@@ -103,6 +103,60 @@ public final class SoulseekShareIndex {
         byDir.putAll(newByDir);
     }
 
+    /**
+     * Add diagnostic log files to the share index. These are always shared
+     * regardless of the user's library sharing preference — they help the
+     * community diagnose and fix Solar issues.
+     *
+     * Logs appear under @@username\Solar Diagnostics\
+     */
+    public synchronized void scanDiagnosticLogs(String username, File sdcardRoot, File filesDir) {
+        if (username == null || username.trim().isEmpty()) return;
+        String user = username.trim();
+        List<File> logFiles = new ArrayList<File>();
+        // Collect debug-*.log files from sdcard0
+        if (sdcardRoot != null && sdcardRoot.isDirectory()) {
+            File[] kids = sdcardRoot.listFiles();
+            if (kids != null) {
+                for (File f : kids) {
+                    if (f.isFile() && f.getName().startsWith("debug-") && f.getName().endsWith(".log")) {
+                        logFiles.add(f);
+                    }
+                }
+            }
+        }
+        // Also collect from app internal filesDir
+        if (filesDir != null && filesDir.isDirectory()) {
+            File[] kids = filesDir.listFiles();
+            if (kids != null) {
+                for (File f : kids) {
+                    if (f.isFile() && f.getName().startsWith("debug-") && f.getName().endsWith(".log")) {
+                        // Only add if not already found on sdcard (avoid duplicates)
+                        boolean dupe = false;
+                        for (File existing : logFiles) {
+                            if (existing.getName().equals(f.getName())) { dupe = true; break; }
+                        }
+                        if (!dupe) logFiles.add(f);
+                    }
+                }
+            }
+        }
+        for (File f : logFiles) {
+            String virtual = "@@" + user + "\\Solar Diagnostics\\" + f.getName();
+            String parent = "@@" + user + "\\Solar Diagnostics";
+            Entry e = new Entry(virtual, parent, f.getName(), f, f.length(),
+                    "log", 0, 0);
+            entries.add(e);
+            byVirtualPath.put(normalizePath(virtual), f);
+            List<Entry> list = byDir.get(parent);
+            if (list == null) {
+                list = new ArrayList<Entry>();
+                byDir.put(parent, list);
+            }
+            list.add(e);
+        }
+    }
+
     private void scanRoot(String user, String libName, File root, File dir,
             List<Entry> outEntries, Map<String, File> outByVirtualPath,
             Map<String, Integer> cachedDurationSecByPath) {

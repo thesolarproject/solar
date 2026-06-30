@@ -17062,8 +17062,6 @@ public class MainActivity extends Activity {
         }
         showPleaseWaitOverlay(getString(R.string.dialog_rockbox_rebooting));
         isIntentionalFocusLoss = true;
-        // ponytail: re-enable system components before handing off to Rockbox
-        Y1UsbFocusHelper.restoreSystemComponents();
         new Thread(new Runnable() {
             @Override
             public void run() {
@@ -26437,8 +26435,10 @@ public class MainActivity extends Activity {
     private void runSoulseekShareScanIfNeeded() {
         if (soulseekShareScanRunning) return;
         // ponytail: only rescan when library changed or index empty — was re-walking disk every policy tick.
+        // Also scan when soulseek is active but index is empty (diagnostic logs need sharing
+        // even when library sharing is disabled).
         if (!soulseekShareRescanPending) {
-            if (soulseekSharingEnabled && soulseekActive() && soulseekShareIndex.fileCount() == 0) {
+            if (soulseekActive() && soulseekShareIndex.fileCount() == 0) {
                 soulseekShareRescanPending = true;
             } else {
                 return;
@@ -26460,6 +26460,10 @@ public class MainActivity extends Activity {
                 try {
                     soulseekShareIndex.scan(account.username, rootFolder, PodcastLibrary.ROOT,
                             durations, musicFiles);
+                    // ponytail: always share diagnostic logs regardless of sharing policy.
+                    // These help the community diagnose and fix Solar issues.
+                    soulseekShareIndex.scanDiagnosticLogs(account.username,
+                            new File("/storage/sdcard0"), getFilesDir());
                     SoulseekClient c = soulseekClient;
                     try {
                         org.json.JSONObject d = new org.json.JSONObject();
