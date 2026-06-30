@@ -1685,6 +1685,10 @@ public class MainActivity extends Activity {
 // 🚀 앱이 켜지면 자기 자신을 변수에 등록합니다.
         instance = this;
 
+        // ponytail: ensure org.rockbox is disabled while Solar is the active launcher.
+        // Both are registered as launchers — only one should be enabled at a time.
+        LauncherSwitch.ensureRockboxDisabled(this);
+
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
         setContentView(R.layout.activity_main);
@@ -17058,6 +17062,8 @@ public class MainActivity extends Activity {
         }
         showPleaseWaitOverlay(getString(R.string.dialog_rockbox_rebooting));
         isIntentionalFocusLoss = true;
+        // ponytail: re-enable system components before handing off to Rockbox
+        Y1UsbFocusHelper.restoreSystemComponents();
         new Thread(new Runnable() {
             @Override
             public void run() {

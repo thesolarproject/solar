@@ -11,17 +11,26 @@ import android.os.Looper;
 import org.json.JSONObject;
 
 /**
- * Y1 shows systemui UsbStorageActivity when USB is connected — it steals wheel focus.
+ * Prevents the system's UsbStorageActivity from ever appearing while Solar is active.
  *
- * ponytail: previous approach used ACTION_CLOSE_SYSTEM_DIALOGS broadcast which crashes
- * SystemUI on API 17 ("Unfortunately, System UI has stopped"). New approach uses HOME key
- * injection via root — since Solar IS the launcher, pressing HOME naturally brings Solar
- * to the front and pushes the system UsbStorageActivity behind it without killing anything.
+ * ponytail: previous approaches tried to dismiss the system dialog after it appeared:
+ *  - ACTION_CLOSE_SYSTEM_DIALOGS → crashed SystemUI on API 17
+ *  - HOME key injection → launched Rockbox instead of Solar (both are launchers)
+ *  - startActivity race → timing-dependent, still lost the race sometimes
+ *
+ * Current approach: disable the system component entirely via pm disable on startup.
+ * The system simply cannot launch what's disabled — no racing, no crashes.
+ * Solar handles USB storage mode itself via its own UI.
  */
 public final class Y1UsbFocusHelper {
-    /** API 17 UsbManager constants — not all are public on older SDK stubs. */
+
     private static final String ACTION_USB_STATE = "android.hardware.usb.action.USB_STATE";
     private static final String EXTRA_USB_CONNECTED = "connected";
+
+    /** SystemUI components to suppress while Solar is the active launcher. */
+    private static final String[] SUPPRESSED_COMPONENTS = {
+            "com.android.systemui/com.android.systemui.usb.UsbStorageActivity",
+    };
 
     public interface UsbListener {
         void onUsbStateChanged(boolean connected);
@@ -37,15 +46,14 @@ public final class Y1UsbFocusHelper {
     public Y1UsbFocusHelper(Activity activity, UsbListener listener) {
         this.activity = activity;
         this.listener = listener;
+        // Disable system USB dialog on construction — before it ever has a chance to appear
+        suppressSystemComponents();
     }
 
     public void onResume() {
         handler.post(new Runnable() {
             @Override
             public void run() {
-                // ponytail: do NOT press HOME on resume — if we're already in the
-                // foreground, pressing HOME resets the scroll position and makes
-                // list views unusable. Just request focus on our decor view.
                 if (usbConnected) {
                     try {
                         activity.getWindow().getDecorView().requestFocus();
@@ -78,30 +86,18 @@ public final class Y1UsbFocusHelper {
                 lastConnectedState = connected;
                 usbConnected = connected;
                 if (connected) {
-                    // ponytail: always schedule HOME presses on USB connect.
-                    // The hasWindowFocus() check is inside each Runnable because
-                    // when this broadcast fires the system dialog hasn't appeared
-                    // yet — by 500/800ms later it will have stolen focus.
-                    handler.postDelayed(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (!activity.hasWindowFocus()) {
-                                reclaimInputFocus("usbState-1");
-                            }
-                        }
-                    }, 500);
-                    handler.postDelayed(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (!activity.hasWindowFocus()) {
-                                reclaimInputFocus("usbState-2");
-                            }
-                            if (listener != null) listener.onUsbStateChanged(true);
-                        }
-                    }, 800);
+                    if (listener != null) listener.onUsbStateChanged(true);
                 } else {
                     if (listener != null) listener.onUsbStateChanged(false);
                 }
+                // #region agent log
+                try {
+                    JSONObject d = new JSONObject();
+                    d.put("connected", connected);
+                    DebugAgentLog.log(activity, "Y1UsbFocusHelper.onUsbState",
+                            "USB state changed", "H-USB-STATE", d);
+                } catch (Exception ignored) {}
+                // #endregion
             }
         };
         activity.registerReceiver(receiver, new IntentFilter(ACTION_USB_STATE));
@@ -114,37 +110,47 @@ public final class Y1UsbFocusHelper {
     }
 
     /**
-     * Reclaim focus by pressing HOME via root. Since Solar is the default launcher,
-     * HOME brings Solar to the foreground and pushes the system UsbStorageActivity
-     * to the background — without crashing SystemUI.
-     *
-     * Does NOT use ACTION_CLOSE_SYSTEM_DIALOGS (that crashes SystemUI on API 17).
+     * Disable system components that interfere with Solar's USB handling.
+     * Uses pm disable via root — the component simply can't launch, no crash.
+     * This is the "guided access" approach: prevent rather than dismiss.
      */
-    void reclaimInputFocus(final String reason) {
-        // HOME key via root — gentle, never crashes SystemUI
+    private void suppressSystemComponents() {
         new Thread(new Runnable() {
             @Override
             public void run() {
+                for (String component : SUPPRESSED_COMPONENTS) {
+                    try {
+                        Runtime.getRuntime().exec(
+                                new String[]{"su", "-c", "pm disable " + component}).waitFor();
+                    } catch (Exception ignored) {}
+                }
+                // #region agent log
                 try {
-                    Runtime.getRuntime().exec(
-                            new String[]{"su", "-c", "input keyevent 3"}).waitFor();
+                    JSONObject d = new JSONObject();
+                    d.put("components", SUPPRESSED_COMPONENTS.length);
+                    DebugAgentLog.log(activity, "Y1UsbFocusHelper.suppressSystemComponents",
+                            "system USB dialog disabled", "H-USB-SUPPRESS", d);
                 } catch (Exception ignored) {}
+                // #endregion
             }
-        }).start();
+        }, "SuppressSystemUI").start();
+    }
 
-        // Also request focus on our own decor view for d-pad navigation
-        try {
-            activity.getWindow().getDecorView().requestFocus();
-        } catch (Exception ignored) {}
-
-        // #region agent log
-        try {
-            JSONObject d = new JSONObject();
-            d.put("reason", reason);
-            d.put("hasWindowFocus", activity.hasWindowFocus());
-            DebugAgentLog.log(activity, "Y1UsbFocusHelper.reclaimInputFocus",
-                    "usb focus reclaim (HOME key)", "H-USB-FOCUS", d);
-        } catch (Exception ignored) {}
-        // #endregion
+    /**
+     * Re-enable suppressed system components. Call this when Solar is about to
+     * relinquish its launcher role (e.g. switching to Rockbox).
+     */
+    public static void restoreSystemComponents() {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                for (String component : SUPPRESSED_COMPONENTS) {
+                    try {
+                        Runtime.getRuntime().exec(
+                                new String[]{"su", "-c", "pm enable " + component}).waitFor();
+                    } catch (Exception ignored) {}
+                }
+            }
+        }, "RestoreSystemUI").start();
     }
 }

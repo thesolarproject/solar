@@ -52,6 +52,43 @@ public final class LauncherSwitch {
         }
     }
 
+    /** True when Rockbox is installed and currently enabled — should NOT be the case while Solar is home. */
+    public static boolean isRockboxEnabled(Context context) {
+        if (context == null) return false;
+        try {
+            ApplicationInfo info = context.getPackageManager().getApplicationInfo(ROCKBOX_PACKAGE, 0);
+            return info.enabled;
+        } catch (PackageManager.NameNotFoundException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Ensures org.rockbox is disabled while Solar is the active launcher.
+     * Gracefully stops the Rockbox process first (am force-stop — no crash dialog),
+     * then disables the package via pm disable.
+     * Runs entirely on a background thread — safe to call from onCreate/onResume.
+     */
+    public static void ensureRockboxDisabled(final Context context) {
+        if (context == null) return;
+        if (!isRockboxEnabled(context)) return; // Already disabled or not installed
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    // am force-stop cleanly kills all components — no crash dialog
+                    Runtime.getRuntime().exec(
+                            new String[]{"su", "-c", "am force-stop " + ROCKBOX_PACKAGE}).waitFor();
+                    // Brief pause to let the process terminate fully
+                    Thread.sleep(300);
+                    // Disable the package so it won't respond to HOME or auto-start
+                    Runtime.getRuntime().exec(
+                            new String[]{"su", "-c", "pm disable " + ROCKBOX_PACKAGE}).waitFor();
+                } catch (Exception ignored) {}
+            }
+        }, "RockboxAutoDisable").start();
+    }
+
     /** Switch to Rockbox — sync keymap/codecs, enable Rockbox, start it, then disable Solar. */
     public static boolean switchToRockbox(Context context) {
         if (context != null) {
