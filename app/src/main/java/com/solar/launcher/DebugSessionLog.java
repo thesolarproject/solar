@@ -8,13 +8,13 @@ import java.io.File;
 import java.io.FileWriter;
 
 /**
- * Debug-mode NDJSON logger — session 5b1e61.
- * ponytail: writes to SD card; pull with adb to workspace .cursor/debug-5b1e61.log
+ * Debug-mode NDJSON logger — session a76d20.
+ * ponytail: writes to SD card; pull with adb to workspace .cursor/debug-a76d20.log
  */
 public final class DebugSessionLog {
-    private static final String TAG = "SolarDbg5b1e61";
-    private static final String SESSION = "5b1e61";
-    private static final String FILE = "debug-5b1e61.log";
+    private static final String TAG = "SolarDbga76d20";
+    private static final String SESSION = "a76d20";
+    private static final String FILE = "debug-a76d20.log";
     /** Enabled for this debug session — sync append; keep calls sparse. */
     public static volatile boolean ENABLED = true;
 

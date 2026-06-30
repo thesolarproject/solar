@@ -35,9 +35,24 @@ public final class DeviceFeatures {
         return "Reach for Innioasis " + deviceModelLabel();
     }
 
-    public static String reachUserBio(android.content.Context ctx) {
+    /** Soulseek profile description peers see — reflects Sharing / Messaging toggles. */
+    public static String reachUserBio(android.content.Context ctx, boolean sharingEnabled,
+            boolean messagingEnabled) {
         if (ctx == null) return reachClientName();
-        return ctx.getString(com.solar.launcher.R.string.reach_user_bio, deviceModelLabel());
+        String intro = ctx.getString(com.solar.launcher.R.string.reach_user_bio_intro, deviceModelLabel());
+        String sharingState = ctx.getString(sharingEnabled
+                ? com.solar.launcher.R.string.common_on : com.solar.launcher.R.string.common_off);
+        String messagingState = ctx.getString(messagingEnabled
+                ? com.solar.launcher.R.string.common_on : com.solar.launcher.R.string.common_off);
+        String status = ctx.getString(com.solar.launcher.R.string.reach_user_bio_status,
+                sharingState, messagingState);
+        String shareNote = ctx.getString(sharingEnabled
+                ? com.solar.launcher.R.string.reach_user_bio_note_share_on
+                : com.solar.launcher.R.string.reach_user_bio_note_share_off);
+        String msgNote = ctx.getString(messagingEnabled
+                ? com.solar.launcher.R.string.reach_user_bio_note_msg_on
+                : com.solar.launcher.R.string.reach_user_bio_note_msg_off);
+        return intro + "\n\n" + status + "\n\n" + shareNote + " " + msgNote;
     }
 
     public static boolean isY2() {

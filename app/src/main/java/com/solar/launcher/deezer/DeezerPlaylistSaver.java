@@ -85,6 +85,11 @@ public final class DeezerPlaylistSaver {
         }, "DeezerPlaylistSave").start();
     }
 
+    /** Unique destination path under music root for a single Deezer track download. */
+    public static File uniqueTrackPath(File musicRoot, DeezerResult result, String ext) {
+        return uniqueTrackFile(musicRoot, result, ext);
+    }
+
     private static File uniqueTrackFile(File destDir, DeezerResult result, String ext) {
         String safeName = result.filenameBase() + "." + ext;
         File dest = new File(destDir, safeName);

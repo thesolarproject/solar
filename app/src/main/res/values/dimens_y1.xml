@@ -11,6 +11,10 @@
     <dimen name="y1_menu_text_size">22sp</dimen>
     <dimen name="y1_menu_text_pad_left">5dp</dimen>
     <dimen name="y1_context_back_pad_right">2dp</dimen>
+    <!-- Context-menu message body: vertical pad + extra bottom for descenders -->
+    <dimen name="y1_context_message_pad_v">8dp</dimen>
+    <dimen name="y1_context_message_pad_bottom_extra">4dp</dimen>
+    <dimen name="y1_context_message_line_spacing">2dp</dimen>
     <dimen name="y1_arrow_margin_end">10dp</dimen>
     <!-- Home menu panel clips at the right edge; library/context rows have outer padding. -->
     <dimen name="y1_home_arrow_extra_inset">6dp</dimen>
@@ -18,6 +22,14 @@
     <dimen name="y1_preview_width">179dp</dimen>
     <dimen name="y1_preview_margin_right">23dp</dimen>
     <dimen name="y1_preview_margin_top">86dp</dimen>
+    <!-- Home preview art cap (leaves room for title rows when no mask) -->
+    <dimen name="y1_preview_art_max">142dp</dimen>
+    <!-- Tighter fit inside desktopMask frame (marquee strip above art) -->
+    <dimen name="y1_preview_mask_width">148dp</dimen>
+    <dimen name="y1_preview_mask_art_max">118dp</dimen>
+    <dimen name="y1_preview_mask_margin_top">108dp</dimen>
+    <dimen name="y1_preview_mask_margin_right">28dp</dimen>
+    <dimen name="y1_preview_title_gap">6dp</dimen>
     <dimen name="y1_status_icon_size">25dp</dimen>
     <dimen name="y1_battery_icon_height">20dp</dimen>
     <dimen name="y1_theme_cover_height">32dp</dimen>
@@ -35,6 +47,8 @@
     <dimen name="y1_settings_preview_margin_right">22dp</dimen>
     <dimen name="y1_settings_preview_title_top">58dp</dimen>
     <dimen name="y1_setting_icon_max">146dp</dimen>
+    <dimen name="y1_setting_mask_art_max">118dp</dimen>
+    <dimen name="y1_setting_mask_margin_top">72dp</dimen>
     <!-- ~1.5× settings preview art; width capped so dual-pane list (218dp) stays clear -->
     <dimen name="y1_podcast_preview_width">211dp</dimen>
     <dimen name="y1_podcast_preview_art_max">219dp</dimen>

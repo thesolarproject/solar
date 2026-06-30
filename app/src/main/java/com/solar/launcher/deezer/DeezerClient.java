@@ -5,13 +5,16 @@ import android.content.SharedPreferences;
 
 import com.solar.launcher.net.TlsHelper;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.IOException;
 import java.util.Locale;
 
+import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
+import okhttp3.RequestBody;
 import okhttp3.Response;
 
 /** Authenticated Deezer session via ARL cookie impersonation. */
@@ -23,11 +26,15 @@ public final class DeezerClient {
             "https://www.deezer.com/ajax/gw-light.php?method=deezer.getUserData"
                     + "&input=3&api_version=1.0&api_token=";
 
+    private static final String GW_LIGHT = "https://www.deezer.com/ajax/gw-light.php";
+    private static final MediaType JSON_MEDIA = MediaType.parse("application/json; charset=utf-8");
+
     private final SharedPreferences prefs;
     private String arl = "";
     /** ponytail: transient download fallback — does not mutate prefs ARL. */
     private String arlOverride = null;
     private String licenseToken = "";
+    private String apiToken = "";
     private String soundFormat = "MP3_128";
     private boolean premium = false;
     private String userName = "";
@@ -96,6 +103,10 @@ public final class DeezerClient {
             premium = webQuality.optBoolean("lossless", false);
             userName = user.optString("BLOG_NAME", user.optString("USER_ID", ""));
             userId = String.valueOf(user.optLong("USER_ID", 0));
+            apiToken = results.optString("checkForm", "");
+            if (apiToken == null || apiToken.isEmpty()) {
+                apiToken = results.optString("check_form", "");
+            }
             setSongQuality(quality, premium);
             if (arlOverride == null) {
                 DeezerAccount.saveSessionInfo(prefs, userName, userId, premium);
@@ -253,5 +264,75 @@ public final class DeezerClient {
         if ("FLAC".equals(soundFormat)) return "FLAC";
         if ("MP3_320".equals(soundFormat)) return "320";
         return "128";
+    }
+
+    /** Authenticated gw-light POST — requires {@link #initSession()} first. */
+    public JSONObject postGwLight(String method, JSONObject payload) throws IOException {
+        if (!sessionValid && !initSession()) {
+            throw new IOException("Deezer session unavailable");
+        }
+        int cid = (int) (Math.random() * 1000000000L);
+        String url = GW_LIGHT + "?method=" + method + "&input=3&api_version=1.0&api_token="
+                + (apiToken != null ? apiToken : "") + "&cid=" + cid;
+        String json = payload != null ? payload.toString() : "{}";
+        RequestBody body = RequestBody.create(JSON_MEDIA, json);
+        Request req = applyAuthHeaders(new Request.Builder().url(url).post(body)).build();
+        try {
+            JSONObject root = new JSONObject(new String(execute(req), "UTF-8"));
+            if (root.has("error") && !root.isNull("error")) {
+                JSONObject err = root.optJSONObject("error");
+                String msg = "Deezer API error";
+                if (err != null) {
+                    java.util.Iterator<String> keys = err.keys();
+                    if (keys.hasNext()) {
+                        String k = keys.next();
+                        msg = err.optString(k, msg);
+                    }
+                }
+                throw new IOException(msg);
+            }
+            return root;
+        } catch (IOException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IOException(e.getMessage() != null ? e.getMessage() : "gw-light failed");
+        }
+    }
+
+    /** Permanently delete a playlist from the user's Deezer account. */
+    public void deletePlaylist(long playlistId) throws IOException {
+        if (playlistId <= 0) throw new IOException("Invalid playlist");
+        try {
+            JSONObject payload = new JSONObject();
+            payload.put("playlist_id", playlistId);
+            postGwLight("playlist.delete", payload);
+        } catch (IOException first) {
+            try {
+                JSONObject payload = new JSONObject();
+                payload.put("PLAYLIST_ID", playlistId);
+                postGwLight("playlist.delete", payload);
+            } catch (Exception e) {
+                throw first;
+            }
+        } catch (Exception e) {
+            throw new IOException(e.getMessage() != null ? e.getMessage() : "Delete failed");
+        }
+    }
+
+    /** Add one track to a Deezer playlist. */
+    public void addTrackToPlaylist(long playlistId, long trackId) throws IOException {
+        if (playlistId <= 0 || trackId <= 0) throw new IOException("Invalid playlist or track");
+        JSONObject payload = new JSONObject();
+        try {
+            payload.put("PLAYLIST_ID", playlistId);
+            JSONArray songs = new JSONArray();
+            JSONArray row = new JSONArray();
+            row.put(String.valueOf(trackId));
+            songs.put(row);
+            payload.put("songs", songs);
+            postGwLight("song.addToPlaylist", payload);
+        } catch (Exception e) {
+            throw new IOException(e.getMessage() != null ? e.getMessage() : "Add to playlist failed");
+        }
     }
 }

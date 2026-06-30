@@ -18,6 +18,10 @@ public final class RowKeys {
     public static final String APPEARANCE = "settings.appearance";
     public static final String STATUS_BAR_LEFT = "settings.status_bar_left";
     public static final String STATUS_BAR_MATCH_FONT = "settings.status_bar_match_font";
+    public static final String NOW_PLAYING_MATCH_FONT = "settings.now_playing_match_font";
+    public static final String NOW_PLAYING_BACKDROP = "settings.now_playing_backdrop";
+    public static final String NOW_PLAYING_LCD_ART = "settings.now_playing_lcd_art";
+    public static final String NOW_PLAYING_3D_ALBUM_ART = "settings.now_playing_3d_album_art";
     public static final String SCREEN_TIMEOUT = "settings.screen_timeout";
     public static final String FULL_WIDTH = "settings.full_width";
     public static final String POWER_OFF = "settings.power_off";
@@ -41,6 +45,9 @@ public final class RowKeys {
     public static final String DEBUG = "settings.debug";
     public static final String DEBUG_JJ_THEMES = "settings.debug.jj_themes";
     public static final String DEBUG_SHOW_ERROR_TOASTS = "settings.debug.show_error_toasts";
+    public static final String DEBUG_FLOW_ENABLED = "settings.debug.flow_enabled";
+    public static final String DEBUG_FLOW_OK_LIBRARY = "settings.debug.flow_ok_library";
+    public static final String DEBUG_FLOW_THEME = "settings.debug.flow_theme";
     public static final String SYSTEM_UPDATE = "settings.system_update";
     public static final String BLUETOOTH_SETUP = "settings.bluetooth_setup";
     public static final String BRIGHTNESS = "settings.brightness";
@@ -123,6 +130,10 @@ public final class RowKeys {
         if (STATUS_BAR_LEFT.equals(rowKey)) return R.string.settings_status_bar_text;
         if (APPEARANCE.equals(rowKey)) return R.string.settings_appearance;
         if (STATUS_BAR_MATCH_FONT.equals(rowKey)) return R.string.settings_status_bar_match_font;
+        if (NOW_PLAYING_MATCH_FONT.equals(rowKey)) return R.string.settings_now_playing_match_font;
+        if (NOW_PLAYING_BACKDROP.equals(rowKey)) return R.string.settings_now_playing_backdrop;
+        if (NOW_PLAYING_LCD_ART.equals(rowKey)) return R.string.settings_now_playing_lcd_art;
+        if (NOW_PLAYING_3D_ALBUM_ART.equals(rowKey)) return R.string.settings_now_playing_3d_album_art;
         if (SCREEN_TIMEOUT.equals(rowKey)) return R.string.settings_screen_timeout;
         if (FULL_WIDTH.equals(rowKey)) return R.string.settings_full_width_menus;
         if (POWER_OFF.equals(rowKey)) return R.string.settings_power_off;

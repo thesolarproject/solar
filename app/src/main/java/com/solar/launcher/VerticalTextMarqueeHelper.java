@@ -1,9 +1,6 @@
 package com.solar.launcher;
 
 import android.app.Activity;
-import android.os.Handler;
-import android.os.Looper;
-import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -14,22 +11,13 @@ import android.widget.TextView;
 
 import com.solar.launcher.theme.ThemeManager;
 
-/** Compact capped text panel with optional auto vertical marquee for long content. */
+/** Compact capped scrollable text panel for context-menu message / dialog bodies. */
 public final class VerticalTextMarqueeHelper {
-    private static final int TICK_MS = 50;
-    private static final int PAUSE_TICKS = 40;
-    private static final int TAG_MARQUEE = 0x70cc0001;
     public static final int TAG_SCROLL = 0x70cc0002;
     public static final int TAG_BODY = 0x70cc0003;
 
-    private static Handler marqueeHandler;
-
-    private static Handler marqueeHandler() {
-        if (marqueeHandler == null) {
-            marqueeHandler = new Handler(Looper.getMainLooper());
-        }
-        return marqueeHandler;
-    }
+    /** Total vertical padding added to measured content height (testable constant). */
+    public static final int PANEL_VERTICAL_PAD_PX = 24;
 
     private VerticalTextMarqueeHelper() {}
 
@@ -38,6 +26,7 @@ public final class VerticalTextMarqueeHelper {
         TextView measure = new TextView(activity);
         measure.setTypeface(ThemeManager.getCustomFont());
         measure.setTextSize(TypedValue.COMPLEX_UNIT_PX, textPx);
+        measure.setLineSpacing(messageLineSpacingPx(activity), 1f);
         measure.setText(text != null ? text : "");
         int specW = View.MeasureSpec.makeMeasureSpec(widthPx, View.MeasureSpec.EXACTLY);
         int specH = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED);
@@ -57,6 +46,18 @@ public final class VerticalTextMarqueeHelper {
         return activity.getResources().getDimension(R.dimen.y1_menu_text_size) * 0.85f;
     }
 
+    public static int messagePadVerticalPx(Activity activity) {
+        return (int) activity.getResources().getDimension(R.dimen.y1_context_message_pad_v);
+    }
+
+    public static int messagePadBottomExtraPx(Activity activity) {
+        return (int) activity.getResources().getDimension(R.dimen.y1_context_message_pad_bottom_extra);
+    }
+
+    public static float messageLineSpacingPx(Activity activity) {
+        return activity.getResources().getDimension(R.dimen.y1_context_message_line_spacing);
+    }
+
     /** Shrink-to-fit capped row height (testable without Activity). */
     public static int computeCappedRowHeight(int contentH, int pad, int maxHeightPx, int minH) {
         return Math.min(maxHeightPx, Math.max(minH, contentH + pad));
@@ -64,8 +65,7 @@ public final class VerticalTextMarqueeHelper {
 
     public static int computePanelHeight(Activity activity, CharSequence text, int maxHeightPx, int innerWidthPx) {
         float linePx = defaultLineTextPx(activity);
-        float density = activity.getResources().getDisplayMetrics().density;
-        int pad = (int) (8 * density);
+        int pad = messagePadVerticalPx(activity) + messagePadBottomExtraPx(activity);
         int minH = (int) (linePx * 1.18f + pad);
         int contentH = measureTextHeight(activity, text, linePx, innerWidthPx);
         return computeCappedRowHeight(contentH, pad, maxHeightPx, minH);
@@ -83,12 +83,14 @@ public final class VerticalTextMarqueeHelper {
         scroll.setTag(TAG_SCROLL);
         scroll.setVerticalScrollBarEnabled(false);
         scroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        scroll.setClipToPadding(false);
+        int padV = messagePadVerticalPx(activity);
         FrameLayout.LayoutParams scrollLp = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, rowH);
         scrollLp.leftMargin = textPad;
         scrollLp.rightMargin = textPad;
-        scrollLp.topMargin = (int) (4 * density);
-        scrollLp.bottomMargin = (int) (4 * density);
+        scrollLp.topMargin = padV / 2;
+        scrollLp.bottomMargin = padV / 2;
         row.addView(scroll, scrollLp);
 
         TextView body = new TextView(activity);
@@ -99,8 +101,6 @@ public final class VerticalTextMarqueeHelper {
 
         row.setLayoutParams(new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, rowH));
-
-        maybeStartVerticalMarquee(scroll, body, text, maxHeightPx, innerW, activity);
         return row;
     }
 
@@ -110,7 +110,6 @@ public final class VerticalTextMarqueeHelper {
         ScrollView scroll = row.findViewWithTag(TAG_SCROLL);
         TextView body = row.findViewWithTag(TAG_BODY);
         if (scroll == null || body == null) return;
-        stop(scroll);
 
         float density = activity.getResources().getDisplayMetrics().density;
         int textPad = (int) activity.getResources().getDimension(R.dimen.y1_menu_text_pad_left);
@@ -129,122 +128,29 @@ public final class VerticalTextMarqueeHelper {
             rowLp.height = rowH;
             row.setLayoutParams(rowLp);
         }
-        maybeStartVerticalMarquee(scroll, body, text, maxHeightPx, innerW, activity);
     }
 
     private static void bindBodyText(Activity activity, TextView body, CharSequence text, int innerW) {
         float linePx = defaultLineTextPx(activity);
+        int hPad = (int) activity.getResources().getDimension(R.dimen.y1_menu_text_pad_left);
+        int topPad = messagePadVerticalPx(activity) / 2;
+        int bottomPad = topPad + messagePadBottomExtraPx(activity);
         body.setTypeface(ThemeManager.getCustomFont());
         body.setTextSize(TypedValue.COMPLEX_UNIT_PX, linePx);
         body.setGravity(Gravity.START | Gravity.TOP);
+        body.setLineSpacing(messageLineSpacingPx(activity), 1f);
+        body.setPadding(hPad, topPad, hPad, bottomPad);
         body.setText(text != null ? text : "");
         ThemeManager.applyThemedTextStyle(body, ThemeManager.getTextColorPrimary());
-        applyHorizontalMarqueeIfNeeded(body, text, linePx, innerW);
-    }
-
-    private static void applyHorizontalMarqueeIfNeeded(TextView body, CharSequence text,
-            float linePx, int innerW) {
-        if (body == null || text == null) return;
-        String s = text.toString();
-        if (s.contains("\n")) {
-            body.setSingleLine(false);
-            body.setEllipsize(null);
-            body.setHorizontallyScrolling(false);
-            body.setSelected(false);
-            return;
-        }
-        body.setSingleLine(true);
-        body.setHorizontallyScrolling(true);
-        float textW = body.getPaint().measureText(s);
-        if (textW > innerW) {
-            body.setEllipsize(TextUtils.TruncateAt.MARQUEE);
-            body.setMarqueeRepeatLimit(-1);
-            body.setSelected(true);
-        } else {
-            body.setEllipsize(TextUtils.TruncateAt.END);
-            body.setSelected(false);
-        }
-    }
-
-    private static void maybeStartVerticalMarquee(ScrollView scroll, TextView body, CharSequence text,
-            int maxHeightPx, int innerW, Activity activity) {
-        if (text == null || text.toString().contains("\n")) {
-            float linePx = defaultLineTextPx(activity);
-            int contentH = measureTextHeight(activity, text, linePx, innerW);
-            float density = activity.getResources().getDisplayMetrics().density;
-            int pad = (int) (8 * density);
-            if (contentH + pad > maxHeightPx) {
-                scroll.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        start(scroll, body);
-                    }
-                });
-            }
-        } else {
-            float linePx = defaultLineTextPx(activity);
-            int contentH = measureTextHeight(activity, text, linePx, innerW);
-            float density = activity.getResources().getDisplayMetrics().density;
-            int pad = (int) (8 * density);
-            if (contentH + pad > maxHeightPx) {
-                scroll.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        start(scroll, body);
-                    }
-                });
-            }
-        }
-    }
-
-    public static void start(final ScrollView scroll, final TextView body) {
-        stop(scroll);
-        if (scroll == null || body == null) return;
-        scroll.post(new Runnable() {
-            @Override
-            public void run() {
-                final int contentH = body.getHeight();
-                final int viewH = scroll.getHeight();
-                if (contentH <= viewH + 4) return;
-                Runnable tick = new Runnable() {
-                    private int pauseTicks;
-
-                    @Override
-                    public void run() {
-                        if (scroll.getTag(TAG_MARQUEE) != this) return;
-                        int maxScroll = Math.max(0, contentH - viewH);
-                        int y = scroll.getScrollY();
-                        if (pauseTicks > 0) {
-                            pauseTicks--;
-                        } else if (y >= maxScroll) {
-                            scroll.scrollTo(0, 0);
-                            pauseTicks = PAUSE_TICKS;
-                        } else {
-                            scroll.scrollBy(0, 1);
-                        }
-                        marqueeHandler().postDelayed(this, TICK_MS);
-                    }
-                };
-                scroll.setTag(TAG_MARQUEE, tick);
-                marqueeHandler().postDelayed(tick, 1500);
-            }
-        });
-    }
-
-    public static void stop(ScrollView scroll) {
-        if (scroll == null) return;
-        Object tag = scroll.getTag(TAG_MARQUEE);
-        if (tag instanceof Runnable) {
-            marqueeHandler().removeCallbacks((Runnable) tag);
-            scroll.setTag(TAG_MARQUEE, null);
-        }
-        scroll.scrollTo(0, 0);
+        // Wheel-scroll only — no horizontal or auto vertical marquee.
+        body.setSingleLine(false);
+        body.setEllipsize(null);
+        body.setHorizontallyScrolling(false);
+        body.setSelected(false);
     }
 
     public static void stopPanel(FrameLayout row) {
-        if (row == null) return;
-        ScrollView scroll = row.findViewWithTag(TAG_SCROLL);
-        stop(scroll);
+        resetPanelScroll(row);
     }
 
     public static void resetPanelScroll(FrameLayout panel) {
@@ -271,7 +177,6 @@ public final class VerticalTextMarqueeHelper {
         if (panel == null || direction == 0) return false;
         ScrollView scroll = panel.findViewWithTag(TAG_SCROLL);
         if (scroll == null) return false;
-        stop(scroll);
         int step = (int) (defaultLineTextPx(activity) * 0.9f);
         if (step < 8) step = 8;
         int y = scroll.getScrollY() + (direction > 0 ? step : -step);

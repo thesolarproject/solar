@@ -34,16 +34,17 @@ final class QueueBrowseWindow {
         return Math.min(count, start + windowSize(visibleRows, buffer));
     }
 
-    /** Viewport row for browse scroll — edges anchor top/bottom; center lock when count > 4. */
+    /** Viewport row for browse scroll — edges anchor top/bottom; center lock on long lists. */
     static int browseViewportSlot(int index, int count, int viewportRows) {
         if (count <= 0 || index < 0 || index >= count) return 0;
+        int last = Math.max(0, viewportRows - 1);
         if (count == 2) {
-            return index == 0 ? 0 : 1;
+            return index == 0 ? 0 : Math.min(1, last);
         }
         if (index == 0) return 0;
-        if (index == count - 1) return Math.max(0, viewportRows - 1);
-        if (count <= 4) return Math.min(index, Math.max(0, viewportRows - 1));
-        return 1;
+        if (index == count - 1) return last;
+        if (count <= viewportRows) return Math.min(index, last);
+        return viewportRows / 2;
     }
 
     /** Top padding when queue content is shorter than the fixed viewport. */

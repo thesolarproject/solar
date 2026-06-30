@@ -4,6 +4,7 @@ import android.content.Context;
 import android.net.wifi.WifiManager;
 import android.os.PowerManager;
 
+import com.solar.launcher.DeviceFeatures;
 import com.solar.launcher.ReachPeerConnectivity;
 
 import org.json.JSONObject;
@@ -272,7 +273,10 @@ public final class SoulseekClient extends Thread {
   private final String username;
   private final String password;
   private final String clientDescription;
+  /** Static fallback when {@link #appContext} is null (tests). */
   private final String userBio;
+  private volatile boolean profileSharingEnabled = true;
+  private volatile boolean profileMessagingEnabled = true;
   private final File downloadDir;
   private final Context appContext;
   private final Listener listener;
@@ -2113,9 +2117,18 @@ public final class SoulseekClient extends Thread {
     if (callback != null) callback.onError(reason);
   }
 
-  /** Outbound peer user-info description (auto Reach bio from construction time). */
+  /** Outbound peer user-info description — follows Sharing / Messaging toggles when live. */
   private String buildOutboundUserBio() {
+    if (appContext != null) {
+      return DeviceFeatures.reachUserBio(appContext, profileSharingEnabled, profileMessagingEnabled);
+    }
     return userBio != null ? userBio : clientDescription;
+  }
+
+  /** Keep Soulseek profile text aligned with Reach settings toggles. */
+  public void setProfileToggles(boolean sharingEnabled, boolean messagingEnabled) {
+    profileSharingEnabled = sharingEnabled;
+    profileMessagingEnabled = messagingEnabled;
   }
 
   public void addLike(final String item) {

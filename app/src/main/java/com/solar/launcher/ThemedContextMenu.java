@@ -143,6 +143,8 @@ public final class ThemedContextMenu {
     private boolean submenuTierOpen = false;
     private boolean scrollableDetailHeader = false;
     private String detailHeaderText = "";
+    /** Dynamic cap so at least one action row peeks below scrollable message body. */
+    private int detailHeaderMaxHeightPx = 0;
     private int queueRowHeightPx;
     private int quickReturnIndex = -1;
     /** Last quick-bar chip — scroll-right opens this tier (queue/music) instead of root list. */
@@ -298,11 +300,12 @@ public final class ThemedContextMenu {
         submenuTierOpen = open;
     }
 
-    /** First list row is a capped message/detail block (Reach tiers) with vertical marquee. */
+    /** First list row is a capped scrollable message/detail block (Reach tiers). */
     public void setScrollableDetailHeader(boolean enabled) {
         scrollableDetailHeader = enabled;
         if (!enabled) {
             detailHeaderText = "";
+            detailHeaderMaxHeightPx = 0;
         }
     }
 
@@ -1334,15 +1337,12 @@ public final class ThemedContextMenu {
         }
 
         if (subtitle != null && subtitle.length() > 0 && dialogStyle) {
-            TextView sub = new TextView(activity);
-            sub.setText(subtitle);
-            sub.setTypeface(ThemeManager.getCustomFont());
-            sub.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
-                    activity.getResources().getDimension(R.dimen.y1_menu_text_size) * 0.82f);
-            ThemeManager.applyThemedTextStyle(sub, ThemeManager.getHintTextColor());
-            sub.setMaxLines(4);
-            sub.setPadding(0, 0, 0, (int) (8 * density));
-            panel.addView(sub);
+            int subMaxH = VerticalTextMarqueeHelper.defaultMaxHeightPx(activity);
+            FrameLayout subPanel = VerticalTextMarqueeHelper.createCappedPanel(activity, subtitle, subMaxH);
+            LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            subLp.bottomMargin = (int) (4 * density);
+            panel.addView(subPanel, subLp);
         }
 
         itemsScroll = new Y1SafeScrollView(activity);
@@ -2599,6 +2599,10 @@ public final class ThemedContextMenu {
 
     private void updateListHeightToContent() {
         if (itemsScroll == null || itemsHost == null) return;
+        computeDetailHeaderMaxHeight();
+        if (scrollableDetailHeader && itemsHost.getChildCount() > 0) {
+            refreshScrollableDetailHeader();
+        }
         int padBefore = itemsHost.getPaddingTop();
         // Browse: keep viewport padding stable through measure+scroll (clearing it caused slot gaps).
         // Move ribbon: padding must stay zero — the 3-slot ribbon owns the whole viewport.
@@ -3417,7 +3421,30 @@ public final class ThemedContextMenu {
         return rowHeaders != null && index >= 0 && index < rowHeaders.length && rowHeaders[index];
     }
 
+    /** Reserve list height so the first action row peeks below a scrollable message header. */
+    private void computeDetailHeaderMaxHeight() {
+        detailHeaderMaxHeightPx = 0;
+        if (!scrollableDetailHeader || labels == null || labels.length == 0) return;
+        int actionRows = 0;
+        for (int i = 0; i < labels.length; i++) {
+            if (!isHeaderRow(i) && !isDecorRow(i)) actionRows++;
+        }
+        int defaultMax = VerticalTextMarqueeHelper.defaultMaxHeightPx(activity);
+        if (actionRows < 1) {
+            detailHeaderMaxHeightPx = defaultMax;
+            return;
+        }
+        int rowSlot = rowHeightPx > 0 ? rowHeightPx + 2 : 0;
+        int reserved = rowSlot;
+        if (actionRows >= 2 && maxListHeightPx >= rowSlot * 2 + defaultMax / 2) {
+            reserved = rowSlot * 2;
+        }
+        int cap = maxListHeightPx > 0 ? maxListHeightPx - reserved : defaultMax;
+        detailHeaderMaxHeightPx = Math.max((int) (defaultMax * 0.45f), Math.min(defaultMax, cap));
+    }
+
     private int scrollableDetailHeaderHeightPx() {
+        if (detailHeaderMaxHeightPx > 0) return detailHeaderMaxHeightPx;
         return VerticalTextMarqueeHelper.defaultMaxHeightPx(activity);
     }
 
@@ -3767,7 +3794,8 @@ public final class ThemedContextMenu {
             tv.setCompoundDrawables(d, null, null, null);
             tv.setCompoundDrawablePadding(pad);
         }
-        tv.setPadding(textPadLeft, (int) (8 * density), textPadLeft, (int) (2 * density));
+        tv.setPadding(textPadLeft, (int) (8 * density), textPadLeft,
+                VerticalTextMarqueeHelper.messagePadBottomExtraPx(activity) + (int) (4 * density));
         return tv;
     }
 

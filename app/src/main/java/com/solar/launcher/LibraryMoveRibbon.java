@@ -8,14 +8,15 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 
 /**
- * ponytail: 3-slot move ribbon for library playlist reorder — O(1) views per wheel step,
- * same ticker animation model as {@link ThemedContextMenu} queue move ribbon.
+ * ponytail: 5-slot move ribbon for library playlist reorder — O(1) views per wheel step,
+ * variable mover slot + bottom padding; ticker animation model matches queue move ribbon.
  */
 final class LibraryMoveRibbon {
     private static final int TAG_RIBBON_SLOT = 0x70cc0020;
 
     static final int ANIM_MS = 130;
     static final int ENTER_MS = 150;
+    static final int SLOT_SHIFT_MS = 150;
     static final int CONFIRM_SHOW_MS = 120;
     static final int CONFIRM_HOLD_MS = 450;
 
@@ -34,8 +35,9 @@ final class LibraryMoveRibbon {
     private final Binder binder;
     private final android.app.Activity activity;
     private int moveFrom = -1;
-    private int enterBrowseSlot = QueueMoveWindow.RIBBON_CENTER;
+    private int enterBrowseSlot = PlaylistMoveWindow.SLOT_1;
     private int hostPadTopPx = 0;
+    private int lastMoveSlot = -1;
     private boolean ribbonActive;
     private boolean animating;
     private Runnable confirmClearTask;
@@ -60,15 +62,11 @@ final class LibraryMoveRibbon {
         moveFrom = pickIndex;
         enterBrowseSlot = browseSlot;
         hostPadTopPx = Math.max(0, padTopPx);
+        lastMoveSlot = PlaylistMoveWindow.moveSlot(pickIndex, binder.itemCount());
         ribbonActive = false;
         animating = false;
         enterRibbon();
         animateRibbonEnter();
-    }
-
-    /** @deprecated use {@link #enter(int, int, int)} */
-    void enter(int pickIndex) {
-        enter(pickIndex, QueueMoveWindow.RIBBON_CENTER, 0);
     }
 
     void teardown() {
@@ -79,23 +77,31 @@ final class LibraryMoveRibbon {
         animating = false;
         ribbonActive = false;
         moveFrom = -1;
+        lastMoveSlot = -1;
         if (host != null) host.removeAllViews();
     }
 
     /** Wheel step after backing list order was updated. */
     void onMoveIndexChanged(int newIndex, int wheelDelta) {
+        int count = binder.itemCount();
+        int newSlot = PlaylistMoveWindow.moveSlot(newIndex, count);
+        int prevSlot = lastMoveSlot >= 0 ? lastMoveSlot : PlaylistMoveWindow.moveSlot(moveFrom, count);
         moveFrom = newIndex;
         if (!ribbonActive) {
             enterRibbon();
             populateRibbon();
+            lastMoveSlot = newSlot;
             return;
         }
         Runnable bind = new Runnable() {
             @Override public void run() {
                 populateRibbon();
+                lastMoveSlot = newSlot;
             }
         };
-        if (wheelDelta != 0 && !animating) {
+        if (newSlot != prevSlot && !animating) {
+            animateSlotShift(prevSlot, newSlot, bind);
+        } else if (wheelDelta != 0 && !animating) {
             animateRibbonStrip(wheelDelta, bind);
         } else if (!animating) {
             bind.run();
@@ -107,13 +113,14 @@ final class LibraryMoveRibbon {
             if (onComplete != null) onComplete.run();
             return;
         }
-        View row = findRibbonSlotRow(QueueMoveWindow.RIBBON_CENTER);
+        View row = findMoverRow();
         if (!(row instanceof FrameLayout)) {
             if (onComplete != null) onComplete.run();
             return;
         }
         FrameLayout fl = (FrameLayout) row;
-        binder.bindRow(fl, index, QueueMoveWindow.RIBBON_CENTER, false);
+        int moverSlot = PlaylistMoveWindow.moveSlot(index, binder.itemCount());
+        binder.bindRow(fl, index, moverSlot, false);
         android.widget.ImageView confirm = (android.widget.ImageView) fl.findViewWithTag(
                 MoveRibbonRows.TAG_CONFIRM);
         if (confirm == null) {
@@ -149,17 +156,113 @@ final class LibraryMoveRibbon {
         host.postDelayed(confirmClearTask, CONFIRM_HOLD_MS);
     }
 
+    /**
+     * Timetable-style handoff after confirm checkmark — outer rows ticker away, mover slides
+     * to browse slot alignment before the library list crossfades in underneath.
+     */
+    void animateConfirmHandoff(int placedIndex, int browseSlot, final Runnable onComplete) {
+        if (host == null || !ribbonActive) {
+            if (onComplete != null) onComplete.run();
+            return;
+        }
+        int count = binder.itemCount();
+        int moverSlot = PlaylistMoveWindow.moveSlot(placedIndex, count);
+        int slotH = binder.rowHeightPx() + 2;
+        float exitTy = (browseSlot - moverSlot) * (float) slotH;
+        animating = true;
+        DecelerateInterpolator ease = new DecelerateInterpolator(1.35f);
+        int animCount = 0;
+        if (scrollParent != null) animCount++;
+        final View mover = findMoverRow();
+        if (mover != null && Math.abs(exitTy) >= 0.5f) animCount++;
+        for (int slot = PlaylistMoveWindow.SLOT_0; slot <= PlaylistMoveWindow.LAST_SLOT; slot++) {
+            if (slot == moverSlot) continue;
+            View v = findRibbonSlotRow(slot);
+            if (v != null && v.getVisibility() == View.VISIBLE) animCount++;
+        }
+        if (animCount == 0) {
+            animating = false;
+            if (onComplete != null) onComplete.run();
+            return;
+        }
+        final int[] remaining = new int[] { animCount };
+        final Runnable finish = new Runnable() {
+            @Override public void run() {
+                remaining[0]--;
+                if (remaining[0] <= 0) {
+                    animating = false;
+                    if (onComplete != null) onComplete.run();
+                }
+            }
+        };
+        if (mover != null && Math.abs(exitTy) >= 0.5f) {
+            mover.animate().cancel();
+            mover.animate()
+                    .translationY(exitTy)
+                    .setDuration(ENTER_MS)
+                    .setInterpolator(ease)
+                    .setListener(new android.animation.AnimatorListenerAdapter() {
+                        @Override
+                        public void onAnimationEnd(android.animation.Animator animation) {
+                            mover.animate().setListener(null);
+                            finish.run();
+                        }
+                    });
+        }
+        for (int slot = PlaylistMoveWindow.SLOT_0; slot <= PlaylistMoveWindow.LAST_SLOT; slot++) {
+            if (slot == moverSlot) continue;
+            final View v = findRibbonSlotRow(slot);
+            if (v == null || v.getVisibility() != View.VISIBLE) continue;
+            final float dy = exitTy >= 0 ? slotH * 0.18f : -slotH * 0.18f;
+            v.animate().cancel();
+            v.setTranslationY(0f);
+            v.animate()
+                    .translationY(dy)
+                    .alpha(0.38f)
+                    .setDuration(ANIM_MS)
+                    .setInterpolator(ease)
+                    .setListener(new android.animation.AnimatorListenerAdapter() {
+                        @Override
+                        public void onAnimationEnd(android.animation.Animator animation) {
+                            v.animate().setListener(null);
+                            finish.run();
+                        }
+                    });
+        }
+        if (scrollParent != null) {
+            scrollParent.animate().cancel();
+            scrollParent.animate()
+                    .alpha(0f)
+                    .setDuration(ENTER_MS)
+                    .setInterpolator(ease)
+                    .setListener(new android.animation.AnimatorListenerAdapter() {
+                        @Override
+                        public void onAnimationEnd(android.animation.Animator animation) {
+                            scrollParent.animate().setListener(null);
+                            finish.run();
+                        }
+                    });
+        }
+    }
+
     private void enterRibbon() {
         if (host == null) return;
         ribbonActive = true;
         animating = false;
         host.removeAllViews();
-        host.setPadding(0, hostPadTopPx, 0, 0);
+        applyHostPadding();
         int rowH = binder.rowHeightPx();
-        host.addView(createSlotRow(QueueMoveWindow.RIBBON_ABOVE, rowH));
-        host.addView(createSlotRow(QueueMoveWindow.RIBBON_CENTER, rowH));
-        host.addView(createSlotRow(QueueMoveWindow.RIBBON_BELOW, rowH));
+        for (int slot = PlaylistMoveWindow.SLOT_0; slot <= PlaylistMoveWindow.LAST_SLOT; slot++) {
+            host.addView(createSlotRow(slot, rowH));
+        }
         if (scrollParent != null) scrollParent.scrollTo(0, 0);
+    }
+
+    private void applyHostPadding() {
+        if (host == null) return;
+        int slotH = binder.rowHeightPx() + 2;
+        int bottom = PlaylistMoveWindow.bottomPaddingPx(moveFrom, binder.itemCount(), slotH);
+        host.setPadding(0, hostPadTopPx, 0, bottom);
     }
 
     private FrameLayout createSlotRow(int ribbonSlot, int rowH) {
@@ -180,20 +283,24 @@ final class LibraryMoveRibbon {
         return null;
     }
 
+    private View findMoverRow() {
+        int ms = PlaylistMoveWindow.moveSlot(moveFrom, binder.itemCount());
+        return findRibbonSlotRow(ms);
+    }
+
     private void populateRibbon() {
         if (!ribbonActive || host == null) return;
+        applyHostPadding();
         final int count = binder.itemCount();
         final int moveIdx = moveFrom;
-        populateRibbonRow(findRibbonSlotRow(QueueMoveWindow.RIBBON_ABOVE),
-                QueueMoveWindow.ribbonAboveIndex(moveIdx), QueueMoveWindow.RIBBON_ABOVE);
-        populateRibbonRow(findRibbonSlotRow(QueueMoveWindow.RIBBON_CENTER),
-                moveIdx, QueueMoveWindow.RIBBON_CENTER);
-        populateRibbonRow(findRibbonSlotRow(QueueMoveWindow.RIBBON_BELOW),
-                QueueMoveWindow.ribbonBelowIndex(moveIdx, count), QueueMoveWindow.RIBBON_BELOW);
+        for (int slot = PlaylistMoveWindow.SLOT_0; slot <= PlaylistMoveWindow.LAST_SLOT; slot++) {
+            populateRibbonRow(findRibbonSlotRow(slot),
+                    PlaylistMoveWindow.slotDataIndex(moveIdx, slot, count), slot, moveIdx);
+        }
         if (scrollParent != null) scrollParent.scrollTo(0, 0);
     }
 
-    private void populateRibbonRow(View row, int dataIndex, int ribbonSlot) {
+    private void populateRibbonRow(View row, int dataIndex, int ribbonSlot, int moveIdx) {
         if (!(row instanceof FrameLayout)) return;
         FrameLayout fl = (FrameLayout) row;
         boolean empty = dataIndex < 0 || dataIndex >= binder.itemCount();
@@ -205,27 +312,28 @@ final class LibraryMoveRibbon {
             return;
         }
         row.setVisibility(View.VISIBLE);
-        row.setAlpha(ribbonSlot == QueueMoveWindow.RIBBON_CENTER ? 1f : 0.82f);
+        boolean moving = dataIndex == moveIdx;
+        row.setAlpha(moving ? 1f : 0.82f);
         binder.bindRow(fl, dataIndex, ribbonSlot, false);
     }
 
     private void animateRibbonEnter() {
         populateRibbon();
+        int count = binder.itemCount();
         int slotH = binder.rowHeightPx() + 2;
-        float startTy = (enterBrowseSlot - QueueMoveWindow.RIBBON_CENTER) * (float) slotH;
+        float startTy = PlaylistMoveWindow.enterTranslationSlots(moveFrom, count, enterBrowseSlot)
+                * (float) slotH;
         if (Math.abs(startTy) < 0.5f) {
             animateRibbonEnterFade();
             return;
         }
         animating = true;
         DecelerateInterpolator ease = new DecelerateInterpolator(1.35f);
-        final int[] remaining = new int[] { QueueMoveWindow.VISIBLE_ROWS };
-        for (int slot = QueueMoveWindow.RIBBON_ABOVE; slot <= QueueMoveWindow.RIBBON_BELOW; slot++) {
+        final int[] remaining = new int[] { 0 };
+        for (int slot = PlaylistMoveWindow.SLOT_0; slot <= PlaylistMoveWindow.LAST_SLOT; slot++) {
             final View row = findRibbonSlotRow(slot);
-            if (row == null || row.getVisibility() != View.VISIBLE) {
-                remaining[0]--;
-                continue;
-            }
+            if (row == null || row.getVisibility() != View.VISIBLE) continue;
+            remaining[0]++;
             row.animate().cancel();
             row.setTranslationY(startTy);
             row.animate()
@@ -248,11 +356,13 @@ final class LibraryMoveRibbon {
         animating = true;
         DecelerateInterpolator ease = new DecelerateInterpolator(1.35f);
         final int[] remaining = new int[] { 0 };
-        for (int slot = QueueMoveWindow.RIBBON_ABOVE; slot <= QueueMoveWindow.RIBBON_BELOW; slot++) {
+        int moveIdx = moveFrom;
+        for (int slot = PlaylistMoveWindow.SLOT_0; slot <= PlaylistMoveWindow.LAST_SLOT; slot++) {
             final View row = findRibbonSlotRow(slot);
             if (row == null || row.getVisibility() != View.VISIBLE) continue;
             remaining[0]++;
-            final float targetAlpha = slot == QueueMoveWindow.RIBBON_CENTER ? 1f : 0.82f;
+            int dataIdx = PlaylistMoveWindow.slotDataIndex(moveIdx, slot, binder.itemCount());
+            final float targetAlpha = dataIdx == moveIdx ? 1f : 0.82f;
             row.animate().cancel();
             row.setTranslationY(0f);
             row.setAlpha(0.45f);
@@ -272,26 +382,54 @@ final class LibraryMoveRibbon {
         if (remaining[0] <= 0) animating = false;
     }
 
+    /** Boundary cross — mover slot changes (e.g. into last-two positions). */
+    private void animateSlotShift(int fromSlot, int toSlot, final Runnable onEnd) {
+        if (host == null) {
+            if (onEnd != null) onEnd.run();
+            return;
+        }
+        int slotH = binder.rowHeightPx() + 2;
+        final float dy = (toSlot - fromSlot) * (float) slotH;
+        animating = true;
+        DecelerateInterpolator ease = new DecelerateInterpolator(1.35f);
+        host.animate().cancel();
+        host.setTranslationY(0f);
+        host.animate()
+                .translationY(-dy)
+                .setDuration(SLOT_SHIFT_MS)
+                .setInterpolator(ease)
+                .setListener(new android.animation.AnimatorListenerAdapter() {
+                    @Override
+                    public void onAnimationEnd(android.animation.Animator animation) {
+                        host.animate().setListener(null);
+                        host.setTranslationY(0f);
+                        animating = false;
+                        if (onEnd != null) onEnd.run();
+                    }
+                });
+    }
+
     private void animateRibbonStrip(final int wheelDelta, final Runnable onEnd) {
         if (wheelDelta == 0) {
             if (onEnd != null) onEnd.run();
             return;
         }
-        View above = findRibbonSlotRow(QueueMoveWindow.RIBBON_ABOVE);
-        View below = findRibbonSlotRow(QueueMoveWindow.RIBBON_BELOW);
-        View center = findRibbonSlotRow(QueueMoveWindow.RIBBON_CENTER);
-        if (center == null) {
+        int count = binder.itemCount();
+        int moverSlot = PlaylistMoveWindow.moveSlot(moveFrom, count);
+        View mover = findRibbonSlotRow(moverSlot);
+        if (mover == null) {
             if (onEnd != null) onEnd.run();
             return;
         }
-        center.animate().cancel();
-        center.setTranslationY(0f);
-        center.setAlpha(1f);
+        mover.animate().cancel();
+        mover.setTranslationY(0f);
+        mover.setAlpha(1f);
         int slotH = binder.rowHeightPx() + 2;
         final float dy = wheelDelta > 0 ? -slotH : slotH;
-        final View[] outers = new View[] { above, below };
         int animCount = 0;
-        for (View v : outers) {
+        for (int slot = PlaylistMoveWindow.SLOT_0; slot <= PlaylistMoveWindow.LAST_SLOT; slot++) {
+            if (slot == moverSlot) continue;
+            View v = findRibbonSlotRow(slot);
             if (v != null && v.getVisibility() == View.VISIBLE) animCount++;
         }
         if (animCount == 0) {
@@ -300,7 +438,9 @@ final class LibraryMoveRibbon {
         }
         animating = true;
         final int[] remaining = new int[] { animCount };
-        for (final View v : outers) {
+        for (int slot = PlaylistMoveWindow.SLOT_0; slot <= PlaylistMoveWindow.LAST_SLOT; slot++) {
+            if (slot == moverSlot) continue;
+            final View v = findRibbonSlotRow(slot);
             if (v == null || v.getVisibility() != View.VISIBLE) continue;
             v.animate().cancel();
             v.setTranslationY(0f);
@@ -321,7 +461,7 @@ final class LibraryMoveRibbon {
 
     private void finishStripAnim(Runnable onEnd) {
         animating = false;
-        for (int slot = QueueMoveWindow.RIBBON_ABOVE; slot <= QueueMoveWindow.RIBBON_BELOW; slot++) {
+        for (int slot = PlaylistMoveWindow.SLOT_0; slot <= PlaylistMoveWindow.LAST_SLOT; slot++) {
             View row = findRibbonSlotRow(slot);
             if (row == null) continue;
             row.animate().cancel();

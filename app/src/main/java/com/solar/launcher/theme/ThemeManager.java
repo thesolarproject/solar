@@ -66,6 +66,12 @@ public class ThemeManager {
     private static Typeface cachedFont;
     private static String cachedFontKey = "";
     private static boolean statusBarMatchItemText = false;
+    /** User pref: Now Playing title/artist use list item text colour (default off — Y1 white). */
+    private static boolean nowPlayingMatchItemText = false;
+    /** User pref: semi-translucent meta bars (default off — theme engine / Y1 original). */
+    private static boolean nowPlayingBackdropEnabled = false;
+    /** User pref: dithered LCD-style album art tinted to theme font colour. */
+    private static boolean nowPlayingLcdArtEnabled = false;
 
     /** ponytail: external Themes/ with filesDir fallback when sdcard missing (emulator). */
     public static String resolveThemesRoot(Context ctx) {
@@ -580,6 +586,35 @@ public class ThemeManager {
         return statusBarMatchItemText;
     }
 
+    public static void setNowPlayingMatchItemText(boolean match) {
+        nowPlayingMatchItemText = match;
+    }
+
+    public static boolean isNowPlayingMatchItemText() {
+        return nowPlayingMatchItemText;
+    }
+
+    public static void setNowPlayingBackdropEnabled(boolean enabled) {
+        nowPlayingBackdropEnabled = enabled;
+    }
+
+    public static boolean isNowPlayingBackdropEnabled() {
+        return nowPlayingBackdropEnabled;
+    }
+
+    public static void setNowPlayingLcdArtEnabled(boolean enabled) {
+        nowPlayingLcdArtEnabled = enabled;
+    }
+
+    public static boolean isNowPlayingLcdArtEnabled() {
+        return nowPlayingLcdArtEnabled;
+    }
+
+    /** Tint for LCD album-art filter — same source as Now Playing match text. */
+    public static int getAlbumArtTintColor() {
+        return getNowPlayingTextColor();
+    }
+
     /** ponytail: statusConfig.statusBarColor with alpha; dark fallback when unset on non-Y1 themes */
     public static int getStatusBarBackgroundColor() {
         if (ActiveThemeEngine.isJjMode()) return JjThemeManager.getStatusBarBackgroundColor();
@@ -782,6 +817,9 @@ public class ThemeManager {
     public static int getNowPlayingTextColor() {
         Integer c = getNowPlayingTextColorOpt();
         if (c != null) return c;
+        if (nowPlayingMatchItemText) {
+            return getItemTextColorNormal();
+        }
         if (getNowPlayingInfoBarMode() == NOW_PLAYING_BARS_ITEM) return getItemTextColorSelected();
         return 0xFFFFFFFF;
     }
@@ -792,12 +830,18 @@ public class ThemeManager {
             int c = parseColorOpt(player, "progressTextColor");
             if (c != Integer.MIN_VALUE) return c;
         }
+        if (nowPlayingMatchItemText) {
+            return getItemTextColorNormal();
+        }
         Integer np = getNowPlayingTextColorOpt();
         if (np != null) return np;
         return 0xFFFFFFFF;
     }
 
     public static Drawable getNowPlayingInfoBarBackground(android.content.res.Resources res, int widthPx, int heightPx) {
+        if (!nowPlayingBackdropEnabled) {
+            return new android.graphics.drawable.ColorDrawable(0);
+        }
         int mode = getNowPlayingInfoBarMode();
         if (mode == NOW_PLAYING_BARS_NONE) {
             return new android.graphics.drawable.ColorDrawable(0);

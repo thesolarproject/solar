@@ -237,4 +237,10 @@ public final class PlaylistManager {
       return f.getAbsolutePath();
     }
   }
+
+  /** Delete local M3U playlist file — does not remove referenced audio files. */
+  public static boolean deletePlaylistFile(File m3u) {
+    if (m3u == null || !m3u.isFile()) return false;
+    return m3u.delete();
+  }
 }

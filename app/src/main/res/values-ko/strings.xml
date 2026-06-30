@@ -33,6 +33,10 @@
     <string name="settings_sub_appearance">설정: 모양</string>
     <string name="settings_sub_theme_picker">설정: 테마</string>
     <string name="settings_status_bar_match_font">상태 표시줄을 테마 글꼴색과 맞춤</string>
+    <string name="settings_now_playing_match_font">재생 화면을 테마 글꼴색과 맞춤</string>
+    <string name="settings_now_playing_backdrop">재생 화면 배경 바</string>
+    <string name="settings_now_playing_lcd_art">LCD 앨범 아트</string>
+    <string name="settings_now_playing_lcd_art_hint">테마 글꼴색으로 틴트된 저해상도 디더 커버</string>
     <string name="settings_sub_themes">설정: 테마 받기</string>
     <string name="settings_sub_reach">설정: Reach</string>
     <string name="settings_sub_soulseek">설정: Reach / Soulseek</string>
@@ -536,6 +540,17 @@
     <string name="context_action_play_folder">폴더 재생</string>
     <string name="context_action_add_to_queue">대기열에 추가</string>
     <string name="context_action_add_to_playlist">재생목록에 추가</string>
+    <string name="context_add_to_local_playlist">로컬 재생목록에 추가</string>
+    <string name="context_add_to_deezer_playlist">Deezer 재생목록에 추가</string>
+    <string name="context_delete_local_playlist">재생목록 삭제</string>
+    <string name="context_delete_local_playlist_confirm">이 재생목록을 영구 삭제합니다. 기기의 음악 파일은 삭제되지 않습니다.</string>
+    <string name="context_delete_deezer_playlist">Deezer 재생목록 삭제</string>
+    <string name="context_delete_deezer_playlist_confirm">Deezer 계정에서 이 재생목록과 모든 트랙을 영구 삭제합니다. 로컬 저장본은 삭제되지 않습니다.</string>
+    <string name="library_playlist_deleted">재생목록 삭제됨</string>
+    <string name="deezer_playlist_deleted">Deezer 재생목록 삭제됨</string>
+    <string name="deezer_playlist_delete_failed">재생목록 삭제 실패: %1$s</string>
+    <string name="deezer_playlist_track_added">%1$s에 추가됨</string>
+    <string name="context_add_to_deezer_playlist_title">Deezer 재생목록에 추가</string>
     <string name="context_action_add_album_to_playlist">앨범을 재생목록에 추가</string>
     <string name="context_action_add_artist_to_playlist">아티스트를 재생목록에 추가</string>
     <string name="context_add_to_playlist_title">재생목록에 추가</string>
@@ -666,4 +681,15 @@
     <string name="toast_bg_cleared">사용자 배경이 지워졌습니다.</string>
     <string name="toast_bg_none">설정된 사용자 배경이 없습니다.</string>
     <string name="toast_bg_applied">배경이 적용되었습니다!</string>
+    <string name="settings_debug_flow_theme">Flow 테마 장식 (실험)</string>
+    <string name="status_flow">Flow</string>
+    <string name="flow_open">Flow</string>
+    <string name="flow_open_section">Flow에서 열기</string>
+    <string name="flow_mode_albums">앨범</string>
+    <string name="flow_mode_artists">아티스트</string>
+    <string name="flow_mode_playlists">재생 목록</string>
+    <string name="flow_mode_podcasts">팟캐스트</string>
+    <string name="flow_empty">표시할 항목 없음</string>
+    <string name="flow_loading">불러오는 중…</string>
+    <string name="flow_loading_episodes">에피소드 불러오는 중…</string>
 </resources>

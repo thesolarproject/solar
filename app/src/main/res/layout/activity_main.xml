@@ -733,4 +733,7 @@
             android:layout_height="match_parent"
             android:scaleType="fitCenter" />
     </FrameLayout>
+
+    <include layout="@layout/layout_flow_mode" />
+
 </FrameLayout>
