@@ -796,12 +796,18 @@ public class MainActivity extends Activity {
     /** Skip default-art reset on first prepareMusicTrack after Flow 3D handoff. */
     private boolean preserveHandoffAlbumArt = false;
     private boolean reverseHandoffInProgress;
+    /** Cold-catalog prep may finish after morph — still apply carousel bind. */
+    private boolean reverseHandoffCatalogPending;
+    /** Set when NP→Flow morph completes — skip carousel rebuild on changeScreen. */
+    private boolean npToFlowHandoffLanding;
     /** Crossfade status bar Now Playing → Flow during reverse handoff reveal. */
     private boolean statusBarFlowHandoffCrossfade;
     private static final int STATUS_BAR_HANDOFF_FADE_MS = 120;
     private int statusBarHandoffFadeGen;
     /** Screen user was on before entering Flow — survives NP round-trip for Back exit. */
     private int flowEntryReturnSnapshot = STATE_MENU;
+    /** True while NP→Flow morph runs from home menu preview (not full player slot). */
+    private boolean reverseHandoffFromMenu;
     /** Fail-open Back from NP when handoff flag sticks >500ms. */
     private long handoffBackBlockedAtMs;
     private String settingsParentKey = null;
@@ -1389,6 +1395,34 @@ public class MainActivity extends Activity {
     private String connectedA2dpAddress;
     /** User tapped Connect on a paired device — start queue on A2DP when link comes up. */
     private boolean userInitiatedA2dpConnect;
+    /** Address of device with an in-flight A2DP connect — drives 10s connecting throbber on BT UIs. */
+    private String btConnectingAddress;
+    private long btConnectingStartedAt;
+    private boolean btConnectInProgress;
+    private static final long BT_CONNECT_THROBBER_MS = 10_000L;
+    private static final String TAG_BT_ROW_STATE = "bt_row_state";
+    private static final String TAG_BT_ROW_SPIN = "bt_row_spin";
+    private final Runnable btConnectTimeoutRunnable = new Runnable() {
+        @Override public void run() { endBtConnect(); }
+    };
+    private final Runnable btConnectUiTickRunnable = new Runnable() {
+        @Override public void run() {
+            if (!btConnectInProgress) return;
+            BluetoothDevice target = bluetoothDeviceByAddress(btConnectingAddress);
+            // Audio link up — drop throbber early and show checkmark.
+            if (target != null && isBluetoothAudioConnected(target)) {
+                endBtConnect();
+                return;
+            }
+            refreshBtConnectUi();
+            long elapsed = System.currentTimeMillis() - btConnectingStartedAt;
+            if (elapsed < BT_CONNECT_THROBBER_MS) {
+                progressHandler.postDelayed(this, 400L);
+            } else {
+                endBtConnect();
+            }
+        }
+    };
     private static final String PREF_LAST_BT_AUDIO = "last_bt_audio_address";
     private final BluetoothProfile.ServiceListener a2dpProfileListener = new BluetoothProfile.ServiceListener() {
         @Override
@@ -1766,6 +1800,7 @@ public class MainActivity extends Activity {
                             && pairingDeviceAddress.equals(device.getAddress())) {
                         Toast.makeText(MainActivity.this, getString(R.string.toast_pairing_failed), Toast.LENGTH_SHORT).show();
                         pairingDeviceAddress = null;
+                        endBtConnect();
                     }
                 }
             } else if (BluetoothDevice.ACTION_PAIRING_REQUEST.equals(action)) {
@@ -1781,6 +1816,7 @@ public class MainActivity extends Activity {
                 int state = intent.getIntExtra(BluetoothProfile.EXTRA_STATE, BluetoothProfile.STATE_DISCONNECTED);
                 if (device != null && state == BluetoothProfile.STATE_CONNECTED) {
                     connectedA2dpAddress = device.getAddress();
+                    endBtConnect();
                     prefs.edit().putString(PREF_LAST_BT_AUDIO, device.getAddress()).apply();
                     cancelBluetoothDiscoveryIfActive();
                     if (avrcpTrackInfoWriter != null) avrcpTrackInfoWriter.ensureReady();
@@ -1798,9 +1834,16 @@ public class MainActivity extends Activity {
                         }
                     }, 600);
                     Toast.makeText(MainActivity.this, getString(R.string.toast_audio_connected, device.getName()), Toast.LENGTH_SHORT).show();
-                } else if (device != null && state == BluetoothProfile.STATE_DISCONNECTED
-                        && device.getAddress().equals(connectedA2dpAddress)) {
-                    connectedA2dpAddress = null;
+                } else if (device != null && state == BluetoothProfile.STATE_DISCONNECTED) {
+                    if (device.getAddress().equals(connectedA2dpAddress)) {
+                        connectedA2dpAddress = null;
+                    }
+                    if (btConnectingAddress != null
+                            && btConnectingAddress.equals(device.getAddress())) {
+                        endBtConnect();
+                    }
+                } else if (device != null && state == BluetoothProfile.STATE_CONNECTING) {
+                    refreshBtConnectUi();
                 }
                 if (themedContextMenu != null && themedContextMenu.isShowing()
                         && isBtTierMounted()) {
@@ -1837,7 +1880,8 @@ public class MainActivity extends Activity {
 
             } else if (Intent.ACTION_MEDIA_MOUNTED.equals(action)) {
                 reloadThemeAfterStorageReady();
-                scanMediaLibraryAsync();
+                // ponytail: remount alone doesn't rescan — only ingest paths not yet in SQLite.
+                refreshLibraryAfterStorageMount();
             }
         }
     };
@@ -8525,7 +8569,7 @@ public class MainActivity extends Activity {
                     flowScreenHost.requestCarouselFocus();
                 } else if (flowScreenHost.hasPendingPlayerReturn()) {
                     flowScreenHost.restoreAfterPlayer();
-                } else if (leavingScreen == STATE_PLAYER) {
+                } else if (leavingScreen == STATE_PLAYER && !npToFlowHandoffLanding) {
                     flowScreenHost.restoreCarouselSession(flowLaunchRequest);
                     flowScreenHost.syncCarouselToNowPlayingIfActive();
                 } else if (flowScreenHost.hasResidentCarousel(flowLaunchRequest)) {
@@ -8541,6 +8585,9 @@ public class MainActivity extends Activity {
                 d.put("consumedPrepared", consumedPrepared);
                 d.put("leavingScreen", leavingScreen);
                 d.put("skipFlowLayoutFade", skipFlowLayoutFade);
+                d.put("npToFlowLanding", npToFlowHandoffLanding);
+                d.put("handoffAnim", FlowPlayerHandoff.isHandoffAnimating());
+                d.put("restoreCarousel", leavingScreen == STATE_PLAYER && !npToFlowHandoffLanding);
                 DebugSessionLog.log("MainActivity.changeScreen", "STATE_FLOW branch", "H3", d);
             } catch (Exception ignored) {}
             // #endregion
@@ -11272,25 +11319,156 @@ public class MainActivity extends Activity {
         }
     }
 
-    // 💡 페어링 상태(isPaired)를 파라미터로 받아서 색상과 아이콘을 바꾸는 함수
+    // Device row: name on the left, Paired / connecting throbber / ✓ on the right (no colour prefixes).
     private void addBluetoothItemToUI(String name, final BluetoothDevice device, boolean isPaired, boolean isConnected) {
-        String prefix = isConnected ? "♪ [CONNECTED] " : (isPaired ? "✔ [PAIRED] " : "🎧 ");
-        final Button btnDevice = createListButton(prefix + name);
-
-        if (isConnected || isPaired) {
-            btnDevice.setTextColor(isConnected ? 0xFF00FFFF : 0xFF00FF00);
-            btnDevice.setTypeface(null, android.graphics.Typeface.BOLD);
-        }
-
-        btnDevice.setTag(device);
-        btnDevice.setOnClickListener(new View.OnClickListener() {
+        final LinearLayout row = createBluetoothDeviceRow(name, device);
+        row.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 clickFeedback();
                 pairBluetoothDevice(device);
             }
         });
-        containerBtItems.addView(btnDevice);
+        containerBtItems.addView(row);
+    }
+
+    /** Bluetooth settings list row — themed like other Y1 menus with inline connection state. */
+    private LinearLayout createBluetoothDeviceRow(String name, BluetoothDevice device) {
+        final int rowKind = y1RowKindForScreen();
+        final LinearLayout layout = new LinearLayout(this);
+        layout.setTag(device);
+        layout.setSoundEffectsEnabled(false);
+        layout.setOrientation(LinearLayout.HORIZONTAL);
+        layout.setFocusable(true);
+        layout.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        int hPad = (int) (10 * getResources().getDisplayMetrics().density);
+        layout.setPadding(hPad, 0, hPad, 0);
+        int rowW = listRowWidthPx > 0 ? listRowWidthPx : y1ActiveRowWidthPx();
+        layout.setBackground(getY1RowBackground(false, rowW, rowKind));
+
+        final TextView tvLeft = new TextView(this);
+        tvLeft.setFocusable(false);
+        tvLeft.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
+        tvLeft.setText(name);
+        ThemeManager.applyThemedTextStyle(tvLeft, y1RowTextColorNormal(rowKind));
+        tvLeft.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                getResources().getDimension(R.dimen.y1_menu_text_size));
+        enableMarquee(tvLeft);
+        tvLeft.setLayoutParams(new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
+        layout.addView(tvLeft);
+
+        final android.widget.FrameLayout stateSlot = new android.widget.FrameLayout(this);
+        int spinSize = (int) (y1RowHeightPx * 0.55f);
+        stateSlot.setLayoutParams(new LinearLayout.LayoutParams(
+                spinSize + hPad, y1RowHeightPx));
+        applyBluetoothRowState(stateSlot, bluetoothDeviceStateText(device), spinSize, hPad);
+        layout.addView(stateSlot);
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, y1RowHeightPx);
+        lp.setMargins(0, 1, 0, 1);
+        layout.setLayoutParams(lp);
+
+        layout.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            @Override
+            public void onFocusChange(View v, boolean hasFocus) {
+                int w = layout.getWidth() > 0 ? layout.getWidth()
+                        : (listRowWidthPx > 0 ? listRowWidthPx : y1ActiveRowWidthPx());
+                layout.setBackground(getY1RowBackground(hasFocus, w, rowKind));
+                ThemeManager.applyThemedTextStyle(tvLeft, hasFocus
+                        ? y1RowTextColorSelected(rowKind) : y1RowTextColorNormal(rowKind));
+                layout.setSelected(hasFocus);
+                if (hasFocus) showFastScrollLetter(name);
+            }
+        });
+        return layout;
+    }
+
+    /** Right slot on BT menu rows — muted status text, spinner while connecting, or checkmark. */
+    private void applyBluetoothRowState(android.widget.FrameLayout slot, String stateText,
+            int spinSize, int marginEnd) {
+        if (slot == null) return;
+        slot.removeAllViews();
+        if (ThemedContextMenu.STATE_CONNECTING.equals(stateText)) {
+            ProgressBar spin = new ProgressBar(this, null, android.R.attr.progressBarStyleSmall);
+            spin.setTag(TAG_BT_ROW_SPIN);
+            android.widget.FrameLayout.LayoutParams spinLp = new android.widget.FrameLayout.LayoutParams(
+                    spinSize, spinSize);
+            spinLp.gravity = android.view.Gravity.CENTER_VERTICAL | android.view.Gravity.END;
+            spinLp.rightMargin = marginEnd / 2;
+            slot.addView(spin, spinLp);
+            return;
+        }
+        TextView state = new TextView(this);
+        state.setTag(TAG_BT_ROW_STATE);
+        state.setFocusable(false);
+        state.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
+        state.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                getResources().getDimension(R.dimen.y1_menu_text_size) * 0.9f);
+        state.setSingleLine(true);
+        state.setGravity(android.view.Gravity.CENTER_VERTICAL | android.view.Gravity.END);
+        ThemeManager.applyThemedTextStyle(state, ThemeManager.getTextColorSecondary());
+        if (stateText != null && stateText.length() > 0) {
+            state.setText(stateText);
+        }
+        slot.addView(state, new android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT));
+    }
+
+    private String bluetoothDeviceStateText(BluetoothDevice device) {
+        if (device == null) return "";
+        try {
+            if (isBluetoothAudioConnected(device)) return getString(R.string.common_check);
+            if (isBtDeviceConnecting(device)) return ThemedContextMenu.STATE_CONNECTING;
+            if (device.getBondState() == BluetoothDevice.BOND_BONDED) {
+                return getString(R.string.bluetooth_status_paired);
+            }
+            return getString(R.string.bluetooth_status_nearby);
+        } catch (Exception ignored) {}
+        return "";
+    }
+
+    private boolean isBtDeviceConnecting(BluetoothDevice device) {
+        if (device == null) return false;
+        String addr = device.getAddress();
+        if (addr == null) return false;
+        if (pairingDeviceAddress != null && pairingDeviceAddress.equals(addr)) return true;
+        if (!btConnectInProgress || btConnectingAddress == null) return false;
+        if (!btConnectingAddress.equals(addr)) return false;
+        if (isBluetoothAudioConnected(device)) return false;
+        return System.currentTimeMillis() - btConnectingStartedAt < BT_CONNECT_THROBBER_MS;
+    }
+
+    private void beginBtConnect(BluetoothDevice device) {
+        if (device == null) return;
+        btConnectingAddress = device.getAddress();
+        btConnectingStartedAt = System.currentTimeMillis();
+        btConnectInProgress = true;
+        progressHandler.removeCallbacks(btConnectTimeoutRunnable);
+        progressHandler.removeCallbacks(btConnectUiTickRunnable);
+        progressHandler.postDelayed(btConnectTimeoutRunnable, BT_CONNECT_THROBBER_MS);
+        progressHandler.post(btConnectUiTickRunnable);
+        refreshBtConnectUi();
+    }
+
+    private void endBtConnect() {
+        if (!btConnectInProgress && btConnectingAddress == null) return;
+        btConnectInProgress = false;
+        btConnectingAddress = null;
+        progressHandler.removeCallbacks(btConnectTimeoutRunnable);
+        progressHandler.removeCallbacks(btConnectUiTickRunnable);
+        refreshBtConnectUi();
+    }
+
+    private void refreshBtConnectUi() {
+        if (currentScreenState == STATE_BLUETOOTH) {
+            startBluetoothScan(false);
+        }
+        if (themedContextMenu != null && themedContextMenu.isShowing() && isBtTierMounted()) {
+            refreshContextBluetoothTier(false, false);
+        }
     }
 
     @android.annotation.SuppressLint("MissingPermission")
@@ -11308,6 +11486,7 @@ public class MainActivity extends Activity {
                     } catch (Exception ignored) {}
                     // #endregion
                     disconnectBluetoothAudio(device);
+                    refreshBtConnectUi();
                 } else {
                     // #region agent log
                     try {
@@ -11318,6 +11497,7 @@ public class MainActivity extends Activity {
                     } catch (Exception ignored) {}
                     // #endregion
                     userInitiatedA2dpConnect = true;
+                    beginBtConnect(device);
                     connectBluetoothAudio(device, true);
                 }
                 progressHandler.postDelayed(new Runnable() {
@@ -11336,13 +11516,16 @@ public class MainActivity extends Activity {
                 adapter.cancelDiscovery();
             }
             pairingDeviceAddress = device.getAddress();
+            beginBtConnect(device);
             Toast.makeText(this, getString(R.string.toast_pairing, device.getName()), Toast.LENGTH_SHORT).show();
             if (!createBluetoothBond(device)) {
                 pairingDeviceAddress = null;
+                endBtConnect();
                 Toast.makeText(this, getString(R.string.toast_pairing_failed), Toast.LENGTH_SHORT).show();
             }
         } catch (Exception e) {
             pairingDeviceAddress = null;
+            endBtConnect();
             Toast.makeText(this, getString(R.string.toast_pairing_failed), Toast.LENGTH_SHORT).show();
         }
     }
@@ -11442,9 +11625,21 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** Drop cached A2DP address so UI reverts from ✓ to Paired without waiting for broadcast. */
+    private void clearBluetoothConnectedAddress(BluetoothDevice device) {
+        if (device == null) return;
+        try {
+            String addr = device.getAddress();
+            if (addr != null && addr.equals(connectedA2dpAddress)) {
+                connectedA2dpAddress = null;
+            }
+        } catch (Exception ignored) {}
+    }
+
     @android.annotation.SuppressLint("MissingPermission")
     private void disconnectBluetoothAudio(BluetoothDevice device) {
         if (device == null) return;
+        clearBluetoothConnectedAddress(device);
         ensureA2dpProfile();
         if (bluetoothA2dp == null) {
             Toast.makeText(this, getString(R.string.toast_audio_connect_failed), Toast.LENGTH_SHORT).show();
@@ -11496,11 +11691,13 @@ public class MainActivity extends Activity {
             // #endregion
             if (ok instanceof Boolean && !(Boolean) ok) {
                 Toast.makeText(this, getString(R.string.toast_audio_connect_failed), Toast.LENGTH_SHORT).show();
+                endBtConnect();
             } else {
                 routeAudioToBluetoothA2dp();
             }
         } catch (Exception e) {
             Toast.makeText(this, getString(R.string.toast_audio_connect_failed), Toast.LENGTH_SHORT).show();
+            endBtConnect();
         }
     }
 
@@ -11637,17 +11834,14 @@ public class MainActivity extends Activity {
     @android.annotation.SuppressLint("MissingPermission")
     private boolean isBluetoothAudioConnected(BluetoothDevice device) {
         if (device == null) return false;
-        if (device.getAddress().equals(connectedA2dpAddress)) return true;
-        if (bluetoothA2dp != null) {
-            try {
-                return bluetoothA2dp.getConnectionState(device) == BluetoothProfile.STATE_CONNECTED;
-            } catch (Exception ignored) {}
-        }
         try {
-            return audioManager != null && audioManager.isBluetoothA2dpOn();
-        } catch (Exception ignored) {
-            return false;
-        }
+            String addr = device.getAddress();
+            if (addr != null && addr.equals(connectedA2dpAddress)) return true;
+            if (bluetoothA2dp != null) {
+                return bluetoothA2dp.getConnectionState(device) == BluetoothProfile.STATE_CONNECTED;
+            }
+        } catch (Exception ignored) {}
+        return false;
     }
 
     private void startWifiScan() {
@@ -15539,12 +15733,14 @@ public class MainActivity extends Activity {
                 ? themedContextMenu.focusItemLabel() : null;
         java.util.ArrayList<String> labels = new java.util.ArrayList<String>();
         java.util.ArrayList<String> states = new java.util.ArrayList<String>();
+        java.util.ArrayList<String> iconKeys = new java.util.ArrayList<String>();
         java.util.ArrayList<Runnable> actions = new java.util.ArrayList<Runnable>();
         java.util.ArrayList<Boolean> headers = new java.util.ArrayList<Boolean>();
 
         headers.add(Boolean.FALSE);
         labels.add(bluetoothContextToggleLabel());
         states.add(bluetoothPowerStateText());
+        iconKeys.add(null);
         actions.add(new Runnable() {
             @Override public void run() {
                 toggleBluetoothFromContextMenu();
@@ -15556,6 +15752,7 @@ public class MainActivity extends Activity {
             headers.add(Boolean.FALSE);
             labels.add(getString(R.string.context_action_forget_bluetooth));
             states.add(bluetoothDeviceDisplayName(focused));
+            iconKeys.add(null);
             actions.add(new Runnable() {
                 @Override public void run() {
                     forgetBluetoothDevice(focused);
@@ -15570,6 +15767,7 @@ public class MainActivity extends Activity {
             headers.add(Boolean.FALSE);
             labels.add(getString(R.string.context_bluetooth_scanning));
             states.add(null);
+            iconKeys.add(ThemedContextMenu.ICON_ROW_LOADING);
             actions.add(null);
         }
 
@@ -15577,6 +15775,7 @@ public class MainActivity extends Activity {
             headers.add(Boolean.TRUE);
             labels.add(getString(R.string.status_bluetooth_scan));
             states.add(null);
+            iconKeys.add(null);
             actions.add(null);
             for (String addr : foundBtDevices) {
                 final BluetoothDevice bt = bluetoothDeviceByAddress(addr);
@@ -15585,6 +15784,7 @@ public class MainActivity extends Activity {
                 headers.add(Boolean.FALSE);
                 labels.add(label);
                 states.add(bluetoothStateText(bt));
+                iconKeys.add(null);
                 actions.add(new Runnable() {
                     @Override public void run() {
                         pairBluetoothDevice(bt);
@@ -15594,8 +15794,8 @@ public class MainActivity extends Activity {
                 });
             }
         }
-        showContextMenuTierInPlace(getString(R.string.context_tier_bluetooth), labels, states, headers, actions,
-                resetFocus);
+        showContextMenuTierInPlace(getString(R.string.context_tier_bluetooth), labels, states, iconKeys,
+                headers, actions, resetFocus);
         refreshContextQuickBarIfShowing();
         // #region agent log
         if (DebugAgentLog.ENABLED) {
@@ -17126,6 +17326,12 @@ public class MainActivity extends Activity {
      *
      * @param fromConnectEvent true on first USB_STATE host connect; false on focus intercept.
      */
+    /** Auto-connect USB storage when a PC/host cable is attached (Settings → Connections → USB). */
+    private boolean isUsbAutoConnectEnabled() {
+        return prefs != null && prefs.getBoolean("usb_auto_connect", false)
+                && !prefs.getBoolean("usb_manual_disable", false);
+    }
+
     private void ensureUsbHostInterceptUi(boolean fromConnectEvent) {
         if (isHeavyWorkBlockingUsbPrompt()) {
             deferUsbConnectPrompt();
@@ -17159,8 +17365,7 @@ public class MainActivity extends Activity {
             return;
         }
 
-        if (prefs != null && prefs.getBoolean("usb_auto_connect", false)
-                && !prefs.getBoolean("usb_manual_disable", false)) {
+        if (isUsbAutoConnectEnabled()) {
             // #region agent log
             try {
                 org.json.JSONObject d = new org.json.JSONObject();
@@ -17952,13 +18157,7 @@ public class MainActivity extends Activity {
     }
 
     private String bluetoothStateText(BluetoothDevice device) {
-        if (device == null) return "";
-        try {
-            if (isBluetoothAudioConnected(device)) return "Connected";
-            if (device.getBondState() == BluetoothDevice.BOND_BONDED) return "Paired";
-            return "Nearby";
-        } catch (Exception ignored) {}
-        return "";
+        return bluetoothDeviceStateText(device);
     }
 
     private void showContextMenuTierInPlace(String title, java.util.List<String> labels,
@@ -18255,9 +18454,11 @@ public class MainActivity extends Activity {
         }
         if (!globalPpLongFlowHandled && isFlowEnabled()
                 && System.currentTimeMillis() - globalPpKeyDownAt >= FLOW_LAUNCH_HOLD_MS) {
-            // NP Play-hold — morph album art back into Flow center; other screens open Flow picker.
+            // NP Play-hold — morph album art into Flow; home preview or NP slot when eligible.
             if (currentScreenState == STATE_PLAYER) {
                 returnToFlowFromNowPlaying();
+            } else if (isNpToFlowHandoffEligible()) {
+                enterFlowFromNowPlaying(null, currentScreenState);
             } else {
                 openFlow(FlowLaunchRequest.picker(currentScreenState));
             }
@@ -18405,9 +18606,8 @@ public class MainActivity extends Activity {
                 && usbFocusHelper.isUserDeclinedHostSession()) {
             return;
         }
-        if (prefs != null && prefs.getBoolean("usb_auto_connect", false)
-                && !prefs.getBoolean("usb_manual_disable", false)
-                && usbFocusHelper != null && usbFocusHelper.isHostConnected()) {
+        if (isUsbAutoConnectEnabled() && usbFocusHelper != null && usbFocusHelper.isHostConnected()) {
+            enableUsbMassStorageFromRoot();
             return;
         }
         refreshUsbMassStorageExportedAsync(new Runnable() {
@@ -27161,6 +27361,16 @@ public class MainActivity extends Activity {
                 if (!store.isFresh(item.file)) return false;
             }
         }
+        if (!albumArtCacheHasGaps()) {
+            if (libraryScanGen != gen) return true;
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    finishLibraryScan(gen, userInitiated);
+                }
+            });
+            return true;
+        }
         buildAlbumArtCacheAfterScan(gen);
         if (libraryScanGen != gen) return true;
         runOnUiThread(new Runnable() {
@@ -27170,6 +27380,20 @@ public class MainActivity extends Activity {
             }
         });
         return true;
+    }
+
+    /** True when any album rack cover is missing from internal AlbumArtCache. */
+    private boolean albumArtCacheHasGaps() {
+        if (customLibrary.isEmpty()) return false;
+        File artDir = com.solar.launcher.flow.AlbumArtCache.cacheDir(getApplicationContext());
+        boolean multiTrack = prefs != null && prefs.getBoolean(PREF_FLOW_MULTI_TRACK_ALBUMS, false);
+        List<com.solar.launcher.flow.FlowItem> albums = com.solar.launcher.flow.FlowCatalog.buildAlbums(
+                flowLibraryRows(), libraryBrowsePrefs, policyTracksFromLibrary(), multiTrack);
+        for (com.solar.launcher.flow.FlowItem item : albums) {
+            if (item == null || item.coverKey == null || item.coverKey.isEmpty()) continue;
+            if (!com.solar.launcher.flow.AlbumArtCache.has(artDir, item.coverKey)) return true;
+        }
+        return false;
     }
 
     private void reconcileCustomLibrary(java.util.ArrayList<SongItem> scanned) {
@@ -29653,22 +29877,57 @@ public class MainActivity extends Activity {
     private android.graphics.Bitmap resolveHandoffCoverBitmapOrPlaceholder(String matchKey) {
         android.graphics.Bitmap cover = resolveHandoffCoverBitmap();
         if (cover != null) return cover;
-        return ensureHandoffPlaceholderCover(matchKey);
+        cover = ensureHandoffPlaceholderCover(matchKey);
+        if (cover != null) return cover;
+        // Music active but no art — ♪ tile so 3D morph still runs (never crossfade silently).
+        if (playback.isMusicActive()) {
+            String key = matchKey;
+            if (key == null || key.isEmpty()) {
+                key = fallbackHandoffMatchKeyFromNowPlaying();
+            }
+            if (key != null && !key.isEmpty()) {
+                File artDir = com.solar.launcher.flow.AlbumArtCache.cacheDir(this);
+                File track = playback.musicPlaylist().get(playback.musicIndex());
+                if (track != null) {
+                    java.util.List<File> one = java.util.Collections.singletonList(track);
+                    return com.solar.launcher.flow.FlowCoverResolver.resolveFromTracks(
+                            one, handoffCoverHost(artDir),
+                            com.solar.launcher.flow.AlbumArtCache.THUMB_PX,
+                            key, artDir,
+                            com.solar.launcher.flow.FlowThumbCache.cacheDir(getApplicationContext()));
+                }
+            }
+        }
+        return null;
     }
 
     private android.graphics.Bitmap ensureHandoffPlaceholderCover(String matchKey) {
-        if (matchKey == null || matchKey.isEmpty()) return null;
         if (!playback.isMusicActive() || playback.musicPlaylist().isEmpty()) return null;
         File track = playback.musicPlaylist().get(playback.musicIndex());
         if (track == null) return null;
+        String key = matchKey;
+        if (key == null || key.isEmpty()) {
+            key = fallbackHandoffMatchKeyFromNowPlaying();
+        }
+        if (key == null || key.isEmpty()) return null;
         File artDir = com.solar.launcher.flow.AlbumArtCache.cacheDir(this);
-        android.graphics.Bitmap cached = com.solar.launcher.flow.AlbumArtCache.get(artDir, matchKey);
+        android.graphics.Bitmap cached = com.solar.launcher.flow.AlbumArtCache.get(artDir, key);
         if (cached != null && !cached.isRecycled()) return cached;
         java.util.List<File> one = java.util.Collections.singletonList(track);
         return com.solar.launcher.flow.FlowCoverResolver.resolveFromTracks(
                 one, handoffCoverHost(artDir), com.solar.launcher.flow.AlbumArtCache.THUMB_PX,
-                matchKey, artDir,
+                key, artDir,
                 com.solar.launcher.flow.FlowThumbCache.cacheDir(getApplicationContext()));
+    }
+
+    /** Rack key when ID3 album is missing — stable per file so morph never aborts. */
+    private String fallbackHandoffMatchKeyFromNowPlaying() {
+        if (!playback.isMusicActive() || playback.musicPlaylist().isEmpty()) return "";
+        File track = playback.musicPlaylist().get(playback.musicIndex());
+        if (track == null) return "";
+        String resolved = resolveNowPlayingFlowMatchKey();
+        if (resolved != null && !resolved.isEmpty()) return resolved;
+        return "np:" + track.getAbsolutePath();
     }
 
     /**
@@ -29696,7 +29955,7 @@ public class MainActivity extends Activity {
             org.json.JSONObject d = new org.json.JSONObject();
             d.put("nowPlaying3d", nowPlaying3dAlbumArt);
             d.put("nowPlayingLcd", nowPlayingLcdArt);
-            d.put("eligible3d", isFlow3dHandoffReturnEligible());
+            d.put("eligible3d", isNpToFlowHandoffEligible());
             d.put("focusOverride", focusKeyOverride != null ? focusKeyOverride : "");
             d.put("npMatchKey", resolveNowPlayingFlowMatchKey());
             d.put("flowLayoutW", layoutFlowMode != null ? layoutFlowMode.getWidth() : -1);
@@ -29706,8 +29965,9 @@ public class MainActivity extends Activity {
             Debug1cf0c7Log.log(this, "MainActivity.enterFlowFromNowPlaying", "entry", "H-D", d);
         } catch (Exception ignored) {}
         // #endregion
-        if (isFlow3dHandoffReturnEligible()) {
-            if (tryFlowReverseHandoffOpen(focusKeyOverride, flowBack, true)) return true;
+        if (isFlow3dHandoffEnabled() && playback.isMusicActive() && flowScreenHost != null
+                && isNowPlayingInFlowAlbumCatalog()) {
+            if (performNpToFlowHandoffFromPlayer(flowBack, focusKeyOverride)) return true;
         }
         enterFlowFromNowPlaying2dCrossfade(focusKeyOverride, flowBack);
         // #region agent log
@@ -29720,6 +29980,82 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {}
         // #endregion
         return true;
+    }
+
+    /**
+     * NP→Flow — mirror of {@link com.solar.launcher.flow.FlowScreenHost}'s Flow→NP flyer morph.
+     * Same 3D gate, opposite direction (NP slot → carousel center).
+     */
+    private boolean performNpToFlowHandoffFromPlayer(int returnScreen, String focusKeyOverride) {
+        if (!isFlow3dHandoffEnabled() || flowScreenHost == null || !playback.isMusicActive()) {
+            return false;
+        }
+        android.graphics.Bitmap cover = null;
+        if (currentScreenState == STATE_MENU && isNowPlayingHomeFocused()) {
+            cover = homeMenuPreviewHandoffBitmap();
+        }
+        if (cover == null) {
+            cover = playerHandoffCoverBitmap();
+        }
+        if (cover == null) {
+            String probeKey = focusKeyOverride;
+            if (probeKey == null || probeKey.isEmpty()) {
+                probeKey = resolveNowPlayingFlowMatchKey();
+            }
+            if (probeKey == null || probeKey.isEmpty()) {
+                probeKey = fallbackHandoffMatchKeyFromNowPlaying();
+            }
+            cover = resolveHandoffCoverBitmapOrPlaceholder(probeKey);
+        }
+        android.graphics.RectF fromRect = resolveHandoffFromScreenRect(null);
+        if (fromRect.width() <= 0f) {
+            fromRect = estimateNpHandoffScreenRect();
+        }
+        if (cover == null) {
+            return false;
+        }
+        // Stale flip-return must not block the standard reverse morph.
+        if (flowScreenHost.hasPendingPlayerReturn()) {
+            if (tryFlowFlipReverseHandoff()) return true;
+            flowScreenHost.clearPlayerReturn();
+        }
+        return tryFlowReverseHandoffOpen(focusKeyOverride, returnScreen, true);
+    }
+
+    /**
+     * NP→Flow cover flyer — mirror of Flow→NP: prep carousel, live rects, launch morph.
+     * Called after session bookkeeping (origin, match key, flowLaunchRequest).
+     */
+    private boolean beginNpToFlowCoverHandoff(final android.graphics.Bitmap coverPinned,
+            final String matchKeyFinal, final FlowMode mode,
+            final FlowPlaybackOrigin originFinal, final android.graphics.RectF fromRect,
+            final Runnable reverseComplete) {
+        List<FlowItem> cached = flowScreenHost.peekSessionCatalog(mode);
+        com.solar.launcher.flow.FlowReturnState warmState = null;
+        List<FlowItem> warmCatalog = null;
+        if (cached != null && !cached.isEmpty()) {
+            FlowReturnResolver.Resolved resolved = FlowReturnResolver.resolve(
+                    flowReturnResolverHost(), originFinal, cached);
+            if (resolved != null) {
+                warmState = resolved.state;
+                warmCatalog = resolved.catalog;
+            }
+        }
+        if (warmState == null) {
+            reverseHandoffCatalogPending = true;
+            startFlowReverseCatalogPrep(mode, originFinal, coverPinned);
+        }
+        flowScreenHost.performNpToFlowHandoffFromNowPlaying(
+                coverPinned, matchKeyFinal, warmState, warmCatalog, fromRect, reverseComplete);
+        return true;
+    }
+
+    /** Flow layout + FlowView measure — landing rect must be live before reverse morph. */
+    private void ensureFlowCarouselMeasuredForHandoff() {
+        ensureFlowLayoutMeasuredForHandoff();
+        if (flowScreenHost != null) {
+            flowScreenHost.ensureCarouselLayoutForHandoff();
+        }
     }
 
     /** 2D / LCD art — crossfade only, no cover flyer morph. */
@@ -29789,7 +30125,8 @@ public class MainActivity extends Activity {
             handoffBackBlockedAtMs = 0L;
         }
         int target = playerReturnScreen;
-        final boolean flowEligible = isFlow3dHandoffReturnEligible();
+        final boolean flowEligible = isFlow3dHandoffEnabled() && playback.isMusicActive()
+                && isNowPlayingInFlowAlbumCatalog();
         final boolean pendingReturn = flowScreenHost != null && flowScreenHost.hasPendingPlayerReturn();
         if (target == STATE_FLOW && !pendingReturn) {
             int fallback = sanitizeFlowExitReturnScreen(
@@ -29837,17 +30174,8 @@ public class MainActivity extends Activity {
                     // #endregion
                     return;
                 }
-                // Flip snapshot unusable — restore carousel directly, never crossfade.
-                // #region agent log
-                try {
-                    org.json.JSONObject d = new org.json.JSONObject();
-                    d.put("branch", "DIRECT_CS_FLIP_FAILED");
-                    DebugSessionLog.log("MainActivity.returnFromPlayer", "branch", "H-D", d);
-                } catch (Exception ignored) {}
-                // #endregion
-                skipFlowLayoutFade = true;
-                changeScreen(STATE_FLOW, true);
-                return;
+                // Flip snapshot unusable — fall through to standard NP→Flow morph.
+                flowScreenHost.clearPlayerReturn();
             }
             enterFlowFromNowPlaying(null, STATE_FLOW);
             return;
@@ -29870,8 +30198,44 @@ public class MainActivity extends Activity {
         changeScreen(target >= 0 ? target : STATE_MENU, true);
     }
 
+    /** Flow→NP reverse path still requires 3D NP art. */
     private boolean isFlow3dHandoffReturnEligible() {
         return nowPlaying3dAlbumArt && !nowPlayingLcdArt && flowScreenHost != null;
+    }
+
+    /** 3D cover flyer morph — same gate as FlowScreenHost Actions. */
+    private boolean isFlow3dHandoffEnabled() {
+        return nowPlaying3dAlbumArt && !nowPlayingLcdArt;
+    }
+
+    /** NP→Flow cover flyer — library album on carousel while Flow is on. */
+    private boolean isNpToFlowHandoffEligible() {
+        return isFlowEnabled() && flowScreenHost != null && playback.isMusicActive()
+                && isNowPlayingInFlowAlbumCatalog();
+    }
+
+    /**
+     * 3D NP→Flow morph only when the active track is indexed in Albums (local library).
+     * Temp Soulseek/Deezer streams and podcasts use the standard Flow crossfade.
+     */
+    private boolean isNowPlayingInFlowAlbumCatalog() {
+        if (!playback.isMusicActive()) return false;
+        java.util.List<File> playlist = playback.musicPlaylist();
+        int idx = playback.musicIndex();
+        if (playlist == null || idx < 0 || idx >= playlist.size()) return false;
+        File track = playlist.get(idx);
+        if (track == null) return false;
+        String matchKey = resolveNowPlayingFlowMatchKey();
+        PlayQueue.QueueItem cur = playback.currentItem();
+        return com.solar.launcher.flow.NpToFlowMorphPolicy.isCarouselMorphEligible(
+                playback.isMusicActive(),
+                playback.isPodcastActive(),
+                track,
+                cur,
+                findSongItem(track) != null,
+                isStreamTempFile(track),
+                isPodcastMediaFile(track),
+                matchKey);
     }
 
     /** Flow flip → play → Back: reverse handoff to saved carousel pose. */
@@ -29901,18 +30265,22 @@ public class MainActivity extends Activity {
         layoutFlowMode.setAlpha(0f);
         // Carousel pose must exist before flyer starts — landing rect drives the morph.
         flowScreenHost.preparePlayerReturnForHandoff(coverPinned);
+        ensureFlowCarouselMeasuredForHandoff();
         final Runnable reverseComplete = new Runnable() {
             @Override
             public void run() {
                 reverseHandoffInProgress = false;
+                npToFlowHandoffLanding = true;
                 skipFlowLayoutFade = true;
                 changeScreen(STATE_FLOW);
+                npToFlowHandoffLanding = false;
                 markFlowNowPlayingBackReturn();
                 flowScreenHost.finishPlayerReturnAfterHandoff();
                 flowScreenHost.warmSidesAfterReverseHandoff();
             }
         };
-        launchFlowReverseHandoff(coverPinned, fromRect, reverseComplete, false);
+        final float flipToRotY = flowScreenHost.getSavedHandoffReturnRotY();
+        launchFlowReverseHandoff(coverPinned, fromRect, flipToRotY, reverseComplete, false);
         return true;
     }
 
@@ -29923,9 +30291,7 @@ public class MainActivity extends Activity {
 
     /** True when carousel layout produced a live center-cover landing rect. */
     private boolean isFlowHandoffLandingRectMeasured(android.graphics.RectF toRect) {
-        return toRect != null && toRect.width() > 0f
-                && layoutFlowMode != null && layoutFlowMode.getWidth() > 0
-                && layoutFlowMode.getHeight() > 0;
+        return flowScreenHost != null && flowScreenHost.hasLiveHandoffLandingRect();
     }
 
     /** Force Flow layout measure so handoff landing rect is accurate on frame 0. */
@@ -29978,19 +30344,20 @@ public class MainActivity extends Activity {
      */
     private boolean tryFlowReverseHandoffOpen(String focusKeyOverride, int returnScreen,
             boolean allowSynthesizeFromNp) {
-        if (!isFlow3dHandoffReturnEligible() || flowScreenHost == null) {
+        if (!isNpToFlowHandoffEligible()) {
             // #region agent log
             try {
                 org.json.JSONObject d = new org.json.JSONObject();
                 d.put("fail", "not_eligible_or_no_host");
-                d.put("eligible", isFlow3dHandoffReturnEligible());
+                d.put("eligible", isNpToFlowHandoffEligible());
                 DebugSessionLog.log("MainActivity.tryFlowReverseHandoffOpen", "abort", "H-A", d);
             } catch (Exception ignored) {}
             // #endregion
             return false;
         }
         if (flowScreenHost.hasPendingPlayerReturn()) {
-            return tryFlowFlipReverseHandoff();
+            if (tryFlowFlipReverseHandoff()) return true;
+            flowScreenHost.clearPlayerReturn();
         }
         int safeReturn = sanitizeFlowExitReturnScreen(
                 returnScreen == STATE_PLAYER ? flowReturnScreenExcludingPlayer() : returnScreen);
@@ -30021,6 +30388,9 @@ public class MainActivity extends Activity {
         String matchKey = focusKeyOverride != null && !focusKeyOverride.isEmpty()
                 ? focusKeyOverride : origin.carouselMatchKey;
         if (matchKey == null || matchKey.isEmpty()) {
+            matchKey = fallbackHandoffMatchKeyFromNowPlaying();
+        }
+        if (matchKey == null || matchKey.isEmpty()) {
             // #region agent log
             try {
                 org.json.JSONObject d = new org.json.JSONObject();
@@ -30050,10 +30420,16 @@ public class MainActivity extends Activity {
             // #endregion
             return false;
         }
-        final android.graphics.Bitmap coverPinned = flowScreenHost.pinHandoffCover(cover, matchKey);
-        if (coverPinned == null) return false;
-        android.graphics.RectF fromRect = playerAlbumHandoffScreenRect();
-        if (fromRect == null) fromRect = new android.graphics.RectF();
+        android.graphics.Bitmap pinned = flowScreenHost.pinHandoffCover(cover, matchKey);
+        final android.graphics.Bitmap coverPinned;
+        if (pinned != null) {
+            coverPinned = pinned;
+        } else {
+            flowScreenHost.pinHandoffCover(cover, matchKey);
+            android.graphics.Bitmap retry = flowScreenHost.getHandoffPinnedCover();
+            coverPinned = retry != null ? retry : cover;
+        }
+        android.graphics.RectF fromRect = resolveNpHandoffFromScreenRect(null);
 
         flowPlaybackOrigin = null;
         FlowLaunchRequest prior = flowLaunchRequest;
@@ -30069,75 +30445,29 @@ public class MainActivity extends Activity {
                     originFinal.browserMode, -1);
         }
 
-        reverseHandoffInProgress = true;
-        layoutFlowMode.setVisibility(View.VISIBLE);
-        layoutFlowMode.setAlpha(0f);
+        reverseHandoffFromMenu = currentScreenState == STATE_MENU && isNowPlayingHomeFocused();
 
         final Runnable reverseComplete = new Runnable() {
             @Override
             public void run() {
                 reverseHandoffInProgress = false;
+                npToFlowHandoffLanding = true;
                 skipFlowLayoutFade = true;
                 changeScreen(STATE_FLOW);
+                npToFlowHandoffLanding = false;
                 markFlowNowPlayingBackReturn();
                 flowScreenHost.finishPlayerReturnAfterHandoff();
                 flowScreenHost.warmSidesAfterReverseHandoff();
             }
         };
 
-        // Sync prep when session catalog is warm — measured landing pose on frame 0.
-        List<FlowItem> cached = flowScreenHost.peekSessionCatalog(mode);
-        if (cached != null && !cached.isEmpty()) {
-            FlowReturnResolver.Resolved resolved = FlowReturnResolver.resolve(
-                    flowReturnResolverHost(), originFinal, cached);
-            if (resolved != null) {
-                flowScreenHost.prepareReturnForResolvedState(
-                        resolved.state, resolved.catalog, coverPinned);
-            }
-            // #region agent log
-            try {
-                org.json.JSONObject d = new org.json.JSONObject();
-                d.put("matchKey", matchKeyFinal);
-                d.put("cachedCatalog", true);
-                d.put("landingMeasured", isFlowHandoffLandingRectMeasured(
-                        measuredFlowHandoffLandingRect(fromRect)));
-                Debug1cf0c7Log.log(this, "MainActivity.tryFlowReverseHandoffOpen",
-                        "3d handoff launched (warm catalog)", "H-D", d);
-            } catch (Exception ignored) {}
-            // #endregion
-            launchFlowReverseHandoff(coverPinned, fromRect, reverseComplete, false);
-            return true;
-        }
+        return beginNpToFlowCoverHandoff(coverPinned, matchKeyFinal, mode, originFinal,
+                fromRect, reverseComplete);
+    }
 
-        // NP Play/Pause: build catalog before morph so reverse mirrors forward landing pose.
-        if (allowSynthesizeFromNp) {
-            final android.graphics.Bitmap coverFinal = coverPinned;
-            final android.graphics.RectF fromRectFinal = fromRect;
-            new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    List<FlowItem> built = flowScreenHost.buildAndCacheCatalog(mode);
-                    FlowReturnResolver.Resolved resolved = FlowReturnResolver.resolve(
-                            flowReturnResolverHost(), originFinal, built);
-                    final FlowReturnResolver.Resolved r = resolved;
-                    runOnUiThread(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (!reverseHandoffInProgress) return;
-                            if (r != null) {
-                                flowScreenHost.prepareReturnForResolvedState(
-                                        r.state, r.catalog, coverFinal);
-                            }
-                            launchFlowReverseHandoff(coverFinal, fromRectFinal, reverseComplete, false);
-                        }
-                    });
-                }
-            }, "FlowReversePrep").start();
-            return true;
-        }
-
-        // Library-back path — morph with estimate; retarget when catalog resolves mid-flight.
-        launchFlowReverseHandoff(coverPinned, fromRect, reverseComplete, false);
+    /** Build/cache catalog while NP→Flow morph runs; bind carousel mid-flight for seamless landing. */
+    private void startFlowReverseCatalogPrep(final FlowMode mode,
+            final FlowPlaybackOrigin originFinal, final android.graphics.Bitmap coverPinned) {
         new Thread(new Runnable() {
             @Override
             public void run() {
@@ -30150,50 +30480,37 @@ public class MainActivity extends Activity {
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
-                        if (!reverseHandoffInProgress || FlowPlayerHandoff.isHandoffAnimating()) {
+                        if (!reverseHandoffCatalogPending && !reverseHandoffInProgress
+                                && !FlowPlayerHandoff.isHandoffAnimating()) {
                             return;
                         }
                         flowScreenHost.prepareReturnForResolvedState(
                                 r.state, r.catalog, coverPinned);
+                        reverseHandoffCatalogPending = false;
                     }
                 });
             }
         }, "FlowReversePrep").start();
-        return true;
     }
 
-    /** Start NP→Flow reverse morph after carousel prep — shared by Play/Pause and library return. */
+    /** Start NP→Flow reverse morph — toRect remeasured at frame 0 inside runFlowHandoffReverse. */
     private void launchFlowReverseHandoff(final android.graphics.Bitmap cover,
-            final android.graphics.RectF fromRect, final Runnable onComplete,
-            final boolean use2d) {
-        ensureFlowLayoutMeasuredForHandoff();
-        android.graphics.RectF toRect = measuredFlowHandoffLandingRect(fromRect);
-        final boolean landingMeasured = isFlowHandoffLandingRectMeasured(toRect);
-        final float toRotY = flowScreenHost != null
-                ? flowScreenHost.getSavedHandoffReturnRotY() : 0f;
+            final android.graphics.RectF fromRect, final float toRotY,
+            final Runnable onComplete, final boolean use2d) {
         // #region agent log
         try {
             org.json.JSONObject d = new org.json.JSONObject();
-            d.put("landingMeasured", landingMeasured);
-            d.put("toRectW", toRect != null ? toRect.width() : 0f);
+            d.put("toRotY", toRotY);
             d.put("use2d", use2d);
-            d.put("flowLayoutAlpha", layoutFlowMode != null ? layoutFlowMode.getAlpha() : -1f);
+            d.put("fromRectW", fromRect != null ? fromRect.width() : 0f);
             Debug1cf0c7Log.log(this, "MainActivity.launchFlowReverseHandoff", "start morph", "H-D", d);
         } catch (Exception ignored) {}
         // #endregion
-        runFlowHandoffReverse(cover, fromRect, toRect, toRotY, landingMeasured, use2d, onComplete);
+        runFlowHandoffReverse(cover, fromRect, toRotY, use2d, onComplete);
     }
 
-    /** NP cover rect scaled toward carousel center when landing pose unknown. */
+    /** NP cover rect at Flow viewport center — never anchor to left-aligned NP slot. */
     private android.graphics.RectF estimateFlowHandoffLandingRect(android.graphics.RectF playerRect) {
-        if (playerRect != null && playerRect.width() > 0f && playerRect.height() > 0f) {
-            float scale = 0.82f;
-            float cx = playerRect.centerX();
-            float cy = playerRect.centerY() + playerRect.height() * 0.12f;
-            float hw = playerRect.width() * scale * 0.5f;
-            float hh = playerRect.height() * scale * 0.5f;
-            return new android.graphics.RectF(cx - hw, cy - hh, cx + hw, cy + hh);
-        }
         int w = layoutFlowMode != null ? layoutFlowMode.getWidth() : 0;
         int h = layoutFlowMode != null ? layoutFlowMode.getHeight() : 0;
         if (w <= 0) w = 480;
@@ -30224,6 +30541,9 @@ public class MainActivity extends Activity {
     private FlowPlaybackOrigin synthesizeFlowOriginFromNowPlaying() {
         if (!playback.isMusicActive() || playback.musicPlaylist().isEmpty()) return null;
         String matchKey = resolveNowPlayingFlowMatchKey();
+        if (matchKey == null || matchKey.isEmpty()) {
+            matchKey = fallbackHandoffMatchKeyFromNowPlaying();
+        }
         if (matchKey == null || matchKey.isEmpty()) return null;
         return new FlowPlaybackOrigin(
                 FlowPlaybackOrigin.Kind.LIBRARY_ALBUM,
@@ -35387,7 +35707,103 @@ public class MainActivity extends Activity {
     }
 
     private void scanMediaLibraryAsync() {
-        startLibraryScan(false);
+        refreshLibraryAfterStorageMount();
+    }
+
+    /**
+     * Storage remount — skip full walk when the indexed library is intact; ingest only new audio paths.
+     * ponytail: unavailable-then-available SD must not re-ID3 the whole library.
+     */
+    private void refreshLibraryAfterStorageMount() {
+        if (isUsbMassStorageUiLocked() || libraryScanRunning) return;
+        if (customLibrary.isEmpty()) {
+            startLibraryScan(false);
+            return;
+        }
+        startLibraryNewFilesScan(false);
+    }
+
+    /** Walk disk for audio paths absent from SQLite — merge without deleteExcept purge. */
+    private void startLibraryNewFilesScan(final boolean showOverlay) {
+        if (libraryScanRunning) return;
+        if (isUsbMassStorageUiLocked()) return;
+        libraryScanRunning = true;
+        final int gen = libraryScanGen;
+        activeLibraryScanGen = gen;
+        if (showOverlay) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    setBlockingLoading(true);
+                    setLoadingOverlayText(getString(R.string.library_scanning));
+                }
+            });
+        }
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final MusicLibraryStore store = MusicLibraryStore.getInstance(getApplicationContext());
+                final java.util.ArrayList<SongItem> additions = new java.util.ArrayList<SongItem>();
+                collectNewLibraryAudio(rootFolder, store, additions, gen);
+                if (libraryScanGen != gen) {
+                    abortLibraryScanWorker(gen);
+                    return;
+                }
+                if (additions.isEmpty()) {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            libraryScanRunning = false;
+                            if (showOverlay) setBlockingLoading(false);
+                        }
+                    });
+                    return;
+                }
+                synchronized (customLibrary) {
+                    customLibrary.addAll(additions);
+                }
+                invalidateSongPathIndex();
+                invalidateShareDurationCache();
+                clearArtistOwnAlbumCache();
+                normalizeLibraryAlbumTitles();
+                buildAlbumArtCacheAfterScan(gen);
+                if (libraryScanGen != gen) {
+                    abortLibraryScanWorker(gen);
+                    return;
+                }
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        finishLibraryScan(gen, showOverlay);
+                        if (flowScreenHost != null) {
+                            flowScreenHost.invalidateCatalogCache();
+                        }
+                        refreshLibraryBrowseIfVisible();
+                        refreshFlowIfVisible();
+                    }
+                });
+            }
+        }, "LibraryNewFiles").start();
+    }
+
+    /** Collect tracks whose paths are not yet in MusicLibraryStore (new files only). */
+    private void collectNewLibraryAudio(File folder, MusicLibraryStore store,
+            java.util.ArrayList<SongItem> out, int gen) {
+        if (libraryScanGen != gen || folder == null) return;
+        File[] files = folder.listFiles();
+        if (files == null) return;
+        for (File f : files) {
+            if (libraryScanGen != gen) return;
+            if (f.isDirectory()) {
+                collectNewLibraryAudio(f, store, out, gen);
+            } else if (isAudioFile(f)) {
+                if (blacklist.contains(f.getAbsolutePath())) continue;
+                if (store.get(f.getAbsolutePath()) != null) continue;
+                LibraryScanResolved resolved = resolveSongItemForScan(f, store, gen);
+                if (resolved == null || resolved.item == null) continue;
+                out.add(resolved.item);
+            }
+        }
     }
 
     private boolean isWifiConnectedForStream() {
@@ -40418,6 +40834,32 @@ public class MainActivity extends Activity {
             }
 
             @Override
+            public android.graphics.Bitmap playerHandoffCoverBitmap() {
+                return MainActivity.this.playerHandoffCoverBitmap();
+            }
+
+            @Override
+            public android.graphics.RectF resolveNpHandoffFromScreenRect() {
+                return MainActivity.this.resolveHandoffFromScreenRect(null);
+            }
+
+            @Override
+            public void launchReverseHandoff(final android.graphics.Bitmap cover,
+                    final android.graphics.RectF fromRect, final float toRotY,
+                    final Runnable onComplete) {
+                reverseHandoffInProgress = true;
+                if (layoutFlowMode != null) {
+                    layoutFlowMode.setVisibility(View.VISIBLE);
+                    layoutFlowMode.setAlpha(0f);
+                }
+                float rotY = toRotY;
+                if (flowScreenHost != null && flowScreenHost.hasPendingPlayerReturn()) {
+                    rotY = flowScreenHost.getSavedHandoffReturnRotY();
+                }
+                launchFlowReverseHandoff(cover, fromRect, rotY, onComplete, false);
+            }
+
+            @Override
             public void playPodcastWithCrossfade(final OpenRssClient.Podcast show,
                     final List<OpenRssClient.Episode> episodes, final int index) {
                 com.solar.launcher.flow.FlowScreenTransition.crossfadeToPlayer(
@@ -40543,6 +40985,7 @@ public class MainActivity extends Activity {
         if (slot != null) slot.setAlpha(0f);
         if (ivAlbumArt != null) ivAlbumArt.setAlpha(0f);
         if (ivAlbumArt3d != null) ivAlbumArt3d.setAlpha(0f);
+        hideMenuPreviewForHandoff();
         // #region agent log
         try {
             org.json.JSONObject d = new org.json.JSONObject();
@@ -40553,6 +40996,15 @@ public class MainActivity extends Activity {
                     "slot hidden", "H-HANDOFF-SLOT", d);
         } catch (Exception ignored) {}
         // #endregion
+    }
+
+    /** Hide home preview art while flyer carries the cover during menu→Flow morph. */
+    private void hideMenuPreviewForHandoff() {
+        if (ivMenuPreview != null) ivMenuPreview.setAlpha(0f);
+    }
+
+    private void revealMenuPreviewAfterHandoff() {
+        if (ivMenuPreview != null) ivMenuPreview.setAlpha(1f);
     }
 
     private void revealPlayerAlbumSlotAfterHandoff() {
@@ -40676,20 +41128,80 @@ public class MainActivity extends Activity {
     }
 
     private void runFlowHandoffReverse(final android.graphics.Bitmap cover,
-            final android.graphics.RectF fromRect, final android.graphics.RectF toRect,
-            final float toRotY, final boolean landingRectMeasured,
+            final android.graphics.RectF fromRect, final float toRotYHint,
             final boolean use2dHandoff, final Runnable onComplete) {
+        final boolean fromMenu = reverseHandoffFromMenu;
+        final android.graphics.RectF sourceRectFinal = resolveHandoffFromScreenRect(fromRect);
+        syncPlayerAlbumArt3dVisibility();
+        if (!fromMenu && nowPlaying3dAlbumArt && !nowPlayingLcdArt && ivAlbumArt3d != null && cover != null) {
+            ivAlbumArt3d.setCoverBitmap(cover);
+            ivAlbumArt3d.setAlpha(0f);
+        }
+        skipFlowLayoutFade = true;
+        if (fromMenu) {
+            if (layoutMainMenu != null) {
+                layoutMainMenu.setVisibility(View.VISIBLE);
+                layoutMainMenu.setAlpha(1f);
+            }
+            if (layoutPlayerMode != null) {
+                layoutPlayerMode.setVisibility(View.GONE);
+                layoutPlayerMode.setAlpha(0f);
+            }
+        } else if (layoutPlayerMode != null) {
+            layoutPlayerMode.setVisibility(View.VISIBLE);
+            layoutPlayerMode.setAlpha(1f);
+        }
+        if (layoutFlowMode != null) {
+            layoutFlowMode.setVisibility(View.VISIBLE);
+            layoutFlowMode.setAlpha(0f);
+        }
+        if (fromMenu) {
+            hideMenuPreviewForHandoff();
+        } else {
+            hidePlayerAlbumSlotForHandoff();
+        }
         final View albumSlot = findViewById(R.id.player_album_container);
         final Runnable startHandoff = new Runnable() {
             @Override
             public void run() {
-                android.graphics.RectF playerRect = fromRect;
-                if (albumSlot != null) {
-                    android.graphics.RectF measured = FlowAlbumArt3d.playerScreenRect(albumSlot);
-                    if (measured.width() > 0f) playerRect = measured;
+                android.graphics.RectF sourceRect = sourceRectFinal;
+                if (sourceRect.width() <= 0f && fromMenu) {
+                    sourceRect = homeMenuPreviewHandoffScreenRect();
                 }
-                ensureFlowLayoutMeasuredForHandoff();
-                beginReverseStatusBarFadeOut();
+                if (sourceRect.width() <= 0f && albumSlot != null) {
+                    android.graphics.RectF measured = FlowAlbumArt3d.playerScreenRect(albumSlot);
+                    if (measured.width() > 0f) sourceRect = measured;
+                }
+                if (sourceRect.width() <= 0f) {
+                    sourceRect = estimateNpHandoffScreenRect();
+                }
+                ensureFlowCarouselMeasuredForHandoff();
+                android.graphics.RectF toRect = measuredFlowHandoffLandingRect(sourceRect);
+                final boolean landingMeasured = isFlowHandoffLandingRectMeasured(toRect);
+                float toRotY = toRotYHint;
+                if (flowScreenHost != null && !flowScreenHost.hasPendingPlayerReturn()) {
+                    toRotY = flowScreenHost.getHandoffStartRotationY();
+                }
+                // #region agent log
+                try {
+                    org.json.JSONObject d = new org.json.JSONObject();
+                    d.put("landingMeasured", landingMeasured);
+                    d.put("fromMenu", fromMenu);
+                    d.put("fromRectW", sourceRect.width());
+                    d.put("toRectW", toRect != null ? toRect.width() : 0f);
+                    d.put("fromCx", (sourceRect.left + sourceRect.right) * 0.5f);
+                    d.put("toCx", toRect != null ? (toRect.left + toRect.right) * 0.5f : 0f);
+                    d.put("deltaCx", toRect != null
+                            ? (toRect.left + toRect.right) * 0.5f - (sourceRect.left + sourceRect.right) * 0.5f
+                            : 0f);
+                    Debug1cf0c7Log.log(MainActivity.this,
+                            "MainActivity.runFlowHandoffReverse", "frame0 poses", "H-D", d);
+                } catch (Exception ignored) {}
+                // #endregion
+                if (!landingMeasured) {
+                    beginReverseStatusBarFadeOut();
+                }
+                final boolean measuredLanding = landingMeasured;
                 final FlowPlayerHandoff.Host reverseHost = new FlowPlayerHandoff.Host() {
             @Override
             public Activity activity() {
@@ -40703,7 +41215,7 @@ public class MainActivity extends Activity {
 
             @Override
             public View playerLayout() {
-                return layoutPlayerMode;
+                return fromMenu ? layoutMainMenu : layoutPlayerMode;
             }
 
             @Override
@@ -40713,7 +41225,7 @@ public class MainActivity extends Activity {
 
             @Override
             public View playerBgBlur() {
-                return ivPlayerBgBlur;
+                return fromMenu ? null : ivPlayerBgBlur;
             }
 
             @Override
@@ -40723,16 +41235,22 @@ public class MainActivity extends Activity {
 
             @Override
             public void onReverseFlyerMounted() {
-                hidePlayerAlbumSlotForHandoff();
+                if (fromMenu) {
+                    hideMenuPreviewForHandoff();
+                } else {
+                    hidePlayerAlbumSlotForHandoff();
+                }
             }
 
             @Override
             public void onReverseRevealStart() {
+                if (measuredLanding) return;
                 if (flowScreenHost != null) flowScreenHost.beginHandoffReveal();
             }
 
             @Override
             public void onReverseRevealProgress(float eased) {
+                if (measuredLanding) return;
                 applyReverseStatusBarReveal(eased);
                 if (flowScreenHost != null) flowScreenHost.setHandoffRevealProgress(eased);
                 if (eased >= 1f && flowScreenHost != null) {
@@ -40754,21 +41272,23 @@ public class MainActivity extends Activity {
 
             @Override
             public void onReverseBackgroundProgress(float eased) {
+                if (measuredLanding) return;
                 if (flowScreenHost != null) flowScreenHost.setHandoffSideRevealAlpha(eased);
             }
 
             @Override
             public void onHandoffComplete(Runnable action) {
                 skipFlowLayoutFade = true;
+                reverseHandoffFromMenu = false;
                 if (action != null) action.run();
             }
                 };
                 if (use2dHandoff) {
-                    FlowPlayerHandoff.runReverse2d(reverseHost, cover, playerRect, toRect,
-                            landingRectMeasured, onComplete);
+                    FlowPlayerHandoff.runReverse2d(reverseHost, cover, sourceRect, toRect,
+                            landingMeasured, onComplete);
                 } else {
-                    FlowPlayerHandoff.runReverse(reverseHost, cover, playerRect, toRect,
-                            FlowAlbumArt3d.PLAYER_ROT_Y_DEG, toRotY, landingRectMeasured, onComplete);
+                    FlowPlayerHandoff.runReverse(reverseHost, cover, sourceRect, toRect,
+                            FlowAlbumArt3d.PLAYER_ROT_Y_DEG, toRotY, landingMeasured, onComplete);
                 }
             }
         };
@@ -40782,15 +41302,89 @@ public class MainActivity extends Activity {
     }
 
     private android.graphics.RectF playerAlbumHandoffScreenRect() {
-        View container = findViewById(R.id.player_album_container);
-        if (container == null) return null;
-        android.graphics.RectF rect = FlowAlbumArt3d.playerScreenRect(container);
-        if (rect.width() > 0f) return rect;
-        // Alpha-0 slot may not be laid out yet — use container bounds if measured.
-        if (container.getWidth() > 0 && container.getHeight() > 0) {
-            return FlowAlbumArt3d.playerScreenRect(container);
+        return resolveHandoffFromScreenRect(null);
+    }
+
+    /**
+     * Handoff source rect — home menu preview when Now Playing row is focused, else NP slot.
+     */
+    private android.graphics.RectF resolveHandoffFromScreenRect(android.graphics.RectF hint) {
+        if (hint != null && hint.width() > 0f) return new android.graphics.RectF(hint);
+        if (currentScreenState == STATE_MENU && isNowPlayingHomeFocused()) {
+            android.graphics.RectF menu = homeMenuPreviewHandoffScreenRect();
+            if (menu.width() > 0f) return menu;
         }
-        return rect;
+        return resolveNpHandoffFromScreenRect(null);
+    }
+
+    /** Screen rect of home menu album preview — right-pane art above Now Playing row. */
+    private android.graphics.RectF homeMenuPreviewHandoffScreenRect() {
+        if (ivMenuPreview == null || ivMenuPreview.getVisibility() != View.VISIBLE) {
+            return new android.graphics.RectF();
+        }
+        int w = ivMenuPreview.getWidth();
+        int h = ivMenuPreview.getHeight();
+        if (w <= 0 || h <= 0) return new android.graphics.RectF();
+        int[] loc = new int[2];
+        ivMenuPreview.getLocationOnScreen(loc);
+        return new android.graphics.RectF(loc[0], loc[1], loc[0] + w, loc[1] + h);
+    }
+
+    /** Bitmap shown in home menu preview — flyer source for menu→Flow morph. */
+    private android.graphics.Bitmap homeMenuPreviewHandoffBitmap() {
+        if (ivMenuPreview == null || ivMenuPreview.getVisibility() != View.VISIBLE) return null;
+        android.graphics.drawable.Drawable d = ivMenuPreview.getDrawable();
+        if (d instanceof android.graphics.drawable.BitmapDrawable) {
+            android.graphics.Bitmap bmp = ((android.graphics.drawable.BitmapDrawable) d).getBitmap();
+            if (bmp != null && !bmp.isRecycled()) return bmp;
+        }
+        return null;
+    }
+
+    /** NP album slot screen rect for reverse flyer — measured before slot is hidden. */
+    private android.graphics.RectF resolveNpHandoffFromScreenRect(android.graphics.RectF hint) {
+        if (hint != null && hint.width() > 0f) return new android.graphics.RectF(hint);
+        View container = findViewById(R.id.player_album_container);
+        if (container != null) {
+            if ((container.getWidth() <= 0 || container.getHeight() <= 0)
+                    && layoutPlayerMode != null && layoutPlayerMode.getWidth() > 0) {
+                int w = layoutPlayerMode.getWidth();
+                int h = layoutPlayerMode.getHeight();
+                layoutPlayerMode.measure(
+                        View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY),
+                        View.MeasureSpec.makeMeasureSpec(h, View.MeasureSpec.EXACTLY));
+                layoutPlayerMode.layout(0, 0, w, h);
+            }
+            android.graphics.RectF rect = FlowAlbumArt3d.playerScreenRect(container);
+            if (rect.width() > 0f) return rect;
+        }
+        return estimateNpHandoffScreenRect();
+    }
+
+    /** Last-resort NP cover pose from player layout bounds. */
+    private android.graphics.RectF estimateNpHandoffScreenRect() {
+        if (layoutPlayerMode != null && layoutPlayerMode.getWidth() > 0) {
+            int[] loc = new int[2];
+            layoutPlayerMode.getLocationOnScreen(loc);
+            com.solar.launcher.flow.FlowAlbumArt3d.AlbumArtPose pose =
+                    com.solar.launcher.flow.FlowAlbumArt3d.playerPose(
+                            layoutPlayerMode.getWidth(), layoutPlayerMode.getHeight());
+            android.graphics.RectF r = pose.drawRect;
+            return new android.graphics.RectF(
+                    loc[0] + r.left, loc[1] + r.top, loc[0] + r.right, loc[1] + r.bottom);
+        }
+        View root = findViewById(android.R.id.content);
+        if (root != null && root.getWidth() > 0 && root.getHeight() > 0) {
+            int[] loc = new int[2];
+            root.getLocationOnScreen(loc);
+            com.solar.launcher.flow.FlowAlbumArt3d.AlbumArtPose pose =
+                    com.solar.launcher.flow.FlowAlbumArt3d.playerPose(
+                            root.getWidth(), root.getHeight() * 0.72f);
+            android.graphics.RectF r = pose.drawRect;
+            return new android.graphics.RectF(
+                    loc[0] + r.left, loc[1] + r.top, loc[0] + r.right, loc[1] + r.bottom);
+        }
+        return new android.graphics.RectF();
     }
 
     /** Catalog cover key for a playing album — dominant artist, not per-track tag drift. */

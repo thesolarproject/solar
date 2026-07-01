@@ -37,6 +37,20 @@ jobs:
           python3 solar-rom/scripts/resolve-release-version.py --self-test
           ./solar-rom/scripts/prepare-release.sh
 
+      - name: Verify OTA PAT can reach solar-update
+        env:
+          SOLAR_GITHUB_PAT: ${{ secrets.SOLAR_GITHUB_PAT }}
+        run: |
+          if [ -z "$SOLAR_GITHUB_PAT" ]; then
+            echo "::error::SOLAR_GITHUB_PAT secret is missing — rotate or add a PAT with Contents read/write on thesolarproject/solar-update repo."
+            exit 1
+          fi
+          if ! git ls-remote "https://x-access-token:${SOLAR_GITHUB_PAT}@github.com/thesolarproject/solar-update.git" HEAD >/dev/null 2>&1; then
+            echo "::error::SOLAR_GITHUB_PAT cannot read thesolarproject/solar-update — rotate the repo secret (needs Contents read/write on solar-update)."
+            exit 128
+          fi
+          echo "solar-update PAT preflight OK"
+
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
@@ -76,6 +90,11 @@ jobs:
           printf '%s' "$KEY_PEM_B64" | base64 -d > .ci-keys/platform.x509.pem
           echo "SOLAR_PLATFORM_KEY_PK8=$GITHUB_WORKSPACE/.ci-keys/platform.pk8" >> "$GITHUB_ENV"
           echo "SOLAR_PLATFORM_KEY_PEM=$GITHUB_WORKSPACE/.ci-keys/platform.x509.pem" >> "$GITHUB_ENV"
+
+      - name: Sync and verify Y1 scripts (ROM sources → APK assets)
+        run: |
+          chmod +x solar-rom/scripts/sync-y1-assets.sh solar-rom/scripts/verify-y1-assets.sh
+          ./solar-rom/scripts/sync-y1-assets.sh
 
       - name: Build signed release APK
         env:
@@ -129,6 +148,10 @@ jobs:
         env:
           SOLAR_GITHUB_PAT: ${{ secrets.SOLAR_GITHUB_PAT }}
         run: |
+          if [ -z "$SOLAR_GITHUB_PAT" ]; then
+            echo "::error::SOLAR_GITHUB_PAT secret is missing — OTA publish to thesolarproject/solar-update requires a PAT with repo write access."
+            exit 1
+          fi
           chmod +x scripts/publish-ota-updates.sh
           NIGHTLY=false
           if [ "${{ github.ref }}" = "refs/heads/nightly" ]; then NIGHTLY=true; fi

@@ -139,7 +139,10 @@ clone_update_repo() {
     echo "ERROR: set SOLAR_GITHUB_PAT for push to $UPDATE_REPO" >&2
     exit 1
   fi
-  git clone --depth 1 "https://x-access-token:${PAT}@github.com/${UPDATE_REPO}.git" "$dest"
+  if ! git clone --depth 1 "https://x-access-token:${PAT}@github.com/${UPDATE_REPO}.git" "$dest"; then
+    echo "::error::SOLAR_GITHUB_PAT cannot clone github.com/${UPDATE_REPO} — rotate the repo secret (needs repo scope on solar-update)." >&2
+    exit 128
+  fi
 }
 
 push_update_repo() {
@@ -154,7 +157,10 @@ push_update_repo() {
     return 0
   fi
   git commit -m "$msg"
-  git push "https://x-access-token:${PAT}@github.com/${UPDATE_REPO}.git" HEAD:main
+  if ! git push "https://x-access-token:${PAT}@github.com/${UPDATE_REPO}.git" HEAD:main; then
+    echo "::error::SOLAR_GITHUB_PAT push to github.com/${UPDATE_REPO} failed — rotate the repo secret." >&2
+    exit 128
+  fi
 }
 
 copy_artist_separator_catalog() {
