@@ -108,6 +108,18 @@ public final class FlowView extends View {
     private long lastScrollWheelLogMs;
     /** Coalesce anim ticks when frames arrive faster than display can show. */
     private long lastAnimInvalidateMs;
+    /** Front-face title marquee — invalidate loop while text overflows clip. */
+    private final Runnable frontMarqueeTick = new Runnable() {
+        @Override
+        public void run() {
+            int s = flip.getState();
+            if (s == FlowFlipController.STATE_BACK
+                    || s == FlowFlipController.STATE_FLIP_TO_BACK) return;
+            if (titleAlpha < 0.01f) return;
+            postInvalidateOnAnimation();
+            postDelayed(this, 48);
+        }
+    };
 
     private final Runnable animTick = new Runnable() {
         @Override
@@ -237,14 +249,30 @@ public final class FlowView extends View {
     }
 
     /**
-     * Reverse handoff prep — hide album labels; carousel keeps drawing (pinned center art).
+     * Measured NP→Flow prep — hide duplicate center draw only; labels and side covers stay visible.
+     */
+    public void prepareHandoffFlyerOnly() {
+        handoffDrawSuppressed = false;
+        handoffRevealActive = false;
+        handoffTitleRevealStartMs = 0L;
+        handoffReflectRevealStartMs = 0L;
+        if (!FlowPlayerHandoff.isHandoffAnimating()) {
+            handoffCenterRevealAlpha = 0f;
+        }
+    }
+
+    /**
+     * Unmeasured reverse fallback — hide album labels; carousel keeps drawing (pinned center art).
      */
     public void prepareHandoffHidden() {
         handoffDrawSuppressed = false;
         handoffRevealActive = false;
         handoffTitleRevealStartMs = 0L;
         handoffReflectRevealStartMs = 0L;
-        handoffCenterRevealAlpha = 0f;
+        // Don't zero landing crossfade mid-reverse — flyer→carousel handshake would flash.
+        if (!FlowPlayerHandoff.isHandoffAnimating()) {
+            handoffCenterRevealAlpha = 0f;
+        }
         handoffSideRevealAlpha = 0f;
         handoffReflectRevealAlpha = 0f;
         titleAlpha = 0f;
@@ -333,6 +361,7 @@ public final class FlowView extends View {
     public void finishHandoffLanding() {
         handoffCenterRevealAlpha = 1f;
         handoffSideRevealAlpha = 1f;
+        titleAlpha = 1f;
         clearHandoffPin();
         handoffReflectRevealStartMs = System.currentTimeMillis();
         handoffReflectRevealAlpha = 0f;
@@ -425,6 +454,39 @@ public final class FlowView extends View {
         guidedScrollTarget = clamped;
         guidedScrollComplete = onComplete;
         guidedScrollStepFeedback = onStep;
+        guidedScrollStartMs = System.currentTimeMillis();
+        advanceGuidedScrollStep();
+        postAnimTick();
+    }
+
+    /**
+     * NP-back handoff — zip to one album shy of target, then one wheel scroll into morph.
+     * Avoids slow multi-step scroll with per-step haptics.
+     */
+    public void animateScrollToIndexForHandoff(int targetIndex, Runnable onComplete) {
+        if (items.isEmpty()) {
+            if (onComplete != null) onComplete.run();
+            return;
+        }
+        int clamped = Math.max(0, Math.min(items.size() - 1, targetIndex));
+        int focus = engine.isAnimating()
+                ? engine.getVisualCenterIndex()
+                : engine.getFocusIndex();
+        if (focus == clamped && !engine.isCarouselScrolling()) {
+            if (onComplete != null) onComplete.run();
+            return;
+        }
+        int remaining = Math.abs(clamped - focus);
+        if (remaining > 1) {
+            int sign = clamped > focus ? 1 : -1;
+            engine.setFocusIndex(clamped - sign);
+            notifyFocusIfChanged();
+            prefetchAround(engine.getFocusIndex());
+            snapCarouselToVisualCenter();
+        }
+        guidedScrollTarget = clamped;
+        guidedScrollComplete = onComplete;
+        guidedScrollStepFeedback = null;
         guidedScrollStartMs = System.currentTimeMillis();
         advanceGuidedScrollStep();
         postAnimTick();
@@ -890,6 +952,15 @@ public final class FlowView extends View {
         }
     }
 
+    private void scheduleFrontFaceMarqueeTick() {
+        removeCallbacks(frontMarqueeTick);
+        postDelayed(frontMarqueeTick, 48);
+    }
+
+    private void stopFrontFaceMarqueeTick() {
+        removeCallbacks(frontMarqueeTick);
+    }
+
     private void scheduleBackFaceMarqueeTick() {
         if (flip.getState() == FlowFlipController.STATE_BACK) {
             postDelayed(new Runnable() {
@@ -1142,16 +1213,25 @@ public final class FlowView extends View {
         textPaint.setTypeface(Typeface.create(ThemeManager.getCustomFont(), Typeface.BOLD));
         textPaint.setColor(0xFFFFFFFF);
         titleMarquee.draw(canvas, title != null ? title : "", x, titleY, maxW, textPaint);
+        boolean titleOverflow = title != null && textPaint.measureText(title) > maxW;
         if (subtitle != null && !subtitle.isEmpty()) {
             textPaint.setTextSize(w * 0.046f);
             textPaint.setTypeface(Typeface.create(ThemeManager.getCustomFont(), Typeface.NORMAL));
             textPaint.setColor(ThemeManager.getTextColorSecondary());
             subtitleMarquee.draw(canvas, subtitle, x, titleY + h * 0.055f, maxW, textPaint);
+            if (!titleOverflow) {
+                titleOverflow = textPaint.measureText(subtitle) > maxW;
+            }
             textPaint.setColor(0xFFFFFFFF);
         }
         textPaint.setTextAlign(Paint.Align.CENTER);
         textPaint.setAlpha(255);
-        if (titleAlpha < 1f) scheduleBackFaceMarqueeTick();
+        if (titleOverflow) {
+            scheduleFrontFaceMarqueeTick();
+        } else {
+            stopFrontFaceMarqueeTick();
+        }
+        if (titleAlpha < 1f) scheduleFrontFaceMarqueeTick();
     }
 
     private void drawEmptyHint(Canvas canvas, float w, float h) {

@@ -62,6 +62,12 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
         /** Same track already playing — handoff to NP without restarting playback. */
         void resumePlayerWithHandoff(Bitmap cover, RectF fromRect, float fromRotY);
         void resumePlayerWithCrossfade();
+        /** NP→Flow reverse morph — layout crossfade + opaque flyer (mirror of resumePlayerWithHandoff). */
+        void launchReverseHandoff(Bitmap cover, RectF fromRect, float toRotY, Runnable onComplete);
+        /** Live NP album bitmap for reverse handoff, or null. */
+        Bitmap playerHandoffCoverBitmap();
+        /** NP album slot screen rect — measured before slot is hidden. */
+        RectF resolveNpHandoffFromScreenRect();
         void playPodcastWithHandoff(OpenRssClient.Podcast show, List<OpenRssClient.Episode> episodes,
                 int index, Bitmap cover, RectF fromRect, float fromRotY);
         void playPodcastWithCrossfade(OpenRssClient.Podcast show, List<OpenRssClient.Episode> episodes,
@@ -326,14 +332,21 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
     private void finishPlayerReturnHandoffPrep(Bitmap handoffCover) {
         flowView.snapCarouselToVisualCenter();
         FlowItem item = flowView.itemAt(flowView.engine().getFocusIndex());
-        String key = item != null ? item.coverKey : handoffPinnedCoverKey;
+        String key = handoffPinnedCoverKey;
+        if (key == null || key.isEmpty()) {
+            key = item != null ? item.coverKey : null;
+        }
         if (handoffCover != null && !handoffCover.isRecycled()) {
             pinHandoffCover(handoffCover, key);
+            if (item != null && item.coverKey != null && !item.coverKey.isEmpty()
+                    && key != null && !key.equals(item.coverKey) && handoffPinnedCover != null) {
+                coverCache.put(item.coverKey, handoffPinnedCover);
+            }
         } else if (key != null && handoffPinnedCover != null) {
             coverCache.put(key, handoffPinnedCover);
         }
         flowReturnPrepared = true;
-        flowView.prepareHandoffHidden();
+        flowView.prepareHandoffFlyerOnly();
     }
 
     /** Disk warm for side covers after reverse handoff — center already pinned during morph. */
@@ -520,12 +533,97 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
         applyReturnState(state, false, catalogHint);
         flowView.snapCarouselToVisualCenter();
         FlowItem item = flowView.itemAt(flowView.engine().getFocusIndex());
-        String key = item != null ? item.coverKey : null;
-        if (handoffCover != null && !handoffCover.isRecycled()) {
-            pinHandoffCover(handoffCover, key);
+        // Keep pin key stable — matchKey from return state, not item.coverKey after catalog align.
+        String pinKey = handoffPinnedCoverKey;
+        if (pinKey == null || pinKey.isEmpty()) {
+            pinKey = state.carouselMatchKey;
         }
-        flowView.prepareHandoffHidden();
+        if ((pinKey == null || pinKey.isEmpty()) && item != null) {
+            pinKey = item.coverKey;
+        }
+        if (handoffCover != null && !handoffCover.isRecycled()) {
+            pinHandoffCover(handoffCover, pinKey);
+            if (item != null && item.coverKey != null && !item.coverKey.isEmpty()
+                    && !item.coverKey.equals(pinKey) && handoffPinnedCover != null) {
+                coverCache.put(item.coverKey, handoffPinnedCover);
+            }
+        }
+        flowView.prepareHandoffFlyerOnly();
         flowReturnPrepared = true;
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("catalogSize", catalog != null ? catalog.size() : 0);
+            d.put("reverseActive", reverseHandoffActive);
+            d.put("matchKey", state != null ? state.carouselMatchKey : "");
+            DebugSessionLog.log(
+                    "FlowScreenHost.prepareReturnForResolvedState", "carousel prep", "H-D", d);
+        } catch (Exception ignored) {}
+        // #endregion
+    }
+
+    /**
+     * Cold NP→Flow — bind carousel (minimal shell if needed) so flyer has a real landing rect.
+     */
+    public void prepareImmediateReverseHandoffShell(Bitmap handoffCover, String coverKey) {
+        if (flowView == null) return;
+        uiMode = UI_CAROUSEL;
+        activeMode = FlowMode.ALBUM;
+        if (pickerScroll != null) pickerScroll.setVisibility(View.GONE);
+        flowView.setVisibility(View.VISIBLE);
+        List<FlowItem> cached = peekSessionCatalog(FlowMode.ALBUM);
+        boolean bound = false;
+        if (cached != null && !cached.isEmpty() && coverKey != null && !coverKey.isEmpty()) {
+            int idx = flowView.engine().findIndexForKey(cached, coverKey);
+            if (idx >= 0) {
+                catalog = cached;
+                flowView.setItems(cached);
+                flowView.engine().setFocusIndex(idx);
+                focusedItem = cached.get(idx);
+                bound = true;
+            }
+        }
+        if (!bound) {
+            String key = coverKey != null ? coverKey : "";
+            FlowItem shell = FlowItem.album(key, "", key,
+                    java.util.Collections.<java.io.File>emptyList(), "");
+            catalog = java.util.Collections.singletonList(shell);
+            flowView.setItems(catalog);
+            flowView.engine().setFocusIndex(0);
+            focusedItem = shell;
+        }
+        if (handoffCover != null && !handoffCover.isRecycled()) {
+            pinHandoffCover(handoffCover, coverKey);
+        }
+        flowView.prepareHandoffFlyerOnly();
+        flowView.invalidate();
+        flowReturnPrepared = true;
+    }
+
+    /** True when carousel has items and a measured center-cover landing rect. */
+    public boolean hasLiveHandoffLandingRect() {
+        if (flowView == null || catalog == null || catalog.isEmpty()) return false;
+        RectF rect = flowView.getHandoffCoverScreenRect();
+        return rect != null && rect.width() > 0f;
+    }
+
+    /** Force FlowView measure so handoff landing rect is valid before reverse morph frame 0. */
+    public void ensureCarouselLayoutForHandoff() {
+        if (flowView == null) return;
+        flowView.setVisibility(View.VISIBLE);
+        View parent = (View) flowView.getParent();
+        int w = parent != null ? parent.getWidth() : 0;
+        int h = parent != null ? parent.getHeight() : 0;
+        if (w <= 0 || h <= 0) {
+            w = flowView.getWidth();
+            h = flowView.getHeight();
+        }
+        if (w <= 0 || h <= 0) return;
+        flowView.measure(
+                View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(h, View.MeasureSpec.EXACTLY));
+        flowView.layout(0, 0, w, h);
+        flowView.invalidate();
     }
 
     /** Stagger album title fade with reverse handoff reveal crossfade. */
@@ -538,7 +636,13 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
     }
 
     public void setHandoffLandingCrossfade(float flyerAlpha, float carouselAlpha) {
-        if (flowView != null) flowView.setHandoffCenterRevealAlpha(carouselAlpha);
+        if (flowView != null) {
+            flowView.setHandoffCenterRevealAlpha(carouselAlpha);
+            // Measured morph keeps labels visible — only unmeasured swap fades title chrome.
+            if (flyerAlpha < 1f) {
+                flowView.setHandoffRevealProgress(carouselAlpha);
+            }
+        }
     }
 
     public void setHandoffSideRevealAlpha(float alpha) {
@@ -1095,15 +1199,10 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
                 FlowBackDebugLog.log("FlowScreenHost.tryReturnToNowPlayingOnBack", "guided scroll start", "H2", d);
             } catch (Exception ignored) {}
             // #endregion
-            flowView.animateScrollToIndex(playingIdx, new Runnable() {
+            flowView.animateScrollToIndexForHandoff(playingIdx, new Runnable() {
                 @Override
                 public void run() {
                     performNowPlayingHandoffFromCarousel();
-                }
-            }, new Runnable() {
-                @Override
-                public void run() {
-                    actions.clickFeedback();
                 }
             });
             return true;
@@ -1114,6 +1213,29 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
         performNowPlayingHandoffFromCarousel();
         actions.clickFeedback();
         return true;
+    }
+
+    /**
+     * Reverse 3D morph from Now Playing — mirror of {@link #performNowPlayingHandoffFromCarousel()}.
+     * Prep carousel (warm or cold shell), measure landing rect, launch flyer morph immediately.
+     */
+    public void performNpToFlowHandoffFromNowPlaying(Bitmap cover, String matchKey,
+            FlowReturnState warmState, List<FlowItem> warmCatalog, RectF fromRect,
+            Runnable onComplete) {
+        if (flowView == null || cover == null || cover.isRecycled()) return;
+        syncCarouselToNowPlayingIfActive();
+        if (warmState != null) {
+            prepareReturnForResolvedState(warmState, warmCatalog, cover);
+        } else {
+            prepareImmediateReverseHandoffShell(cover, matchKey);
+        }
+        ensureCarouselLayoutForHandoff();
+        float toRotY = getHandoffStartRotationY();
+        RectF npRect = fromRect;
+        if (npRect == null || npRect.width() <= 0f) {
+            npRect = actions.resolveNpHandoffFromScreenRect();
+        }
+        actions.launchReverseHandoff(cover, npRect, toRotY, onComplete);
     }
 
     /** Center cover for handoff — disk/memory hit, or generated ♪ placeholder for art-less albums. */

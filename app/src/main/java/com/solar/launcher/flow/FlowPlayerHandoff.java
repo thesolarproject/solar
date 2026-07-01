@@ -73,9 +73,15 @@ public final class FlowPlayerHandoff {
         handoffAnimating = false;
     }
 
-    /** @visibleForTesting */
+    /** @visibleForTesting — measured landing skips the extra flyer→carousel swap fade. */
     static int reverseHandoffTotalMs() {
-        return REVERSE_HANDOFF_MS + REVERSE_LANDING_CROSSFADE_MS;
+        return reverseHandoffTotalMs(true);
+    }
+
+    static int reverseHandoffTotalMs(boolean landingRectMeasured) {
+        return landingRectMeasured
+                ? REVERSE_HANDOFF_MS
+                : REVERSE_HANDOFF_MS + REVERSE_LANDING_CROSSFADE_MS;
     }
 
     /** @visibleForTesting */
@@ -90,14 +96,30 @@ public final class FlowPlayerHandoff {
 
     /** @visibleForTesting — flyer alpha during morph (opaque until landing crossfade phase). */
     static float reverseFlyerAlphaAt(float morphT, float landingCrossfadeT) {
+        return reverseFlyerAlphaAt(morphT, landingCrossfadeT, false);
+    }
+
+    static float reverseFlyerAlphaAt(float morphT, float landingCrossfadeT,
+            boolean landingRectMeasured) {
+        if (landingRectMeasured) {
+            return 1f;
+        }
         if (landingCrossfadeT > 0f) {
             return Math.max(0f, 1f - easeInQuad(Math.min(1f, landingCrossfadeT)));
         }
-        return morphT >= 0f && morphT <= 1f ? 1f : 1f;
+        return 1f;
     }
 
     /** @visibleForTesting — carousel center alpha during reverse handoff. */
     static float reverseLandingCarouselAlphaAt(float morphT, float landingCrossfadeT) {
+        return reverseLandingCarouselAlphaAt(morphT, landingCrossfadeT, false);
+    }
+
+    static float reverseLandingCarouselAlphaAt(float morphT, float landingCrossfadeT,
+            boolean landingRectMeasured) {
+        if (landingRectMeasured) {
+            return easeOutQuad(Math.min(1f, morphT));
+        }
         if (landingCrossfadeT > 0f) {
             return easeInQuad(Math.min(1f, landingCrossfadeT));
         }
@@ -226,7 +248,7 @@ public final class FlowPlayerHandoff {
         morphTarget.set(to);
 
         if (reverse) {
-            // Mirror forward: NP chrome fades out while Flow chrome fades in under the flyer.
+            // Mirror forward Flow→NP: NP chrome out, Flow in, flyer carries the cover.
             if (playerLayout != null) {
                 playerLayout.setVisibility(View.VISIBLE);
                 playerLayout.setAlpha(1f);
@@ -236,7 +258,9 @@ public final class FlowPlayerHandoff {
                 flowLayout.setAlpha(0f);
             }
             if (bgBlur != null) bgBlur.setAlpha(1f);
-            host.onReverseLandingCrossfade(0f, 0f);
+            if (!landingRectMeasured) {
+                host.onReverseLandingCrossfade(0f, 0f);
+            }
         } else {
             if (flowLayout != null) {
                 flowLayout.setVisibility(View.VISIBLE);
@@ -272,7 +296,9 @@ public final class FlowPlayerHandoff {
         flyer.setScreenPose(poseBuf, rotBuf[0], 1f);
         if (reverse) {
             host.onReverseFlyerMounted();
-            host.onReverseBackgroundProgress(0f);
+            if (!landingRectMeasured) {
+                host.onReverseBackgroundProgress(0f);
+            }
         }
 
         final Runnable tick = new Runnable() {
@@ -301,7 +327,8 @@ public final class FlowPlayerHandoff {
                 long elapsed = now - animStartMs;
                 float morphT = Math.min(1f, elapsed / (float) morphDurationMs);
                 float landingT = 0f;
-                if (reverse && morphT >= 1f) {
+                // Measured carousel landing — single morph phase like forward Flow→NP (no swap fade).
+                if (reverse && morphT >= 1f && !landingRectMeasured) {
                     if (landingCrossfadeStartMs[0] == 0L) {
                         landingCrossfadeStartMs[0] = now;
                     }
@@ -323,29 +350,37 @@ public final class FlowPlayerHandoff {
                 handoffPoseAt(poseEased, from, morphTarget, fromRotY, toRotY, poseBuf, rotBuf);
 
                 if (reverse) {
-                    float flyerAlpha = reverseFlyerAlphaAt(morphT, landingT);
-                    float carouselAlpha = reverseLandingCarouselAlphaAt(morphT, landingT);
+                    // Measured landing — mirror forward: layout crossfade + opaque flyer only.
                     if (!skipDraw) {
-                        flyer.setScreenPose(poseBuf, rotBuf[0], flyerAlpha);
+                        float drawAlpha = landingRectMeasured ? 1f
+                                : reverseFlyerAlphaAt(morphT, landingT, false);
+                        flyer.setScreenPose(poseBuf, rotBuf[0], drawAlpha);
                         lastDrawWallMs[0] = now;
                     }
-                    host.onReverseLandingCrossfade(flyerAlpha, carouselAlpha);
-                    // Mirror forward layout crossfade: NP out, Flow in during morph.
+                    if (!landingRectMeasured) {
+                        float flyerAlpha = reverseFlyerAlphaAt(morphT, landingT, false);
+                        float carouselAlpha = reverseLandingCarouselAlphaAt(
+                                morphT, landingT, false);
+                        host.onReverseLandingCrossfade(flyerAlpha, carouselAlpha);
+                        host.onReverseBackgroundProgress(reverseSideRevealAt(morphT));
+                        if (morphT >= REVERSE_CHROME_STAGGER_START_T) {
+                            if (!chromeStaggerStarted[0]) {
+                                chromeStaggerStarted[0] = true;
+                                host.onReverseRevealStart();
+                            }
+                            float staggerT = (morphT - REVERSE_CHROME_STAGGER_START_T)
+                                    / (1f - REVERSE_CHROME_STAGGER_START_T);
+                            host.onReverseRevealProgress(easeOutQuad(Math.min(1f, staggerT)));
+                        }
+                    } else {
+                        // Carousel center fades in under opaque flyer — no end pop.
+                        host.onReverseLandingCrossfade(1f, easeOutQuad(Math.min(1f, morphT)));
+                    }
+                    // NP chrome out, Flow in under the flyer (inverse of forward).
                     if (morphT < 1f) {
                         if (playerLayout != null) playerLayout.setAlpha(1f - eased);
                         if (bgBlur != null) bgBlur.setAlpha(1f - eased);
                         if (flowLayout != null) flowLayout.setAlpha(eased);
-                    }
-                    host.onReverseBackgroundProgress(reverseSideRevealAt(morphT));
-                    // Stagger status bar + album labels after morph is mostly done.
-                    if (morphT >= REVERSE_CHROME_STAGGER_START_T) {
-                        if (!chromeStaggerStarted[0]) {
-                            chromeStaggerStarted[0] = true;
-                            host.onReverseRevealStart();
-                        }
-                        float staggerT = (morphT - REVERSE_CHROME_STAGGER_START_T)
-                                / (1f - REVERSE_CHROME_STAGGER_START_T);
-                        host.onReverseRevealProgress(easeOutQuad(Math.min(1f, staggerT)));
                     }
                 } else {
                     if (!skipDraw) {
@@ -357,12 +392,21 @@ public final class FlowPlayerHandoff {
                     if (bgBlur != null) bgBlur.setAlpha(eased);
                 }
 
-                boolean reverseDone = reverse && morphT >= 1f && landingT >= 1f;
+                boolean reverseDone = reverse && morphT >= 1f
+                        && (landingRectMeasured || landingT >= 1f);
                 boolean forwardDone = !reverse && morphT >= 1f;
 
                 if (!reverseDone && !forwardDone) {
                     flyer.postOnAnimation(this);
                 } else if (reverse) {
+                    // Snap flyer to live carousel center before remove — mirror forward NP slot snap.
+                    if (landingRectMeasured) {
+                        RectF measured = host.flowHandoffLandingRect();
+                        if (measured != null && measured.width() > 0f) {
+                            morphTarget.set(measured);
+                            flyer.setScreenPose(morphTarget, toRotY, 1f);
+                        }
+                    }
                     if (playerLayout != null) {
                         playerLayout.setAlpha(0f);
                         playerLayout.setVisibility(View.GONE);
@@ -374,6 +418,7 @@ public final class FlowPlayerHandoff {
                         try {
                             JSONObject d = new JSONObject();
                             d.put("reverse", true);
+                            d.put("landingMeasured", landingRectMeasured);
                             d.put("wallMs", now - animStartMs);
                             d.put("frames", frameCount[0]);
                             d.put("slowFrames", slowFrameCount[0]);
