@@ -40,19 +40,12 @@ jobs:
           python3 solar-rom/scripts/resolve-release-version.py --self-test
           ./solar-rom/scripts/prepare-release.sh
 
-      - name: Verify OTA PAT can reach solar-update
+      - name: Verify OTA PAT can push to solar-update
         env:
           SOLAR_GITHUB_PAT: ${{ secrets.SOLAR_GITHUB_PAT }}
         run: |
-          if [ -z "$SOLAR_GITHUB_PAT" ]; then
-            echo "::error::SOLAR_GITHUB_PAT secret is missing — rotate or add a PAT with Contents read/write on thesolarproject/solar-update repo."
-            exit 1
-          fi
-          if ! git ls-remote "https://x-access-token:${SOLAR_GITHUB_PAT}@github.com/thesolarproject/solar-update.git" HEAD >/dev/null 2>&1; then
-            echo "::error::SOLAR_GITHUB_PAT cannot read thesolarproject/solar-update — rotate the repo secret (needs Contents read/write on solar-update)."
-            exit 128
-          fi
-          echo "solar-update PAT preflight OK"
+          chmod +x scripts/verify-ota-pat.sh
+          ./scripts/verify-ota-pat.sh
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
