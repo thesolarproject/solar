@@ -4,7 +4,9 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
-import android.database.sqlite.SQLiteOpenHelper;
+
+import com.solar.launcher.db.SolarDatabase;
+import com.solar.launcher.db.SolarDbHelper;
 
 import com.solar.launcher.soulseek.ReachIntroMessage;
 import com.solar.launcher.soulseek.SolarDeveloperAccounts;
@@ -21,7 +23,7 @@ import java.util.List;
 import java.util.Locale;
 
 /** SQLite store for Reach rooms, messages, and peer cache. */
-public class ReachDatabase extends SQLiteOpenHelper {
+public class ReachDatabase extends SolarDbHelper {
     private static final String DB_NAME = "reach.db";
     private static final int DB_VERSION = 3;
     private static final String PREF_MIGRATED = "reach_db_migrated_v1";
@@ -32,7 +34,11 @@ public class ReachDatabase extends SQLiteOpenHelper {
     private static ReachDatabase instance;
 
     private ReachDatabase(Context ctx) {
-        super(ctx.getApplicationContext(), DB_NAME, null, DB_VERSION);
+        this(ctx, true);
+    }
+
+    private ReachDatabase(Context ctx, boolean walEnabled) {
+        super(ctx.getApplicationContext(), DB_NAME, DB_VERSION, walEnabled);
     }
 
     public static synchronized ReachDatabase getInstance(Context ctx) {
@@ -53,7 +59,7 @@ public class ReachDatabase extends SQLiteOpenHelper {
     public static ReachDatabase openForTest(Context ctx) {
         resetInstanceForTest();
         final SQLiteDatabase[] mem = new SQLiteDatabase[1];
-        instance = new ReachDatabase(ctx.getApplicationContext()) {
+        instance = new ReachDatabase(ctx.getApplicationContext(), false) {
             @Override
             public synchronized SQLiteDatabase getWritableDatabase() {
                 if (mem[0] == null) {
@@ -72,7 +78,7 @@ public class ReachDatabase extends SQLiteOpenHelper {
     }
 
     @Override
-    public void onCreate(SQLiteDatabase db) {
+    public void onCreate(SolarDatabase db) {
         db.execSQL("CREATE TABLE rooms (name TEXT PRIMARY KEY COLLATE NOCASE,"
                 + " user_count INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0)");
         db.execSQL("CREATE INDEX idx_rooms_name ON rooms(name COLLATE NOCASE)");
@@ -91,7 +97,7 @@ public class ReachDatabase extends SQLiteOpenHelper {
         createRoomTickersTable(db);
     }
 
-    private static void createRoomTickersTable(SQLiteDatabase db) {
+    private static void createRoomTickersTable(SolarDatabase db) {
         db.execSQL("CREATE TABLE IF NOT EXISTS room_tickers (room TEXT NOT NULL,"
                 + " username TEXT NOT NULL, text TEXT NOT NULL DEFAULT '',"
                 + " updated_at INTEGER NOT NULL DEFAULT 0,"
@@ -99,13 +105,13 @@ public class ReachDatabase extends SQLiteOpenHelper {
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_room_tickers_room ON room_tickers(room)");
     }
 
-    private static void createPeerNotesTable(SQLiteDatabase db) {
+    private static void createPeerNotesTable(SolarDatabase db) {
         db.execSQL("CREATE TABLE IF NOT EXISTS peer_notes (username TEXT PRIMARY KEY COLLATE NOCASE,"
                 + " note TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL DEFAULT 0)");
     }
 
     @Override
-    public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+    public void onUpgrade(SolarDatabase db, int oldVersion, int newVersion) {
         if (oldVersion < 2) {
             createPeerNotesTable(db);
         }

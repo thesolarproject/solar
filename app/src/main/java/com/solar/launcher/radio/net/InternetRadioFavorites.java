@@ -1,15 +1,16 @@
 package com.solar.launcher.radio.net;
 
 import android.content.Context;
-import android.database.Cursor;
-import android.database.sqlite.SQLiteDatabase;
-import android.database.sqlite.SQLiteOpenHelper;
+
+import com.solar.launcher.db.SolarCursor;
+import com.solar.launcher.db.SolarDatabase;
+import com.solar.launcher.db.SolarDbHelper;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /** Saved internet radio stations keyed by Radio Browser stationuuid. */
-public final class InternetRadioFavorites extends SQLiteOpenHelper {
+public final class InternetRadioFavorites extends SolarDbHelper {
   private static final String DB = "internet_radio_favorites.db";
   private static final int VERSION = 1;
 
@@ -32,7 +33,7 @@ public final class InternetRadioFavorites extends SQLiteOpenHelper {
   }
 
   private InternetRadioFavorites(Context ctx) {
-    super(ctx.getApplicationContext(), DB, null, VERSION);
+    super(ctx.getApplicationContext(), DB, VERSION);
   }
 
   public static synchronized InternetRadioFavorites getInstance(Context ctx) {
@@ -50,7 +51,7 @@ public final class InternetRadioFavorites extends SQLiteOpenHelper {
   }
 
   @Override
-  public void onCreate(SQLiteDatabase db) {
+  public void onCreate(SolarDatabase db) {
     db.execSQL(
         "CREATE TABLE favorites ("
             + "id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -62,17 +63,17 @@ public final class InternetRadioFavorites extends SQLiteOpenHelper {
   }
 
   @Override
-  public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+  public void onUpgrade(SolarDatabase db, int oldVersion, int newVersion) {
     db.execSQL("DROP TABLE IF EXISTS favorites");
     onCreate(db);
   }
 
-  public synchronized List<Favorite> listAll() {
-    SQLiteDatabase db = getReadableDatabase();
-    Cursor c =
+  public List<Favorite> listAll() {
+    SolarDatabase db = openReadable();
+    SolarCursor c =
         db.query("favorites",
             new String[] {"id", "stationuuid", "name", "url", "countrycode"},
-            null, null, null, null, "added_at DESC");
+            null, null, "added_at DESC");
     List<Favorite> out = new ArrayList<Favorite>();
     try {
       while (c.moveToNext()) {
@@ -93,7 +94,7 @@ public final class InternetRadioFavorites extends SQLiteOpenHelper {
 
   public synchronized long add(String stationuuid, String name, String url, String countrycode) {
     if (stationuuid == null || stationuuid.trim().isEmpty()) return -1L;
-    SQLiteDatabase db = getWritableDatabase();
+    SolarDatabase db = openWritable();
     db.execSQL(
         "INSERT OR REPLACE INTO favorites (id, stationuuid, name, url, countrycode, added_at) VALUES ("
             + "(SELECT id FROM favorites WHERE stationuuid=?), ?, ?, ?, ?, ?)",
@@ -105,7 +106,7 @@ public final class InternetRadioFavorites extends SQLiteOpenHelper {
           countrycode != null ? countrycode : "",
           System.currentTimeMillis()
         });
-    Cursor c =
+    SolarCursor c =
         db.rawQuery("SELECT id FROM favorites WHERE stationuuid=?", new String[] {stationuuid.trim()});
     try {
       return c.moveToFirst() ? c.getLong(0) : -1L;
@@ -116,16 +117,16 @@ public final class InternetRadioFavorites extends SQLiteOpenHelper {
 
   public synchronized boolean remove(String stationuuid) {
     if (stationuuid == null || stationuuid.trim().isEmpty()) return false;
-    return getWritableDatabase().delete("favorites", "stationuuid=?", new String[] {
+    return openWritable().delete("favorites", "stationuuid=?", new String[] {
           stationuuid.trim()
         })
         > 0;
   }
 
-  public synchronized boolean isFavorite(String stationuuid) {
+  public boolean isFavorite(String stationuuid) {
     if (stationuuid == null || stationuuid.trim().isEmpty()) return false;
-    Cursor c =
-        getReadableDatabase()
+    SolarCursor c =
+        openReadable()
             .rawQuery("SELECT 1 FROM favorites WHERE stationuuid=? LIMIT 1",
                 new String[] {stationuuid.trim()});
     try {

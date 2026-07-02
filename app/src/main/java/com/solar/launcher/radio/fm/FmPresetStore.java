@@ -1,15 +1,16 @@
 package com.solar.launcher.radio.fm;
 
 import android.content.Context;
-import android.database.Cursor;
-import android.database.sqlite.SQLiteDatabase;
-import android.database.sqlite.SQLiteOpenHelper;
+
+import com.solar.launcher.db.SolarCursor;
+import com.solar.launcher.db.SolarDatabase;
+import com.solar.launcher.db.SolarDbHelper;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /** Saved FM stations — freq in kHz + optional label. */
-public final class FmPresetStore extends SQLiteOpenHelper {
+public final class FmPresetStore extends SolarDbHelper {
   private static final String DB = "fm_presets.db";
   private static final int VERSION = 1;
 
@@ -28,7 +29,7 @@ public final class FmPresetStore extends SQLiteOpenHelper {
   }
 
   private FmPresetStore(Context ctx) {
-    super(ctx.getApplicationContext(), DB, null, VERSION);
+    super(ctx.getApplicationContext(), DB, VERSION);
   }
 
   public static synchronized FmPresetStore getInstance(Context ctx) {
@@ -46,7 +47,7 @@ public final class FmPresetStore extends SQLiteOpenHelper {
   }
 
   @Override
-  public void onCreate(SQLiteDatabase db) {
+  public void onCreate(SolarDatabase db) {
     db.execSQL(
         "CREATE TABLE presets ("
             + "id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -56,15 +57,15 @@ public final class FmPresetStore extends SQLiteOpenHelper {
   }
 
   @Override
-  public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+  public void onUpgrade(SolarDatabase db, int oldVersion, int newVersion) {
     db.execSQL("DROP TABLE IF EXISTS presets");
     onCreate(db);
   }
 
-  public synchronized List<Preset> listAll() {
-    SQLiteDatabase db = getReadableDatabase();
-    Cursor c =
-        db.query("presets", new String[] {"id", "freq_khz", "label"}, null, null, null, null,
+  public List<Preset> listAll() {
+    SolarDatabase db = openReadable();
+    SolarCursor c =
+        db.query("presets", new String[] {"id", "freq_khz", "label"}, null, null,
             "freq_khz ASC");
     List<Preset> out = new ArrayList<Preset>();
     try {
@@ -79,12 +80,12 @@ public final class FmPresetStore extends SQLiteOpenHelper {
   }
 
   public synchronized long upsert(int freqKhz, String label) {
-    SQLiteDatabase db = getWritableDatabase();
+    SolarDatabase db = openWritable();
     db.execSQL(
         "INSERT OR REPLACE INTO presets (id, freq_khz, label) VALUES ("
             + "(SELECT id FROM presets WHERE freq_khz=?), ?, ?)",
         new Object[] {freqKhz, freqKhz, label != null ? label : ""});
-    Cursor c = db.rawQuery("SELECT id FROM presets WHERE freq_khz=?", new String[] {
+    SolarCursor c = db.rawQuery("SELECT id FROM presets WHERE freq_khz=?", new String[] {
       Integer.toString(freqKhz)
     });
     try {
@@ -95,17 +96,17 @@ public final class FmPresetStore extends SQLiteOpenHelper {
   }
 
   public synchronized boolean delete(int freqKhz) {
-    return getWritableDatabase().delete("presets", "freq_khz=?", new String[] {
+    return openWritable().delete("presets", "freq_khz=?", new String[] {
           Integer.toString(freqKhz)
         })
         > 0;
   }
 
-  public synchronized Preset findByFreq(int freqKhz) {
-    SQLiteDatabase db = getReadableDatabase();
-    Cursor c =
+  public Preset findByFreq(int freqKhz) {
+    SolarDatabase db = openReadable();
+    SolarCursor c =
         db.query("presets", new String[] {"id", "freq_khz", "label"}, "freq_khz=?",
-            new String[] {Integer.toString(freqKhz)}, null, null, null);
+            new String[] {Integer.toString(freqKhz)}, null);
     try {
       if (!c.moveToFirst()) return null;
       return new Preset(c.getLong(0), c.getInt(1), c.isNull(2) ? "" : c.getString(2));
