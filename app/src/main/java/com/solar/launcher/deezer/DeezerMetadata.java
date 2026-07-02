@@ -107,6 +107,18 @@ public final class DeezerMetadata {
         return DeezerCoverArt.bestCoverUrl(prefs.getString(KEY_COVER_URL + path, ""));
     }
 
+    /** Drop prefs overlay after tags are embedded in the audio file. */
+    public static void clearOverlay(Context ctx, String absolutePath) {
+        if (ctx == null || absolutePath == null) return;
+        SharedPreferences prefs = prefs(ctx);
+        prefs.edit()
+                .remove(KEY_TITLE + absolutePath)
+                .remove(KEY_ARTIST + absolutePath)
+                .remove(KEY_ALBUM + absolutePath)
+                .remove(KEY_COVER_URL + absolutePath)
+                .commit();
+    }
+
     /** Cache high-res cover next to other album art for library + player. */
     public static void prefetchCoverFile(SharedPreferences prefs, File track, File coverFile) {
         if (prefs == null || track == null || coverFile == null) return;

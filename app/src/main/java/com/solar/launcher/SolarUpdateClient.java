@@ -20,11 +20,15 @@ import okhttp3.Response;
 public final class SolarUpdateClient {
     public static final String DEFAULT_UPDATES_URL =
             "https://thesolarproject.github.io/solar-update/updates.xml";
-    /** Max rows on Change App Version screen (Y1 scroll + RAM). */
-    public static final int MAX_PICKER_RELEASES = 8;
+    /** Max rows per page on Change App Version screen (Y1 scroll). */
+    public static final int PICKER_PAGE_SIZE = 12;
+    /** Hard cap — entire published catalog should fit (see trimCatalog). */
+    public static final int MAX_PICKER_RELEASES = 40;
     /** Max nightly APKs kept in published OTA catalog. */
-    public static final int MAX_CATALOG_NIGHTLIES = 12;
-    /** Current nightly tag format: {@code nightly-YYYYMMDD-HHMM} (UTC). */
+    public static final int MAX_CATALOG_NIGHTLIES = 24;
+    /** UTC build stamp in versionName — {@code YYYYMMDD-HHMM} (stable or nightly tag body). */
+    private static final Pattern TIMESTAMP_VERSION =
+            Pattern.compile("^\\d{8}-\\d{4}$");
     private static final Pattern TIMESTAMP_NIGHTLY_TAG =
             Pattern.compile("^nightly-\\d{8}-\\d{4}$");
     private static final Pattern TIMESTAMP_NIGHTLY_PARTS =
@@ -48,6 +52,9 @@ public final class SolarUpdateClient {
         public String listLabel() {
             if (nightly) {
                 return isTimestampNightly(tag) ? formatNightlyDisplayLabel(tag) : tag;
+            }
+            if (isTimestampVersionName(versionName)) {
+                return formatTimestampDisplayLabel(versionName);
             }
             return "v" + versionName;
         }
@@ -156,9 +163,28 @@ public final class SolarUpdateClient {
         return tag != null && TIMESTAMP_NIGHTLY_TAG.matcher(tag).matches();
     }
 
+    /** Stable channel build stamps — {@code 20260629-1615} without nightly prefix. */
+    public static boolean isTimestampVersionName(String versionName) {
+        return versionName != null && TIMESTAMP_VERSION.matcher(versionName.trim()).matches();
+    }
+
+    /** Human-readable UTC label for timestamp stable builds. */
+    public static String formatTimestampDisplayLabel(String versionName) {
+        if (!isTimestampVersionName(versionName)) {
+            return versionName == null ? "" : versionName;
+        }
+        return formatNightlyDisplayLabel(versionName);
+    }
+
     public static String formatNightlyDisplayLabel(String tag) {
-        if (!isTimestampNightly(tag)) return tag == null ? "" : tag;
-        String rest = tag.substring("nightly-".length());
+        if (tag == null) return "";
+        String rest = tag;
+        if (rest.startsWith("nightly-")) {
+            if (!isTimestampNightly(tag)) return tag;
+            rest = tag.substring("nightly-".length());
+        } else if (!isTimestampVersionName(rest)) {
+            return tag;
+        }
         Matcher m = TIMESTAMP_NIGHTLY_PARTS.matcher(rest);
         if (!m.matches()) return tag;
         try {
@@ -190,7 +216,7 @@ public final class SolarUpdateClient {
         ReleaseInfo best = null;
         for (ReleaseInfo r : releases) {
             if (r.nightly) continue;
-            if (best == null || compareSemver(best.versionName, r.versionName) < 0) best = r;
+            if (best == null || compareStableRelease(r, best) > 0) best = r;
         }
         return best;
     }
@@ -210,6 +236,7 @@ public final class SolarUpdateClient {
         String v = versionName.trim();
         if (v.isEmpty()) return "";
         if (isTimestampNightly(v)) return formatNightlyDisplayLabel(v);
+        if (isTimestampVersionName(v)) return formatTimestampDisplayLabel(v);
         if (v.startsWith("nightly-")) return v;
         if (v.startsWith("v")) return v;
         return "v" + v;
@@ -242,8 +269,8 @@ public final class SolarUpdateClient {
     }
 
     /**
-     * Newest-first subset for the version picker — caps row count and keeps the installed
-     * release visible even when it would fall outside the window.
+     * Newest-first list for the version picker — same channel as installed build
+     * (stable timestamps / semver vs nightly), capped at maxItems.
      */
     public static List<ReleaseInfo> releasesForPicker(List<ReleaseInfo> all,
             int localCode, String localName, int maxItems) {
@@ -254,11 +281,20 @@ public final class SolarUpdateClient {
         String local = localName == null ? "" : localName.trim();
         boolean onNightly = local.startsWith("nightly-");
 
-        List<ReleaseInfo> sorted = new ArrayList<ReleaseInfo>(all);
-        sortNewestFirst(sorted);
+        List<ReleaseInfo> channel = new ArrayList<ReleaseInfo>();
+        for (ReleaseInfo r : all) {
+            if (onNightly) {
+                if (!r.nightly) continue;
+                if (!includeInNightlyPicker(r, localCode, local)) continue;
+            } else if (r.nightly) {
+                continue;
+            }
+            channel.add(r);
+        }
+        sortNewestFirst(channel);
 
         ReleaseInfo installed = null;
-        for (ReleaseInfo r : sorted) {
+        for (ReleaseInfo r : channel) {
             if (r.matchesInstalled(localCode, local)) {
                 installed = r;
                 break;
@@ -266,10 +302,8 @@ public final class SolarUpdateClient {
         }
 
         List<ReleaseInfo> out = new ArrayList<ReleaseInfo>();
-        for (ReleaseInfo r : sorted) {
+        for (ReleaseInfo r : channel) {
             if (out.size() >= maxItems) break;
-            if (onNightly && !r.nightly) continue;
-            if (onNightly && r.nightly && !includeInNightlyPicker(r, localCode, local)) continue;
             out.add(r);
         }
 
@@ -281,6 +315,22 @@ public final class SolarUpdateClient {
             sortNewestFirst(out);
         }
         return out;
+    }
+
+    /** All releases in the installed channel — for paginated picker UI. */
+    public static List<ReleaseInfo> releasesForPickerAll(List<ReleaseInfo> all,
+            int localCode, String localName) {
+        return releasesForPicker(all, localCode, localName, MAX_PICKER_RELEASES);
+    }
+
+    /** Compare stable releases — timestamp builds use versionCode; semver uses dotted parts. */
+    static int compareStableRelease(ReleaseInfo a, ReleaseInfo b) {
+        if (a.versionCode > 0 || b.versionCode > 0) {
+            if (a.versionCode != b.versionCode) {
+                return a.versionCode < b.versionCode ? -1 : 1;
+            }
+        }
+        return compareSemver(a.versionName, b.versionName);
     }
 
     /** Trim catalog entries before publishing — keeps all stables + newest nightlies. */
@@ -319,7 +369,7 @@ public final class SolarUpdateClient {
                     }
                     return b.tag.compareTo(a.tag);
                 }
-                return -compareSemver(a.versionName, b.versionName);
+                return -compareStableRelease(a, b);
             }
         });
     }

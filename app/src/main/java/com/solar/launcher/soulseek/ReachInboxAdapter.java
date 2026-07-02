@@ -183,7 +183,9 @@ public final class ReachInboxAdapter extends BaseAdapter {
             frame = ReachMessageRow.create(activity, rowHeightPx);
         }
         final String timestamp = SoulseekMessaging.formatTimestamp(row.timestamp);
-        String preview = ReachMessageFormat.previewText(row.text);
+        String preview = SolarDeveloperAccounts.isVirtualPeer(row.peer)
+                ? SolarDeveloperAccounts.previewText(row.text)
+                : ReachMessageFormat.previewText(row.text);
         String noteKey = row.peer != null ? row.peer.toLowerCase(java.util.Locale.US) : "";
         String note = peerNotesByUser.get(noteKey);
         if (note == null || note.trim().isEmpty()) {

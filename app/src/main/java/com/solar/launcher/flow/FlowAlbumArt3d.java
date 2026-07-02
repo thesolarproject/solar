@@ -16,8 +16,8 @@ public final class FlowAlbumArt3d {
 
     /** Classipod / iPod Now Playing resting Y tilt — opposite lean from carousel center. */
     public static final float PLAYER_ROT_Y_DEG = 14f;
-    /** Idle carousel reflection peak — keep floor gloss subtle so title text stays legible. */
-    public static final float REFLECT_PEAK_FRAC = 0.28f;
+    /** Idle carousel reflection peak — glossy floor reflection. */
+    public static final float REFLECT_PEAK_FRAC = 0.55f;
 
     private static final Camera camera = new Camera();
     private static final Matrix matrix = new Matrix();
@@ -130,23 +130,36 @@ public final class FlowAlbumArt3d {
         if (canvas == null || bmp == null || bmp.isRecycled() || rect == null) return;
         RectF square = squareBounds(rect);
         drawCover(canvas, bmp, square, rotationYDeg, alpha, coverPaint);
+        drawReflectionFloor(canvas, bmp, square, alpha, reflectHeight, reflectTable, reflectionPaint, null);
+    }
 
+    public static void drawReflectionFloor(Canvas canvas, Bitmap bmp, RectF squareRect,
+            float alpha, float reflectHeight, int[] reflectTable, Paint reflectionPaint, Matrix slotMatrix) {
+        if (canvas == null || bmp == null || bmp.isRecycled() || squareRect == null) return;
         if (reflectHeight <= 0f || reflectionPaint == null) return;
-        RectF refRect = new RectF(square.left, square.bottom,
-                square.right, square.bottom + reflectHeight);
-        // ponytail: per-row Rockbox reflect_table — saveLayer+DST_IN painted white on MT6572.
+        RectF square = squareBounds(squareRect);
+
         int rows = reflectTable != null && reflectTable.length > 0
                 ? reflectTable.length : Math.max(1, Math.round(reflectHeight));
         float rowH = reflectHeight / rows;
-        bitmapSrc.set(0f, 0f, bmp.getWidth(), bmp.getHeight());
-        matrix.reset();
-        matrix.setRectToRect(bitmapSrc, square, Matrix.ScaleToFit.FILL);
-        matrix.postScale(1f, -1f, square.centerX(), square.bottom);
 
-        canvas.save();
-        canvas.clipRect(refRect);
+        bitmapSrc.set(0f, 0f, bmp.getWidth(), bmp.getHeight());
+
+        Matrix flipMatrix = new Matrix();
+        flipMatrix.setRectToRect(bitmapSrc, square, Matrix.ScaleToFit.FILL);
+        flipMatrix.postScale(1f, -1f, square.centerX(), square.bottom);
+
+        Matrix reflectionMatrix = new Matrix(flipMatrix);
+        if (slotMatrix != null) {
+            reflectionMatrix.postConcat(slotMatrix);
+        }
+
         int oldAlpha = reflectionPaint.getAlpha();
         reflectionPaint.setShader(null);
+
+        RectF rowRect = new RectF();
+        RectF parentClipRect = new RectF();
+
         for (int row = 0; row < rows; row++) {
             int tableA = reflectTable != null && row < reflectTable.length
                     ? reflectTable[row] : (768 * (rows - row) / rows);
@@ -154,15 +167,24 @@ public final class FlowAlbumArt3d {
             peakAlpha = Math.min(255, Math.max(0, peakAlpha * 255 / 768));
             peakAlpha = Math.round(peakAlpha * REFLECT_PEAK_FRAC);
             if (peakAlpha <= 0) continue;
-            float y0 = refRect.top + row * rowH;
-            float y1 = (row == rows - 1) ? refRect.bottom : y0 + rowH;
+
+            float y0 = square.bottom + row * rowH;
+            float y1 = (row == rows - 1) ? (square.bottom + reflectHeight) : y0 + rowH;
+
+            rowRect.set(square.left, y0, square.right, y1);
+
             canvas.save();
-            canvas.clipRect(square.left, y0, square.right, y1);
+            if (slotMatrix != null) {
+                slotMatrix.mapRect(parentClipRect, rowRect);
+                canvas.clipRect(parentClipRect);
+            } else {
+                canvas.clipRect(rowRect);
+            }
+
             reflectionPaint.setAlpha(peakAlpha);
-            canvas.drawBitmap(bmp, matrix, reflectionPaint);
+            canvas.drawBitmap(bmp, reflectionMatrix, reflectionPaint);
             canvas.restore();
         }
         reflectionPaint.setAlpha(oldAlpha);
-        canvas.restore();
     }
 }

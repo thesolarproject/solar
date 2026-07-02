@@ -44,8 +44,9 @@ jobs:
         env:
           SOLAR_GITHUB_PAT: ${{ secrets.SOLAR_GITHUB_PAT }}
         run: |
-          chmod +x scripts/verify-ota-pat.sh
+          chmod +x scripts/verify-ota-pat.sh scripts/configure-solar-update-pages.sh
           ./scripts/verify-ota-pat.sh
+          ./scripts/configure-solar-update-pages.sh
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4

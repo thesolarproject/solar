@@ -1911,7 +1911,12 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
         syncReflectionPref();
         coverGen++;
         coverGovernor.cancelAll();
+        android.graphics.Bitmap playingCover = actions.playerHandoffCoverBitmap();
+        String playingKey = actions.nowPlayingCarouselMatchKey(built);
         coverCache.clear();
+        if (playingCover != null && !playingCover.isRecycled() && playingKey != null && !playingKey.isEmpty()) {
+            coverCache.put(playingKey, playingCover);
+        }
         flowView.resetHandoffRevealForDisplay();
         catalog = built;
         incrementalThumbCursor = 0;

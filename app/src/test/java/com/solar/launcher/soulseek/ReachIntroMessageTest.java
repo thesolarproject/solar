@@ -26,6 +26,12 @@ public class ReachIntroMessageTest {
     }
 
     @Test
+    public void shouldPersist_introNeverOnReachClient() {
+        assertFalse(ReachIntroMessage.shouldPersistForReachClient(
+                ReachIntroMessage.MARKER + "hello", "peer", "self", null));
+    }
+
+    @Test
     public void tracker_marksPeerAndRoom() {
         android.content.SharedPreferences prefs = new android.content.SharedPreferences() {
             private String val = "{}";

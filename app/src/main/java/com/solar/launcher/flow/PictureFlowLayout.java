@@ -116,7 +116,7 @@ public final class PictureFlowLayout {
         int h = Math.max(1, Math.min(REFLECT_TABLE_MAX_ROWS, Math.round(reflectHeight)));
         int[] table = new int[h];
         for (int i = 0; i < h; i++) {
-            table[i] = (768 * (h - i) + (5 * h / 2)) / (5 * h);
+            table[i] = (768 * (h - i)) / h;
         }
         return table;
     }

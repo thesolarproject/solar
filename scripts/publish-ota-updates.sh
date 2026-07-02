@@ -161,6 +161,10 @@ push_update_repo() {
     echo "::error::SOLAR_GITHUB_PAT push to github.com/${UPDATE_REPO} failed — rotate the repo secret." >&2
     exit 128
   fi
+  # ponytail: branch Pages picks up main on push — no deploy-pages workflow required.
+  if [[ -x "$ROOT/scripts/configure-solar-update-pages.sh" ]]; then
+    "$ROOT/scripts/configure-solar-update-pages.sh" || true
+  fi
 }
 
 copy_artist_separator_catalog() {

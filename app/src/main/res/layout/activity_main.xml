@@ -302,13 +302,28 @@
                     android:scrollbars="none" />
             </LinearLayout>
 
-            <com.solar.launcher.Y1SafeListView
-                android:id="@+id/list_reach_browse"
+            <!-- Fixed chrome (Back / New message) stays above the scrolling peer list — wheel always reaches it. -->
+            <LinearLayout
+                android:id="@+id/reach_browse_host"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:divider="@null"
-                android:scrollbars="none"
-                android:visibility="gone" />
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:id="@+id/reach_browse_chrome"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
+
+                <com.solar.launcher.Y1SafeListView
+                    android:id="@+id/list_reach_browse"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:divider="@null"
+                    android:scrollbars="none" />
+            </LinearLayout>
         </FrameLayout>
 
         <LinearLayout

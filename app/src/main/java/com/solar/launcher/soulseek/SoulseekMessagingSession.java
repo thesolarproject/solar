@@ -65,17 +65,26 @@ public final class SoulseekMessagingSession {
         }
     }
 
-    /** Send one PM to each recipient; silent per-recipient failure. */
-    public boolean sendToAll(String[] recipients, String text) {
-        if (recipients == null || recipients.length == 0 || text == null) return false;
-        boolean anyOk = false;
+    /** Send one PM per recipient; returns per-slot success (parallel index with recipients). */
+    public boolean[] sendToRecipients(String[] recipients, String text) {
+        if (recipients == null || recipients.length == 0 || text == null) {
+            return new boolean[0];
+        }
+        boolean[] result = new boolean[recipients.length];
         try {
             ensureConnected();
-            for (String to : recipients) {
-                if (to == null || to.isEmpty()) continue;
+            for (int i = 0; i < recipients.length; i++) {
+                if (i > 0) {
+                    try { Thread.sleep(75_000L); } catch (InterruptedException ignored) {}
+                }
+                String to = recipients[i];
+                if (to == null || to.isEmpty()) {
+                    result[i] = true;
+                    continue;
+                }
                 try {
                     sendLocked(to, text);
-                    anyOk = true;
+                    result[i] = true;
                 } catch (Exception ignored) {}
             }
         } catch (Exception e) {
@@ -84,13 +93,23 @@ public final class SoulseekMessagingSession {
                 JSONObject d = new JSONObject();
                 d.put("user", username);
                 d.put("err", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
-                Debug843b96Log.log(appContext, "SoulseekMessagingSession.sendToAll",
+                Debug843b96Log.log(appContext, "SoulseekMessagingSession.sendToRecipients",
                         "connect fail", "F-G", d);
             } catch (Exception ignored) {}
             // #endregion
             if (!persistent) disconnect();
         }
-        return anyOk;
+        return result;
+    }
+
+    /** True only when every recipient slot succeeded. */
+    public boolean sendToAll(String[] recipients, String text) {
+        boolean[] per = sendToRecipients(recipients, text);
+        if (per.length == 0) return false;
+        for (boolean ok : per) {
+            if (!ok) return false;
+        }
+        return true;
     }
 
     public void shutdown() {

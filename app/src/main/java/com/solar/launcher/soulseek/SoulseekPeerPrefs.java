@@ -31,11 +31,13 @@ public final class SoulseekPeerPrefs {
 
     public static boolean isIgnored(SharedPreferences prefs, String username) {
         if (username == null) return false;
+        if (SolarDeveloperAccounts.isVirtualPeer(username) || SolarDeveloperAccounts.hideFromReachUi(username)) return false;
         return ignored(prefs).contains(username.toLowerCase(Locale.US));
     }
 
     public static void setIgnored(SharedPreferences prefs, String username, boolean ignored) {
         if (prefs == null || username == null || username.trim().isEmpty()) return;
+        if (SolarDeveloperAccounts.isVirtualPeer(username) || SolarDeveloperAccounts.hideFromReachUi(username)) return;
         Set<String> set = ignored(prefs);
         String key = username.toLowerCase(Locale.US);
         if (ignored) set.add(key);
@@ -45,6 +47,7 @@ public final class SoulseekPeerPrefs {
 
     public static boolean isBlocked(SharedPreferences prefs, String username) {
         if (username == null) return false;
+        if (SolarDeveloperAccounts.isVirtualPeer(username) || SolarDeveloperAccounts.hideFromReachUi(username)) return false;
         return blocked(prefs).contains(username.toLowerCase(Locale.US));
     }
 
@@ -55,6 +58,7 @@ public final class SoulseekPeerPrefs {
 
     public static void setBlocked(SharedPreferences prefs, String username, boolean blocked) {
         if (prefs == null || username == null || username.trim().isEmpty()) return;
+        if (SolarDeveloperAccounts.isVirtualPeer(username) || SolarDeveloperAccounts.hideFromReachUi(username)) return;
         Set<String> set = blocked(prefs);
         String key = username.toLowerCase(Locale.US);
         if (blocked) set.add(key);

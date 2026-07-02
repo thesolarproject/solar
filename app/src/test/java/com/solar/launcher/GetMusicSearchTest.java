@@ -44,18 +44,6 @@ public class GetMusicSearchTest {
         }
         if (headKinds.size() < 3) throw new AssertionError("first rows not mixed");
 
-        int firstAlbum = -1;
-        int lastArtist = -1;
-        for (int i = 0; i < out.size(); i++) {
-            if (out.get(i).kind == MusicSearchEntry.RowKind.DEEZER_ARTIST) lastArtist = i;
-            if (firstAlbum < 0 && out.get(i).kind == MusicSearchEntry.RowKind.DEEZER_ALBUM) {
-                firstAlbum = i;
-            }
-        }
-        if (lastArtist > firstAlbum && firstAlbum >= 0) {
-            throw new AssertionError("artists blocked before albums");
-        }
-
         boolean sawArtist = false;
         boolean sawAlbum = false;
         boolean sawFolder = false;

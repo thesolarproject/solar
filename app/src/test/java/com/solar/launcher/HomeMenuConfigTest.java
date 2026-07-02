@@ -36,6 +36,7 @@ public class HomeMenuConfigTest {
 
     @Test
     public void defaultOrder_matchesY1StockLayout() {
+        prefs.edit().putBoolean(com.solar.launcher.radio.RadioExperiment.PREF_RADIO_EXPERIMENT, true).commit();
         List<HomeMenuConfig.Entry> visible = HomeMenuConfig.loadVisible(prefs);
         if (visible.size() != 8) throw new AssertionError("default size " + visible.size());
         if (!HomeMenuConfig.ID_NOW_PLAYING.equals(visible.get(0).id)) {
@@ -326,6 +327,7 @@ public class HomeMenuConfigTest {
 
     @Test
     public void loadHomeDisplayIds_matchesVisibleHomeOrderWhenOnline() {
+        prefs.edit().putBoolean(com.solar.launcher.radio.RadioExperiment.PREF_RADIO_EXPERIMENT, true).commit();
         HomeMenuConfig.setMoreEnabled(prefs, true);
         HomeMenuConfig.hideFromHome(prefs, HomeMenuConfig.ID_FM);
         List<String> display = HomeMenuConfig.loadHomeDisplayIds(prefs, true, true, true);

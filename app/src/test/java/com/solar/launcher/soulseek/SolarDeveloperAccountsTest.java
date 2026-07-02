@@ -48,11 +48,55 @@ public class SolarDeveloperAccountsTest {
             SolarDeveloperAccounts.resolveContactInput("solar dev"))) {
       throw new AssertionError("solar dev alias");
     }
-    if (SolarDeveloperAccounts.resolveContactInput("SolarDev") != null) {
-      throw new AssertionError("wire dev hidden");
+    if (!SolarDeveloperAccounts.VIRTUAL_PEER.equals(
+            SolarDeveloperAccounts.resolveContactInput("SolarDev"))) {
+      throw new AssertionError("wire dev maps to proxy");
     }
     if (!SolarDeveloperAccounts.isAggregatedDeveloperQuery("Solar Development")) {
       throw new AssertionError("aggregated query");
+    }
+  }
+
+  @Test
+  public void matchesDeveloperSearchQueryIncludesWireNames() {
+    if (!SolarDeveloperAccounts.matchesDeveloperSearchQuery("SolarDev")) {
+      throw new AssertionError("SolarDev search");
+    }
+    if (!SolarDeveloperAccounts.matchesDeveloperSearchQuery("thesolarphone")) {
+      throw new AssertionError("phone search");
+    }
+    if (!SolarDeveloperAccounts.matchesDeveloperSearchQuery("ThesolarY1")) {
+      throw new AssertionError("Y1 search");
+    }
+    if (SolarDeveloperAccounts.matchesDeveloperSearchQuery("randomuser")) {
+      throw new AssertionError("not dev");
+    }
+  }
+
+  @Test
+  public void previewTextStripsDevFromMarker() {
+    String packed = SolarDeveloperAccounts.packDevIncoming("SolarDev", "Hello");
+    String preview = SolarDeveloperAccounts.previewText(packed);
+    if (!"Hello".equals(preview)) throw new AssertionError("preview=" + preview);
+  }
+
+  @Test
+  public void experimentDefaultsOnWhenPrefAbsent() {
+    android.content.SharedPreferences prefs = new android.content.SharedPreferences() {
+      @Override public java.util.Map<String, ?> getAll() { return null; }
+      @Override public String getString(String key, String defValue) { return defValue; }
+      @Override public java.util.Set<String> getStringSet(String key, java.util.Set<String> defValues) { return defValues; }
+      @Override public int getInt(String key, int defValue) { return defValue; }
+      @Override public long getLong(String key, long defValue) { return defValue; }
+      @Override public float getFloat(String key, float defValue) { return defValue; }
+      @Override public boolean getBoolean(String key, boolean defValue) { return defValue; }
+      @Override public boolean contains(String key) { return false; }
+      @Override public Editor edit() { return null; }
+      @Override public void registerOnSharedPreferenceChangeListener(OnSharedPreferenceChangeListener listener) {}
+      @Override public void unregisterOnSharedPreferenceChangeListener(OnSharedPreferenceChangeListener listener) {}
+    };
+    if (!SolarDeveloperAccounts.isExperimentEnabled(prefs)) {
+      throw new AssertionError("default should be on");
     }
   }
 

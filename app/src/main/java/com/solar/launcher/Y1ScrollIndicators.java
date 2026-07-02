@@ -30,9 +30,10 @@ public final class Y1ScrollIndicators {
         list.setScrollbarFadingEnabled(false);
     }
 
-    /** Wheel hit top/bottom — brief overscroll bounce (API 17 Holo). */
+    /** Wheel hit top/bottom — brief overscroll bounce (API 19+; Jelly Bean edge glow can crash). */
     public static void edgeGlowAtLimit(ScrollView scroll, int delta) {
         if (scroll == null || delta == 0) return;
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.KITKAT) return;
         final int pull = delta < 0 ? -EDGE_PULL_PX : EDGE_PULL_PX;
         scroll.post(new Runnable() {
             @Override

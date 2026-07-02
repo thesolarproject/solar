@@ -1916,7 +1916,8 @@ public final class SoulseekClient extends Thread {
         SharedPreferences reachPrefs = appContext.getSharedPreferences(
                 "SOLAR_SETTINGS", Context.MODE_PRIVATE);
         boolean devSupport = SolarDeveloperAccounts.isDeveloper(from)
-                && SolarDeveloperAccounts.isExperimentEnabled(reachPrefs);
+                || SolarDeveloperAccounts.isDiagHandle(from)
+                || SolarDeveloperAccounts.isVirtualPeer(from);
         boolean deliver = messagingEnabled || devSupport;
         if (deliver) {
           socialListener.onPrivateMessage(msgId, timestamp, from, text);

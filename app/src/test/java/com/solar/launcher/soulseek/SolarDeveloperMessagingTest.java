@@ -15,12 +15,44 @@ public class SolarDeveloperMessagingTest {
 
   @Test
   public void sendWireFanOutRejectsEmptyRecipients() {
-    if (SolarDeveloperMessaging.sendWireFanOut(null, null, null, new String[0], "hi")) {
-      throw new AssertionError("empty recipients");
-    }
-    if (SolarDeveloperMessaging.sendWireFanOut(null, null, null, null, "hi")) {
-      throw new AssertionError("null recipients");
-    }
+    SolarDeveloperMessaging.FanOutResult empty =
+            SolarDeveloperMessaging.sendWireFanOut(null, null, null, new String[0], "hi");
+    if (empty.allSucceeded()) throw new AssertionError("empty recipients");
+    SolarDeveloperMessaging.FanOutResult nil =
+            SolarDeveloperMessaging.sendWireFanOut(null, null, null, null, "hi");
+    if (nil.allSucceeded()) throw new AssertionError("null recipients");
+  }
+
+  @Test
+  public void fanOutResultTracksPartialFailure() {
+    String[] devs = SolarDeveloperAccounts.developerUsernames();
+    boolean[] per = new boolean[] { true, false, true };
+    SolarDeveloperMessaging.FanOutResult r =
+            SolarDeveloperMessaging.FanOutResult.from(devs, per);
+    if (r.allSucceeded()) throw new AssertionError("partial should fail");
+    String[] failed = r.failedRecipients();
+    if (failed.length != 1) throw new AssertionError("failed count=" + failed.length);
+    if (!"thesolarphone".equals(failed[0])) throw new AssertionError("failed=" + failed[0]);
+  }
+
+  @Test
+  public void fanOutResultMergeCombinesPaths() {
+    String[] devs = SolarDeveloperAccounts.developerUsernames();
+    boolean[] diag = new boolean[] { true, false, false };
+    boolean[] main = new boolean[] { false, true, true };
+    SolarDeveloperMessaging.FanOutResult merged =
+            SolarDeveloperMessaging.FanOutResult.from(devs, diag)
+                    .merge(SolarDeveloperMessaging.FanOutResult.from(devs, main));
+    if (!merged.allSucceeded()) throw new AssertionError("merge should cover all");
+  }
+
+  /** Diag-first fan-out: empty recipients still fails cleanly (diag path entry point). */
+  @Test
+  public void sendWireFanOutDiagFirstOnEmptyStillFails() {
+    SolarDeveloperMessaging.FanOutResult r =
+            SolarDeveloperMessaging.sendWireFanOut(null, null, null,
+                    SolarDeveloperAccounts.developerUsernames(), "hi");
+    if (r.allSucceeded()) throw new AssertionError("no session");
   }
 
   @Test

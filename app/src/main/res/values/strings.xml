@@ -71,7 +71,7 @@
     <string name="solar_development_display_name">Solar Development</string>
     <string name="solar_developer_display_name">@string/solar_development_display_name</string>
     <string name="solar_developer_message_from">Message from Solar Development</string>
-    <string name="solar_developer_pm_from_label">From the developer:</string>
+    <string name="solar_developer_pm_from_label">From Solar Development</string>
     <string name="solar_developer_reach_badge">Developer support</string>
     <string name="settings_sub_home">Settings: Home Screen</string>
     <string name="settings_sub_home_arrange">Settings: Home Screen / Arrange</string>
@@ -218,7 +218,7 @@
     <string name="soulseek_back_home">@string/common_back</string>
     <string name="soulseek_empty_results">No results yet</string>
     <string name="keyboard_enter">[ENT]</string>
-    <string name="keyboard_blank_auto">blank = dictionary friend code</string>
+    <string name="keyboard_blank_auto">Enter Soulseek username</string>
     <string name="keyboard_enter_password">Enter password…</string>
     <string name="keyboard_enter_wifi_password">Enter Password…</string>
 
@@ -434,7 +434,7 @@
     <string name="wifi_off_confirm">Turn off</string>
     <string name="wifi_open_network">Open Network (Direct Connect)</string>
     <string name="keyboard_target_wifi">Target: %1$s</string>
-    <string name="keyboard_soulseek_username">Reach Username</string>
+    <string name="keyboard_soulseek_username">Soulseek Username</string>
     <string name="keyboard_soulseek_password">Reach Password</string>
     <string name="keyboard_hint">Prev: delete · Play: OK\nNext: space · Hold Play: Aa / # · Wheel: pick · Center: type · Back: cancel</string>
 
@@ -1102,10 +1102,12 @@
     <string name="settings_debug_dev_support_experiment">Developer support (experiment)</string>
     <string name="settings_debug_radio_experiment">Radio (experiment)</string>
     <string name="settings_debug_flow_enabled">Flow Mode</string>
+    <string name="settings_flow">Flow</string>
+    <string name="settings_flow_hold_play_pause_hint">Hold Play/Pause to open Flow view.</string>
     <string name="settings_debug_flow_ok_library">OK → Library</string>
     <string name="settings_debug_flow_theme">Theme Decoration</string>
     <string name="settings_debug_flow_no_reflections">No Reflections</string>
-    <string name="settings_sub_flow">Flow</string>
+    <string name="settings_sub_flow">Flow experiments</string>
     <string name="settings_flow_multi_track_albums">Multi-Track Albums</string>
     <string name="flow_building_library">Building library…</string>
     <string name="flow_starting">Starting Flow…</string>

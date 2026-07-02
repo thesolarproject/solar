@@ -36,7 +36,7 @@ public final class SolarDeveloperAccounts {
     private SolarDeveloperAccounts() {}
 
     public static boolean isExperimentEnabled(SharedPreferences prefs) {
-        return prefs != null && prefs.getBoolean(PREF_DEV_SUPPORT_EXPERIMENT, false);
+        return true;
     }
 
     public static boolean isDeveloper(String username) {
@@ -65,7 +65,7 @@ public final class SolarDeveloperAccounts {
 
     /** User-facing label for inbox and conversation title. */
     public static String displayNameForPeer(Context ctx, String peer) {
-        if (isVirtualPeer(peer) && ctx != null) {
+        if ((isVirtualPeer(peer) || hideFromReachUi(peer)) && ctx != null) {
             return ctx.getString(R.string.solar_development_display_name);
         }
         return peer != null ? peer : "";
@@ -86,13 +86,27 @@ public final class SolarDeveloperAccounts {
                 || "solar dev".equals(lower)) {
             return VIRTUAL_PEER;
         }
-        if (isDeveloper(t) || isDiagHandle(t)) return null;
+        if (isDeveloper(t) || isDiagHandle(t)) return VIRTUAL_PEER;
         return null;
     }
 
     /** True when Find User / new-message input targets the aggregated developer entity. */
     public static boolean isAggregatedDeveloperQuery(String typed) {
-        return resolveContactInput(typed) != null;
+        return matchesDeveloperSearchQuery(typed);
+    }
+
+    /** Find User search — friendly names and hidden wire dev accounts map to Solar Development. */
+    public static boolean matchesDeveloperSearchQuery(String typed) {
+        if (typed == null) return false;
+        String t = typed.trim();
+        if (t.isEmpty()) return false;
+        if (resolveContactInput(t) != null) return true;
+        return isDeveloper(t);
+    }
+
+    /** Inbox/thread preview — unpack dev-from prefix before Reach formatting. */
+    public static String previewText(String text) {
+        return ReachMessageFormat.previewText(displayBody(text));
     }
 
     public static String[] developerUsernames() {

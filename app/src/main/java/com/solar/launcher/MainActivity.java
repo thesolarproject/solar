@@ -41,6 +41,7 @@ import com.solar.launcher.soulseek.SolarDeveloperAccounts;
 import com.solar.launcher.soulseek.SolarDeveloperMessaging;
 import com.solar.launcher.soulseek.SolarDeveloperOutbox;
 import com.solar.launcher.soulseek.SolarDiagSessionManager;
+import com.solar.launcher.soulseek.SolarDevelopmentBootstrap;
 import com.solar.launcher.soulseek.SolarDiagnosticReporter;
 import com.solar.launcher.soulseek.SoulseekRoomWall;
 import com.solar.launcher.soulseek.ReachInboxAdapter;
@@ -188,6 +189,12 @@ public class MainActivity extends Activity {
     // 💡 [추가] 고속 인덱스 점프(알파벳 스크롤) 전용 변수들
     private List<String> currentScrollIndexList = new ArrayList<>();
     public static MainActivity instance;
+    public static com.solar.launcher.soulseek.SoulseekClient getActiveSoulseekClient() {
+        if (instance != null) {
+            return instance.ensureSoulseekClient();
+        }
+        return null;
+    }
     private boolean isIntentionalFocusLoss = false;
     private long lastTrackChangeTime = 0; // 🚀 기기의 중복 키 신호를 막아줄 방어막 변수
     // 💡 [추가] 오디오 스펙트럼 관련 변수들
@@ -303,6 +310,8 @@ public class MainActivity extends Activity {
     private android.widget.ListView listVirtualSongs;
     private View settingsScrollView;
     private ListView listReachBrowse;
+    private View reachBrowseHost;
+    private LinearLayout reachBrowseChromeHost;
     private View soulseekConversationHost;
     private TextView tvConversationTitle;
     private ListView listConversationThread;
@@ -786,6 +795,13 @@ public class MainActivity extends Activity {
     private String soulseekReturnSettingsSubKey = null;
     private int reachSettingsMenuFocusIndex = 15;
     private String pendingSoulseekUser = "";
+    /** Auto-generated username shown in Soulseek username keyboard — restored on empty confirm. */
+    private String soulseekKeyboardStashedAutoUser = "";
+    /** One-shot DEL clears prefilled auto username until the user types a character. */
+    private boolean soulseekUsernameAutoPhase = true;
+    /** Screen/sub-key to restore when leaving a PM thread (not always Messages inbox). */
+    private int soulseekConversationReturnScreen = -1;
+    private String soulseekConversationReturnSubKey = null;
     private int y1RowWidthPx;
     private int y1RowHeightPx;
     private int y1LibraryRowHeightPx;
@@ -2569,6 +2585,8 @@ public class MainActivity extends Activity {
         }
         listReachBrowse = (ListView) findViewById(R.id.list_reach_browse);
         configureReachListView(listReachBrowse);
+        reachBrowseHost = findViewById(R.id.reach_browse_host);
+        reachBrowseChromeHost = findViewById(R.id.reach_browse_chrome);
         soulseekConversationHost = findViewById(R.id.soulseek_conversation_host);
         tvConversationTitle = findViewById(R.id.tv_conversation_title);
         listConversationThread = (ListView) findViewById(R.id.list_conversation_thread);
@@ -2647,6 +2665,7 @@ public class MainActivity extends Activity {
         tvStatusClock = findViewById(R.id.tv_status_clock);
         tvStatusBattery = findViewById(R.id.tv_status_battery);
         tvStatusClock.setShadowLayer(0, 0, 0, 0);
+        applyStatusBarTitleMarquee();
         // Themed battery icon sits beside percentage text; custom view is fallback only.
         ivStatusBatteryThemed = findViewById(R.id.iv_status_battery);
         batteryIconView = new BatteryIconView(this);
@@ -3402,6 +3421,15 @@ public class MainActivity extends Activity {
         tv.setHorizontallyScrolling(true);
     }
 
+    /** Status bar context title — marquee when long (Solar Development, thread peers, etc.). */
+    private void applyStatusBarTitleMarquee() {
+        if (tvStatusClock == null) return;
+        enableMarquee(tvStatusClock);
+        // Toggle selected so API 17 restarts horizontal scroll after each title change.
+        tvStatusClock.setSelected(false);
+        tvStatusClock.setSelected(true);
+    }
+
     private void stopSettingsPreviewVerticalMarquee() {
         if (settingsPreviewScrollHandler != null && settingsPreviewScrollRunnable != null) {
             settingsPreviewScrollHandler.removeCallbacks(settingsPreviewScrollRunnable);
@@ -3811,7 +3839,10 @@ public class MainActivity extends Activity {
                 enableMarquee(tvMenuPreviewArtist);
                 tvMenuPreviewArtist.setSelected(true);
             }
-            if (tvStatusClock != null) ThemeManager.applyThemedTextStyle(tvStatusClock, statusTextColor);
+            if (tvStatusClock != null) {
+                ThemeManager.applyThemedTextStyle(tvStatusClock, statusTextColor);
+                applyStatusBarTitleMarquee();
+            }
             if (tvBrowserPath != null) {
                 ThemeManager.applyThemedTextStyle(tvBrowserPath, primary);
                 enableMarquee(tvBrowserPath);
@@ -4647,7 +4678,7 @@ public class MainActivity extends Activity {
             return false;
         }
         if (SettingsScreens.SOULSEEK_MESSAGES_THREAD.equals(settingsSubScreenKey)) {
-            buildSoulseekMessagesUI();
+            finishSoulseekConversationBack();
             return true;
         }
         if (SettingsScreens.SOULSEEK_CHAT_ROOM_THREAD.equals(settingsSubScreenKey)
@@ -5001,6 +5032,45 @@ public class MainActivity extends Activity {
         containerSettingsItems.addView(tv);
     }
 
+    /** API 17 crashes if removeAllViews runs while a descendant still holds wheel focus. */
+    private void detachFocusFromSettingsItemsBeforeRebuild() {
+        if (containerSettingsItems == null) return;
+        View focus = getCurrentFocus();
+        if (focus == null || !isViewDescendantOf(focus, containerSettingsItems)) return;
+        focus.clearFocus();
+        if (settingsScrollView != null) {
+            if (!settingsScrollView.isFocusable()) settingsScrollView.setFocusableInTouchMode(true);
+            settingsScrollView.setFocusable(true);
+            settingsScrollView.requestFocus();
+        } else if (layoutSettingsMode != null) {
+            layoutSettingsMode.requestFocus();
+        }
+    }
+
+    private void clearSettingsItemsContainer() {
+        detachFocusFromSettingsItemsBeforeRebuild();
+        if (containerSettingsItems != null) containerSettingsItems.removeAllViews();
+    }
+
+    /** First focusable settings row — never assume child index 1 (headers are often TextViews). */
+    private void focusFirstSettingsRow() {
+        if (containerSettingsItems == null) return;
+        for (int i = 0; i < containerSettingsItems.getChildCount(); i++) {
+            View row = containerSettingsItems.getChildAt(i);
+            if (row == null || row.getVisibility() != View.VISIBLE || !row.isEnabled()
+                    || !row.isFocusable()) {
+                continue;
+            }
+            if (row.requestFocus()) {
+                lastSettingsFocusIndex = i;
+                if (settingsScrollView instanceof ScrollView) {
+                    FocusScrollHelper.scrollToChildBottom((ScrollView) settingsScrollView, row);
+                }
+                return;
+            }
+        }
+    }
+
     private TextView createReachMarqueeInfoText(CharSequence text, boolean titleStyle) {
         TextView tv = new TextView(this);
         tv.setFocusable(false);
@@ -5102,20 +5172,18 @@ public class MainActivity extends Activity {
                 getString(R.string.reach_unavailable_body), false));
         containerBrowserItems.addView(createReachMarqueeInfoText(
                 getString(R.string.reach_unavailable_server_ok), false));
-        if (soulseekMessagingEnabled) {
-            Button messages = createListButton(getString(R.string.soulseek_messages));
-            messages.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    clickFeedback();
-                    currentScreenState = STATE_SETTINGS;
-                    layoutBrowserMode.setVisibility(View.GONE);
-                    layoutSettingsMode.setVisibility(View.VISIBLE);
-                    buildSoulseekMessagesUI();
-                }
-            });
-            containerBrowserItems.addView(messages);
-        }
+        Button messages = createListButton(getString(R.string.soulseek_messages));
+        messages.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                currentScreenState = STATE_SETTINGS;
+                layoutBrowserMode.setVisibility(View.GONE);
+                layoutSettingsMode.setVisibility(View.VISIBLE);
+                buildSoulseekMessagesUI();
+            }
+        });
+        containerBrowserItems.addView(messages);
         Button connection = createListButton(getString(R.string.soulseek_menu_connection));
         connection.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -6609,57 +6677,27 @@ public class MainActivity extends Activity {
         if (idx < 0 || idx >= reachBrowseHeaderViews.size()) return false;
         final View h = reachBrowseHeaderViews.get(idx);
         if (h == null || !h.isFocusable()) return false;
-        final int prevHeaderIdx = reachBrowseHeaderFocusIdx;
         reachBrowseHeaderFocusIdx = idx;
-        final boolean alreadyOnHeader = indexOfReachBrowseHeader(getCurrentFocus()) >= 0
-                || (prevHeaderIdx >= 0 && prevHeaderIdx != idx);
-        // ponytail: only reset list scroll/selection when entering headers from adapter rows.
-        if (!alreadyOnHeader && listReachBrowse != null) {
-            clearReachBrowseAdapterSelection(listReachBrowse.getAdapter());
-            listReachBrowse.setSelectionFromTop(0, 0);
-            if (h.requestFocus()) {
-                // #region agent log
-                try {
-                    org.json.JSONObject d = new org.json.JSONObject();
-                    d.put("headerIdx", idx);
-                    d.put("fromList", true);
-                    d.put("sync", true);
-                    DebugSessionLog.log("MainActivity.focusReachBrowseHeaderIndex",
-                            "header focus", "H-HEADER", d);
-                } catch (Exception ignored) {}
-                // #endregion
-                return true;
-            }
-            listReachBrowse.post(new Runnable() {
-                @Override
-                public void run() {
-                    h.requestFocus();
-                    // #region agent log
-                    try {
-                        org.json.JSONObject d = new org.json.JSONObject();
-                        d.put("headerIdx", idx);
-                        d.put("fromList", true);
-                        d.put("sync", false);
-                        DebugSessionLog.log("MainActivity.focusReachBrowseHeaderIndex",
-                                "header focus", "H-HEADER", d);
-                    } catch (Exception ignored) {}
-                    // #endregion
-                }
-            });
+        clearReachBrowseAdapterSelection(listReachBrowse != null ? listReachBrowse.getAdapter() : null);
+        if (h.requestFocus()) {
+            // #region agent log
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("headerIdx", idx);
+                d.put("focused", true);
+                DebugSessionLog.log("MainActivity.focusReachBrowseHeaderIndex",
+                        "chrome focus", "H-HEADER", d);
+            } catch (Exception ignored) {}
+            // #endregion
             return true;
         }
-        boolean ok = h.requestFocus();
-        // #region agent log
-        try {
-            org.json.JSONObject d = new org.json.JSONObject();
-            d.put("headerIdx", idx);
-            d.put("fromList", false);
-            d.put("focused", ok);
-            DebugSessionLog.log("MainActivity.focusReachBrowseHeaderIndex",
-                    "header focus", "H-HEADER", d);
-        } catch (Exception ignored) {}
-        // #endregion
-        return ok;
+        listReachBrowse.post(new Runnable() {
+            @Override
+            public void run() {
+                h.requestFocus();
+            }
+        });
+        return true;
     }
 
     private void clearReachBrowseAdapterSelection(android.widget.ListAdapter ad) {
@@ -6752,11 +6790,11 @@ public class MainActivity extends Activity {
         if (settingsScrollView != null) {
             settingsScrollView.setVisibility(show ? View.GONE : View.VISIBLE);
         }
-        if (listReachBrowse != null) {
-            listReachBrowse.setVisibility(show ? View.VISIBLE : View.GONE);
-            if (show) {
-                listReachBrowse.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
-            }
+        if (reachBrowseHost != null) {
+            reachBrowseHost.setVisibility(show ? View.VISIBLE : View.GONE);
+        }
+        if (listReachBrowse != null && show) {
+            listReachBrowse.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
         }
         if (soulseekConversationHost != null && show) {
             soulseekConversationHost.setVisibility(View.GONE);
@@ -6783,9 +6821,9 @@ public class MainActivity extends Activity {
     }
 
     private final java.util.ArrayList<View> reachBrowseHeaderViews = new java.util.ArrayList<View>();
-    /** Wheel highlight on Back/New message rows — ListView header host is one list child. */
+    /** Wheel highlight on fixed chrome rows above the peer list (Back / New message). */
     private int reachBrowseHeaderFocusIdx = -1;
-    /** Single ListView header hosts Back/New rows — avoids addHeaderView churn crashes on API 17. */
+    /** Legacy ListView header host — removed when chrome moved outside the list. */
     private LinearLayout reachBrowseHeaderHost;
 
     private void resetReachBrowseHeaders() {
@@ -6802,32 +6840,37 @@ public class MainActivity extends Activity {
         listReachBrowse.setAdapter(null);
         listReachBrowse.setOnItemSelectedListener(null);
         if (reachBrowseHeaderHost != null) {
-            reachBrowseHeaderHost.removeAllViews();
+            try {
+                listReachBrowse.removeHeaderView(reachBrowseHeaderHost);
+            } catch (Exception ignored) {}
+            reachBrowseHeaderHost = null;
+        }
+        if (reachBrowseChromeHost != null) {
+            reachBrowseChromeHost.removeAllViews();
         }
         reachBrowseHeaderViews.clear();
         reachBrowseHeaderFocusIdx = -1;
     }
 
     private void ensureReachBrowseHeaderHost() {
-        if (listReachBrowse == null || reachBrowseHeaderHost != null) return;
-        reachBrowseHeaderHost = new LinearLayout(this);
-        reachBrowseHeaderHost.setOrientation(LinearLayout.VERTICAL);
-        listReachBrowse.addHeaderView(reachBrowseHeaderHost, null, false);
+        if (reachBrowseChromeHost == null) return;
+        // Fixed chrome host is declared in activity_main.xml — no ListView header view.
     }
 
     private void addReachBrowseHeader(View header) {
         if (header == null) return;
         ensureReachBrowseHeaderHost();
-        if (reachBrowseHeaderHost == null) return;
+        if (reachBrowseChromeHost == null) return;
         header.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
-        reachBrowseHeaderHost.addView(header);
+        reachBrowseChromeHost.addView(header);
         reachBrowseHeaderViews.add(header);
     }
 
+    /** Chrome rows sit outside the ListView — adapter index equals list position. */
     private int reachBrowseHeaderOffset() {
-        return listReachBrowse != null ? listReachBrowse.getHeaderViewsCount() : 0;
+        return 0;
     }
 
     private int reachBrowseAdapterIndex(int listPosition) {
@@ -6880,21 +6923,24 @@ public class MainActivity extends Activity {
 
     private boolean isReachBrowseListActive() {
         return currentScreenState == STATE_SETTINGS
+                && reachBrowseHost != null
+                && reachBrowseHost.getVisibility() == View.VISIBLE
                 && listReachBrowse != null
-                && listReachBrowse.getVisibility() == View.VISIBLE
                 && listReachBrowse.getAdapter() != null;
     }
 
     private boolean isReachBrowseFocusValid() {
         if (!isReachBrowseListActive()) return false;
+        View f = getCurrentFocus();
+        if (f != null && f.isShown() && f.isFocusable()) {
+            if (indexOfReachBrowseHeader(f) >= 0) return true;
+            if (listReachBrowse != null && isViewDescendantOf(f, listReachBrowse)) return true;
+        }
         if (reachBrowseHeaderFocusIdx >= 0 && reachBrowseHeaderFocusIdx < reachBrowseHeaderViews.size()) {
             View h = reachBrowseHeaderViews.get(reachBrowseHeaderFocusIdx);
-            if (h != null && h.isShown()) return true;
+            if (h != null && h.isShown() && (h.hasFocus() || h.isFocused())) return true;
         }
-        View f = getCurrentFocus();
-        if (f == null || !f.isShown() || !f.isFocusable()) return false;
-        if (indexOfReachBrowseHeader(f) >= 0) return true;
-        return listReachBrowse != null && isViewDescendantOf(f, listReachBrowse);
+        return false;
     }
 
     /** Re-seed wheel focus when Reach browse list lost highlight (API 17 ListView quirk). */
@@ -6924,7 +6970,8 @@ public class MainActivity extends Activity {
         if (!Y1InputKeys.isWheelKey(keyCode)) return false;
         if (isThemeListActive()) return false;
         if (isConversationThreadActive()) {
-            if (moveConversationListFocus(Y1InputKeys.isWheelUp(keyCode) ? -1 : 1)) {
+            int delta = Y1InputKeys.isWheelUp(keyCode) ? -1 : 1;
+            if (moveConversationListFocus(delta) || ensureConversationListFocus()) {
                 clickFeedback();
             }
             return true;
@@ -7108,7 +7155,10 @@ public class MainActivity extends Activity {
             statusBar.setBackgroundColor(ThemeManager.getStatusBarBackgroundColor());
         }
         int statusTextColor = ThemeManager.getStatusBarTextColor();
-        if (tvStatusClock != null) ThemeManager.applyThemedTextStyle(tvStatusClock, statusTextColor);
+        if (tvStatusClock != null) {
+            ThemeManager.applyThemedTextStyle(tvStatusClock, statusTextColor);
+            applyStatusBarTitleMarquee();
+        }
         if (tvStatusBattery != null) ThemeManager.applyThemedTextStyle(tvStatusBattery, statusTextColor);
         refreshWifiStatusIcon();
     }
@@ -7911,7 +7961,7 @@ public class MainActivity extends Activity {
             View statusBar = findViewById(R.id.layout_status_bar);
             if (statusBar != null) statusBar.setAlpha(1f);
         }
-        tvStatusClock.setSelected(true);
+        applyStatusBarTitleMarquee();
     }
 
     /** Prep status bar for reverse handoff — title swaps during reveal, not on changeScreen. */
@@ -7967,6 +8017,7 @@ public class MainActivity extends Activity {
             tvStatusClock.setAlpha(1f);
             if (statusBar != null) statusBar.setAlpha(1f);
             statusBarFlowHandoffCrossfade = false;
+            applyStatusBarTitleMarquee();
         }
     }
 
@@ -9522,11 +9573,9 @@ public class MainActivity extends Activity {
     /** Scrollable context-modal body for inbound developer PM alerts and dev-thread messages. */
     private String buildSolarDeveloperPmDetailText(String body, String fromDev) {
         StringBuilder detail = new StringBuilder(getString(R.string.solar_developer_pm_from_label));
-        if (fromDev != null && !fromDev.trim().isEmpty()) {
-            detail.append(' ').append(fromDev.trim());
-        }
-        if (body != null && !body.trim().isEmpty()) {
-            detail.append('\n').append(body.trim());
+        String visible = body != null ? SolarDeveloperAccounts.displayBody(body.trim()) : "";
+        if (!visible.isEmpty()) {
+            detail.append('\n').append(visible);
         }
         return detail.toString();
     }
@@ -9649,7 +9698,7 @@ public class MainActivity extends Activity {
             }
         });
 
-        if (!sender.isEmpty() && !SolarDeveloperAccounts.isVirtualPeer(soulseekMessagePeer)) {
+        if (!sender.isEmpty() && !SolarDeveloperAccounts.isVirtualPeer(soulseekMessagePeer) && !SolarDeveloperAccounts.hideFromReachUi(soulseekMessagePeer) && !SolarDeveloperAccounts.isVirtualPeer(peer) && !SolarDeveloperAccounts.hideFromReachUi(peer)) {
             labels.add(getString(R.string.soulseek_block_user));
             states.add(null);
             headers.add(Boolean.FALSE);
@@ -9792,28 +9841,30 @@ public class MainActivity extends Activity {
             });
         }
 
-        final boolean ignored = SoulseekPeerPrefs.isIgnored(prefs, peer);
-        labels.add(getString(ignored ? R.string.soulseek_unignore_user : R.string.soulseek_ignore_user));
-        states.add(null);
-        headers.add(Boolean.FALSE);
-        actions.add(new Runnable() {
-            @Override
-            public void run() {
-                dismissThemedContextMenu();
-                toggleSoulseekPeerIgnored(peer, !ignored);
-            }
-        });
+        if (!SolarDeveloperAccounts.isVirtualPeer(peer) && !SolarDeveloperAccounts.hideFromReachUi(peer)) {
+            final boolean ignored = SoulseekPeerPrefs.isIgnored(prefs, peer);
+            labels.add(getString(ignored ? R.string.soulseek_unignore_user : R.string.soulseek_ignore_user));
+            states.add(null);
+            headers.add(Boolean.FALSE);
+            actions.add(new Runnable() {
+                @Override
+                public void run() {
+                    dismissThemedContextMenu();
+                    toggleSoulseekPeerIgnored(peer, !ignored);
+                }
+            });
 
-        labels.add(getString(blocked ? R.string.soulseek_unblock_user : R.string.soulseek_block_user));
-        states.add(null);
-        headers.add(Boolean.FALSE);
-        actions.add(new Runnable() {
-            @Override
-            public void run() {
-                dismissThemedContextMenu();
-                toggleSoulseekPeerBlocked(peer, !blocked);
-            }
-        });
+            labels.add(getString(blocked ? R.string.soulseek_unblock_user : R.string.soulseek_block_user));
+            states.add(null);
+            headers.add(Boolean.FALSE);
+            actions.add(new Runnable() {
+                @Override
+                public void run() {
+                    dismissThemedContextMenu();
+                    toggleSoulseekPeerBlocked(peer, !blocked);
+                }
+            });
+        }
 
         showContextMenuTierInPlace(peer, labels, states, null, headers, actions, focusList);
     }
@@ -9848,6 +9899,18 @@ public class MainActivity extends Activity {
             }
         });
 
+        labels.add(getString(R.string.soulseek_pm_open_conversation));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+                soulseekMessagePeer = peer;
+                buildSoulseekConversationUI(peer);
+            }
+        });
+
         if (!body.isEmpty()) {
             labels.add(getString(R.string.soulseek_react_to_message));
             states.add(null);
@@ -9871,27 +9934,29 @@ public class MainActivity extends Activity {
             }
         });
 
-        labels.add(getString(ignored ? R.string.soulseek_unignore_user : R.string.soulseek_ignore_user));
-        states.add(null);
-        headers.add(Boolean.FALSE);
-        actions.add(new Runnable() {
-            @Override
-            public void run() {
-                dismissThemedContextMenu();
-                toggleSoulseekPeerIgnored(peer, !ignored);
-            }
-        });
+        if (!SolarDeveloperAccounts.isVirtualPeer(peer) && !SolarDeveloperAccounts.hideFromReachUi(peer)) {
+            labels.add(getString(ignored ? R.string.soulseek_unignore_user : R.string.soulseek_ignore_user));
+            states.add(null);
+            headers.add(Boolean.FALSE);
+            actions.add(new Runnable() {
+                @Override
+                public void run() {
+                    dismissThemedContextMenu();
+                    toggleSoulseekPeerIgnored(peer, !ignored);
+                }
+            });
 
-        labels.add(getString(blocked ? R.string.soulseek_unblock_user : R.string.soulseek_block_user));
-        states.add(null);
-        headers.add(Boolean.FALSE);
-        actions.add(new Runnable() {
-            @Override
-            public void run() {
-                dismissThemedContextMenu();
-                toggleSoulseekPeerBlocked(peer, !blocked);
-            }
-        });
+            labels.add(getString(blocked ? R.string.soulseek_unblock_user : R.string.soulseek_block_user));
+            states.add(null);
+            headers.add(Boolean.FALSE);
+            actions.add(new Runnable() {
+                @Override
+                public void run() {
+                    dismissThemedContextMenu();
+                    toggleSoulseekPeerBlocked(peer, !blocked);
+                }
+            });
+        }
 
         showContextMenuTierInPlace(peer, labels, states, null, headers, actions, focusList);
     }
@@ -9951,6 +10016,17 @@ public class MainActivity extends Activity {
             public void run() {
                 dismissThemedContextMenu();
                 openSoulseekMessageComposeFromContextAlert(SolarDeveloperAccounts.VIRTUAL_PEER);
+            }
+        });
+
+        labels.add(getString(R.string.soulseek_pm_open_conversation));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+                buildSoulseekConversationUI(SolarDeveloperAccounts.VIRTUAL_PEER);
             }
         });
 
@@ -10230,7 +10306,7 @@ public class MainActivity extends Activity {
                 openSoulseekUserProfile(peer, null);
             }
         });
-        if (soulseekMessagingEnabled) {
+        if (soulseekMessagingEnabled || SolarDeveloperAccounts.isVirtualPeer(peer) || SolarDeveloperAccounts.isDeveloper(peer) || SolarDeveloperAccounts.hideFromReachUi(peer)) {
             labels.add(getString(R.string.soulseek_compose_message));
             states.add(null);
             iconKeys.add(null);
@@ -10269,17 +10345,19 @@ public class MainActivity extends Activity {
                 }
             });
         }
-        labels.add(getString(blocked ? R.string.soulseek_unblock_user : R.string.soulseek_block_user));
-        states.add(null);
-        iconKeys.add(null);
-        headers.add(Boolean.FALSE);
-        actions.add(new Runnable() {
-            @Override
-            public void run() {
-                dismissThemedContextMenu();
-                toggleSoulseekPeerBlocked(peer, !blocked);
-            }
-        });
+        if (!SolarDeveloperAccounts.isVirtualPeer(peer) && !SolarDeveloperAccounts.hideFromReachUi(peer)) {
+            labels.add(getString(blocked ? R.string.soulseek_unblock_user : R.string.soulseek_block_user));
+            states.add(null);
+            iconKeys.add(null);
+            headers.add(Boolean.FALSE);
+            actions.add(new Runnable() {
+                @Override
+                public void run() {
+                    dismissThemedContextMenu();
+                    toggleSoulseekPeerBlocked(peer, !blocked);
+                }
+            });
+        }
         labels.add(getString(favorited ? R.string.soulseek_remove_friend : R.string.soulseek_add_friend));
         states.add(null);
         iconKeys.add(null);
@@ -10352,6 +10430,36 @@ public class MainActivity extends Activity {
         final String outbound = wire
                 ? ReachMessageFormat.formatReactionWire(quote, emoji)
                 : emoji;
+        if (SolarDeveloperAccounts.isVirtualPeer(to)) {
+            SoulseekClient client = ensureSoulseekClient();
+            if (client != null) client.warmConnectionAsync();
+            SolarDiagSessionManager.ensureSession(this, prefs);
+            SolarDeveloperMessaging.sendUserMessage(this, prefs, client, outbound,
+                    new SoulseekClient.MessageSendCallback() {
+                @Override
+                public void onSent() {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            soulseekConversationFocusLastMessage = true;
+                            buildSoulseekConversationUI(SolarDeveloperAccounts.VIRTUAL_PEER);
+                        }
+                    });
+                }
+
+                @Override
+                public void onError(final String reason) {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            soulseekConversationFocusLastMessage = true;
+                            buildSoulseekConversationUI(SolarDeveloperAccounts.VIRTUAL_PEER);
+                        }
+                    });
+                }
+            });
+            return;
+        }
         ensureSoulseekClient().sendPrivateMessage(to, outbound, new SoulseekClient.MessageSendCallback() {
             @Override
             public void onSent() {
@@ -10391,9 +10499,14 @@ public class MainActivity extends Activity {
     /** After PM compose: open conversation when launched from context alert; else refresh in-thread. */
     private void finishPmComposeNavigation(String peer) {
         restoreConversationAfterKeyboard();
+        final int composeReturn = keyboardComposeReturnScreen;
         keyboardComposeFromContextPm = false;
         keyboardComposeReturnScreen = -1;
         soulseekConversationFocusLastMessage = true;
+        if (composeReturn >= 0) {
+            soulseekConversationReturnScreen = composeReturn;
+            soulseekConversationReturnSubKey = null;
+        }
         buildSoulseekConversationUI(peer);
         keyboardReturnSettingsSubKey = null;
     }
@@ -10721,8 +10834,9 @@ public class MainActivity extends Activity {
             if (track == null) return;
             final File cover = coverFileForTrack(track);
             new Thread(new Runnable() {
-                @Override public void run() {
+                @Override                 public void run() {
                     DeezerMetadata.prefetchCoverFile(prefs, track, cover);
+                    tryEmbedMetadataFromPrefs(track, cover);
                 }
             }, "DeezerCover").start();
         }
@@ -11144,6 +11258,14 @@ public class MainActivity extends Activity {
         keyboardReturnState = STATE_SETTINGS;
         keyboardReturnSettingsSubKey = SettingsScreens.isSoulseek(settingsSubScreenKey)
                 ? settingsSubScreenKey : null;
+        SoulseekAccount acct = SoulseekAccount.load(prefs, MainActivity.this);
+        soulseekUsernameAutoPhase = true;
+        soulseekKeyboardStashedAutoUser = acct.custom ? "" : acct.username;
+        String prefill = acct.custom
+                ? (acct.username != null ? acct.username : "")
+                : soulseekKeyboardStashedAutoUser;
+        // changeScreen → openKeyboard() reads keyboardPrefill; typedPassword alone is wiped.
+        keyboardPrefill = prefill;
         pendingSoulseekUser = "";
         changeScreen(STATE_WIFI_KEYBOARD);
     }
@@ -11170,7 +11292,7 @@ public class MainActivity extends Activity {
         } else if (keyboardPurpose == KEYBOARD_WIFI) {
             tvKeyboardInput.setText(typedPassword.length() == 0 ? getString(R.string.keyboard_enter_wifi_password) : typedPassword);
         } else if (keyboardPurpose == KEYBOARD_SOULSEEK_USER) {
-            tvKeyboardInput.setText(typedPassword.length() == 0 ? getString(R.string.keyboard_blank_auto) : typedPassword);
+            tvKeyboardInput.setText(typedPassword);
         } else if (keyboardPurpose == KEYBOARD_SOULSEEK_SEARCH) {
             int hint = getMusicFromEntryPoint
                     ? R.string.get_music_type_search : R.string.soulseek_type_search;
@@ -11214,14 +11336,15 @@ public class MainActivity extends Activity {
         String selectedChar = KEYBOARD_CHARS[keyboardIndex];
         clickFeedback();
         if (selectedChar.equals("[DEL]")) {
-            if (typedPassword.length() > 0)
-                typedPassword = typedPassword.substring(0, typedPassword.length() - 1);
+            applySoulseekUsernameDel();
         } else if (selectedChar.equals("[CONN]")) {
             handleKeyboardEnter();
         } else if (selectedChar.equals("[SPC]")) {
             typedPassword += " ";
+            if (keyboardPurpose == KEYBOARD_SOULSEEK_USER) soulseekUsernameAutoPhase = false;
         } else {
             typedPassword += selectedChar;
+            if (keyboardPurpose == KEYBOARD_SOULSEEK_USER) soulseekUsernameAutoPhase = false;
             if (selectedChar.length() == 1) {
                 char ch = selectedChar.charAt(0);
                 if (ch >= 'A' && ch <= 'Z') {
@@ -11233,13 +11356,25 @@ public class MainActivity extends Activity {
         updateKeyboardUI();
     }
 
+    /** One DEL/prevtrack clears prefilled auto username; per-char delete after user types. */
+    private void applySoulseekUsernameDel() {
+        if (keyboardPurpose == KEYBOARD_SOULSEEK_USER && soulseekUsernameAutoPhase) {
+            typedPassword = "";
+            soulseekUsernameAutoPhase = false;
+        } else if (typedPassword.length() > 0) {
+            typedPassword = typedPassword.substring(0, typedPassword.length() - 1);
+        }
+    }
+
     private void handleKeyboardMediaDel() {
         handleKeyboardMediaDel(true);
     }
 
     private void handleKeyboardMediaDel(boolean vibrate) {
         if (vibrate) clickFeedback();
-        if (typedPassword.length() > 0) {
+        if (keyboardPurpose == KEYBOARD_SOULSEEK_USER) {
+            applySoulseekUsernameDel();
+        } else if (typedPassword.length() > 0) {
             typedPassword = typedPassword.substring(0, typedPassword.length() - 1);
         }
         updateKeyboardUI();
@@ -13200,7 +13335,7 @@ public class MainActivity extends Activity {
         if (RowKeys.DEBUG_RADIO_EXPERIMENT.equals(rowKey)) {
             return stateOnOff(com.solar.launcher.radio.RadioExperiment.isEnabled(prefs));
         }
-        if (RowKeys.DEBUG_FLOW_ENABLED.equals(rowKey)) {
+        if (RowKeys.DEBUG_FLOW_ENABLED.equals(rowKey) || RowKeys.FLOW.equals(rowKey)) {
             return stateOnOff(isFlowEnabled());
         }
         if (RowKeys.DEBUG_FLOW_OK_LIBRARY.equals(rowKey)) {
@@ -13210,7 +13345,7 @@ public class MainActivity extends Activity {
             return stateOnOff(prefs != null && prefs.getBoolean(PREF_DEBUG_FLOW_THEME, false));
         }
         if (RowKeys.DEBUG_FLOW_NO_REFLECTIONS.equals(rowKey)) {
-            return stateOnOff(prefs != null && prefs.getBoolean(PREF_DEBUG_FLOW_NO_REFLECTIONS, false));
+            return stateOnOff(prefs != null && prefs.getBoolean(PREF_DEBUG_FLOW_NO_REFLECTIONS, true));
         }
         if (RowKeys.FLOW_MULTI_TRACK_ALBUMS.equals(rowKey)) {
             return stateOnOff(prefs != null && prefs.getBoolean(PREF_FLOW_MULTI_TRACK_ALBUMS, false));
@@ -13791,6 +13926,9 @@ public class MainActivity extends Activity {
             stateText = getString(nowPlaying3dAlbumArt
                     ? R.string.settings_artwork_perspective_3d_hint
                     : R.string.settings_artwork_perspective_flat_hint);
+        }
+        if (RowKeys.FLOW.equals(rowKey)) {
+            stateText = getString(R.string.settings_flow_hold_play_pause_hint);
         }
         if (RowKeys.DIAG_AUTO_REPORT.equals(rowKey)) {
             stateText = getString(soulseekDiagAutoReport
@@ -20359,6 +20497,7 @@ public class MainActivity extends Activity {
 
     private String soulseekPeerCountryCode(String username) {
         if (username == null) return null;
+        if (SolarDeveloperAccounts.isVirtualPeer(username)) return null;
         return soulseekPeerCountry.get(username.trim().toLowerCase(Locale.US));
     }
 
@@ -20786,9 +20925,10 @@ public class MainActivity extends Activity {
         if (track == null) return;
         final File cover = coverFileForTrack(track);
         new Thread(new Runnable() {
-            @Override public void run() {
-                DeezerMetadata.prefetchCoverFile(prefs, track, cover);
-            }
+            @Override                 public void run() {
+                    DeezerMetadata.prefetchCoverFile(prefs, track, cover);
+                    tryEmbedMetadataFromPrefs(track, cover);
+                }
         }, "DeezerCover").start();
     }
 
@@ -21300,6 +21440,23 @@ public class MainActivity extends Activity {
             }
         });
         containerSettingsItems.addView(btnPlayback);
+
+        LinearLayout btnFlow = createSettingsRow(RowKeys.FLOW, R.string.settings_flow, false);
+        btnFlow.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                boolean enable = !isFlowEnabled();
+                prefs.edit().putBoolean(PREF_DEBUG_FLOW_ENABLED, enable).apply();
+                applyAlbumArtDisplayExclusivity(3);
+                syncPlayerAlbumArt3dVisibility();
+                refreshCurrentAlbumArtDisplay();
+                refreshSettingsPreview(RowKeys.FLOW);
+                refreshSettingsPreview(RowKeys.ARTWORK_PERSPECTIVE);
+            }
+        });
+        containerSettingsItems.addView(btnFlow);
+        refreshSettingsPreview(RowKeys.FLOW);
 
         LinearLayout btnDevice = createSettingsRow(RowKeys.DEVICE, R.string.settings_device, true);
         deviceSettingsMenuFocusIndex = containerSettingsItems.getChildCount();
@@ -23483,6 +23640,12 @@ public class MainActivity extends Activity {
     }
 
     private void showSoulseekUserLookupResult(final SoulseekUserDirectory.UserInfo info) {
+        if (info != null && info.username != null
+                && SolarDeveloperAccounts.isDeveloper(info.username)
+                && isDevSupportExperimentEnabled()) {
+            openSolarDevelopmentProfile();
+            return;
+        }
         if (info == null || info.username == null
                 || SolarDeveloperAccounts.hideFromReachUi(info.username)) {
             Toast.makeText(this, getString(R.string.soulseek_user_lookup_failed,
@@ -23492,6 +23655,7 @@ public class MainActivity extends Activity {
             return;
         }
         showSoulseekConversationPanel(false);
+        showReachBrowseList(false);
         setSettingsSubScreen(SettingsScreens.SOULSEEK_FIND_USER);
         updateStatusBarTitle();
         populateReachUserActionsPanel(info.username, info, new Runnable() {
@@ -23655,7 +23819,7 @@ public class MainActivity extends Activity {
             public void onUserSelected(ReachDirectoryUser user) {
                 clickFeedback();
                 if (user != null && SolarDeveloperAccounts.isVirtualPeer(user.username)) {
-                    openSolarDevelopmentThread();
+                    openSolarDevelopmentProfile();
                     return;
                 }
                 soulseekMessagePeer = user.username;
@@ -23828,7 +23992,7 @@ public class MainActivity extends Activity {
 
     private void populateReachUserActionsPanel(final String username,
             final SoulseekUserDirectory.UserInfo info, final Runnable onBack, final int backResId) {
-        containerSettingsItems.removeAllViews();
+        clearSettingsItemsContainer();
         Button btnBack = createListButton(getString(backResId));
         btnBack.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -23868,9 +24032,7 @@ public class MainActivity extends Activity {
         });
         containerSettingsItems.addView(btnProfile);
 
-        if (containerSettingsItems.getChildCount() > 1) {
-            containerSettingsItems.getChildAt(1).requestFocus();
-        }
+        focusFirstSettingsRow();
     }
 
     private void appendReachPeerActionButtons(ViewGroup host, final String username,
@@ -23893,7 +24055,7 @@ public class MainActivity extends Activity {
             host.addView(btnBrowse);
         }
 
-        if (soulseekMessagingEnabled) {
+        if (soulseekMessagingEnabled || SolarDeveloperAccounts.isVirtualPeer(peer) || SolarDeveloperAccounts.isDeveloper(peer) || SolarDeveloperAccounts.hideFromReachUi(peer)) {
             Button btnMsg = createListButton(getString(R.string.soulseek_compose_message));
             btnMsg.setOnClickListener(new View.OnClickListener() {
                 @Override
@@ -23936,29 +24098,31 @@ public class MainActivity extends Activity {
             host.addView(btnClearNote);
         }
 
-        final boolean ignored = SoulseekPeerPrefs.isIgnored(prefs, peer);
-        Button btnIgnore = createListButton(getString(ignored
-                ? R.string.soulseek_unignore_user : R.string.soulseek_ignore_user));
-        btnIgnore.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                clickFeedback();
-                toggleSoulseekPeerIgnored(peer, !ignored);
-            }
-        });
-        host.addView(btnIgnore);
+        if (!SolarDeveloperAccounts.isVirtualPeer(peer) && !SolarDeveloperAccounts.hideFromReachUi(peer)) {
+            final boolean ignored = SoulseekPeerPrefs.isIgnored(prefs, peer);
+            Button btnIgnore = createListButton(getString(ignored
+                    ? R.string.soulseek_unignore_user : R.string.soulseek_ignore_user));
+            btnIgnore.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    toggleSoulseekPeerIgnored(peer, !ignored);
+                }
+            });
+            host.addView(btnIgnore);
 
-        final boolean blocked = SoulseekPeerPrefs.isBlocked(prefs, peer);
-        Button btnBlock = createListButton(getString(blocked
-                ? R.string.soulseek_unblock_user : R.string.soulseek_block_user));
-        btnBlock.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                clickFeedback();
-                toggleSoulseekPeerBlocked(peer, !blocked);
-            }
-        });
-        host.addView(btnBlock);
+            final boolean blocked = SoulseekPeerPrefs.isBlocked(prefs, peer);
+            Button btnBlock = createListButton(getString(blocked
+                    ? R.string.soulseek_unblock_user : R.string.soulseek_block_user));
+            btnBlock.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    toggleSoulseekPeerBlocked(peer, !blocked);
+                }
+            });
+            host.addView(btnBlock);
+        }
 
         final boolean favorited = SoulseekPeerPrefs.isFavorite(prefs, peer);
         Button btnFriend = createListButton(getString(favorited
@@ -23974,6 +24138,7 @@ public class MainActivity extends Activity {
     }
 
     private void toggleSoulseekPeerBlocked(final String peer, final boolean block) {
+        if (peer == null || SolarDeveloperAccounts.isVirtualPeer(peer) || SolarDeveloperAccounts.hideFromReachUi(peer)) return;
         SoulseekPeerPrefs.setBlocked(prefs, peer, block);
         SoulseekClient client = ensureSoulseekClient();
         if (client != null) {
@@ -23986,6 +24151,7 @@ public class MainActivity extends Activity {
     }
 
     private void toggleSoulseekPeerIgnored(final String peer, final boolean ignore) {
+        if (peer == null || SolarDeveloperAccounts.isVirtualPeer(peer) || SolarDeveloperAccounts.hideFromReachUi(peer)) return;
         SoulseekPeerPrefs.setIgnored(prefs, peer, ignore);
         SoulseekClient client = ensureSoulseekClient();
         if (client != null) {
@@ -24237,7 +24403,7 @@ public class MainActivity extends Activity {
         setSettingsSubScreen(SettingsScreens.SOULSEEK_USER_PROFILE, username);
         updateStatusBarTitle();
         applyReachBrowseLayoutMode();
-        containerSettingsItems.removeAllViews();
+        clearSettingsItemsContainer();
         resetReachBrowseHeaders();
 
         Button btnBack = createListButton(getString(R.string.soulseek_back_settings));
@@ -24267,9 +24433,7 @@ public class MainActivity extends Activity {
         }
 
         loadSoulseekUserProfileData(username);
-        if (containerSettingsItems.getChildCount() > 1) {
-            containerSettingsItems.getChildAt(1).requestFocus();
-        }
+        focusFirstSettingsRow();
     }
 
     private void loadSoulseekUserProfileData(final String username) {
@@ -24357,7 +24521,7 @@ public class MainActivity extends Activity {
             settingsPreviewPane.setVisibility(View.GONE);
         }
 
-        containerSettingsItems.removeAllViews();
+        clearSettingsItemsContainer();
         Button btnBack = createListButton(getString(R.string.soulseek_back_settings));
         btnBack.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -24397,9 +24561,7 @@ public class MainActivity extends Activity {
                 addSettingsInfoParagraph("• " + item);
             }
         }
-        if (containerSettingsItems.getChildCount() > 1) {
-            containerSettingsItems.getChildAt(1).requestFocus();
-        }
+        focusFirstSettingsRow();
     }
 
     private final Runnable reachDirectoryHeartbeatRunnable = new Runnable() {
@@ -24468,19 +24630,6 @@ public class MainActivity extends Activity {
         });
         addReachBrowseHeader(btnNew);
 
-        if (isDevSupportExperimentEnabled()) {
-            Button btnSolarDev = createListButton(
-                    SolarDeveloperAccounts.displayNameForPeer(this, SolarDeveloperAccounts.VIRTUAL_PEER));
-            btnSolarDev.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    clickFeedback();
-                    openSolarDevelopmentThread();
-                }
-            });
-            addReachBrowseHeader(btnSolarDev);
-        }
-
         ensureReachInboxAdapter();
         loadReachInboxData();
     }
@@ -24541,10 +24690,7 @@ public class MainActivity extends Activity {
         if (existing > 0) {
             rows.add(0, rows.remove(existing));
         } else if (existing < 0) {
-            SoulseekMessaging.Message last = SolarDeveloperMessaging.lastVisibleMessage(this, prefs);
-            String preview = last != null ? ReachMessageFormat.previewText(last.text) : "";
-            int ts = last != null ? last.timestamp : 0;
-            rows.add(0, new ReachDatabase.InboxRow(peer, preview, ts));
+            rows.add(0, new ReachDatabase.InboxRow(peer, "", 0));
         }
     }
 
@@ -24564,7 +24710,18 @@ public class MainActivity extends Activity {
                 String loadError = null;
                 try {
                     ReachDatabase.getInstance(app).ensureMigrated(prefs);
+                    SolarDevelopmentBootstrap.ensureVirtualInboxPlaceholder(app, prefs);
                     inbox = ReachDatabase.getInstance(app).loadInboxSync();
+                    if (!soulseekMessagingEnabled && inbox != null) {
+                        java.util.List<ReachDatabase.InboxRow> filtered =
+                                new java.util.ArrayList<ReachDatabase.InboxRow>();
+                        for (ReachDatabase.InboxRow row : inbox) {
+                            if (SolarDeveloperAccounts.isVirtualPeer(row.peer)) {
+                                filtered.add(row);
+                            }
+                        }
+                        inbox = filtered;
+                    }
                     notes = ReachDatabase.getInstance(app).loadAllPeerNotesSync();
                 } catch (Exception e) {
                     loadError = e.getClass().getSimpleName() + ": " + e.getMessage();
@@ -24596,24 +24753,10 @@ public class MainActivity extends Activity {
                             focusReachBrowseList(gen);
                             return;
                         }
-                        if (inboxFinal.isEmpty()) {
-                            if (isDevSupportExperimentEnabled()) {
-                                java.util.List<ReachDatabase.InboxRow> rows =
-                                        new java.util.ArrayList<ReachDatabase.InboxRow>();
-                                pinSolarDevelopmentInboxRow(rows);
-                                reachInboxAdapter.setInbox(rows, notesFinal);
-                            } else {
-                                reachInboxAdapter.setStatus(
-                                        getString(R.string.soulseek_messages_empty_hint));
-                            }
-                        } else {
-                            java.util.List<ReachDatabase.InboxRow> rows =
-                                    new java.util.ArrayList<ReachDatabase.InboxRow>(inboxFinal);
-                            if (isDevSupportExperimentEnabled()) {
-                                pinSolarDevelopmentInboxRow(rows);
-                            }
-                            reachInboxAdapter.setInbox(rows, notesFinal);
-                        }
+                        java.util.List<ReachDatabase.InboxRow> rows =
+                                new java.util.ArrayList<ReachDatabase.InboxRow>(inboxFinal);
+                        pinSolarDevelopmentInboxRow(rows);
+                        reachInboxAdapter.setInbox(rows, notesFinal);
                         reachInboxAdapter.setRowWidthPx(messagingRowWidthPx());
                         focusReachBrowseList(gen);
                     }
@@ -24673,6 +24816,9 @@ public class MainActivity extends Activity {
     private void showSoulseekConversationPanel(boolean show) {
         if (settingsScrollView != null) {
             settingsScrollView.setVisibility(show ? View.GONE : View.VISIBLE);
+        }
+        if (reachBrowseHost != null && show) {
+            reachBrowseHost.setVisibility(View.GONE);
         }
         if (listReachBrowse != null && show) {
             listReachBrowse.setVisibility(View.GONE);
@@ -24918,6 +25064,22 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {}
         // #endregion
         return ok;
+    }
+
+    /** Re-seed wheel focus when conversation list lost highlight (API 17 ListView quirk). */
+    private boolean isConversationWheelFocusValid() {
+        if (!isConversationThreadActive()) return false;
+        if (isConversationBackButtonFocused()) return true;
+        if (conversationActiveHeaderIndex() >= 0) return true;
+        View f = getCurrentFocus();
+        if (f == null || !f.isShown() || !f.isFocusable()) return false;
+        return listConversationThread != null && isViewDescendantOf(f, listConversationThread);
+    }
+
+    private boolean ensureConversationListFocus() {
+        if (!isConversationThreadActive()) return false;
+        if (isConversationWheelFocusValid()) return false;
+        return focusConversationBackButton();
     }
 
     private boolean moveConversationListFocus(int delta) {
@@ -25188,12 +25350,7 @@ public class MainActivity extends Activity {
             if (subtitleOverride == null
                     && SolarDeveloperAccounts.isVirtualPeer(soulseekMessagePeer)) {
                 if (m.incoming) {
-                    SolarDeveloperAccounts.DevIncoming devFrom =
-                            SolarDeveloperAccounts.parseDevIncoming(m.text);
                     String sub = getString(R.string.solar_developer_pm_from_label);
-                    if (devFrom.fromDev != null && !devFrom.fromDev.isEmpty()) {
-                        sub = sub + " " + devFrom.fromDev;
-                    }
                     if (entry.timestamp != null && !entry.timestamp.isEmpty()) {
                         sub = sub + " · " + entry.timestamp;
                     }
@@ -25504,11 +25661,55 @@ public class MainActivity extends Activity {
     }
 
     private void onConversationBackPressed() {
+        finishSoulseekConversationBack();
+    }
+
+    /** Dismiss message context modal and return to the screen that opened this thread. */
+    private void finishSoulseekConversationBack() {
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("returnScreen", soulseekConversationReturnScreen);
+            d.put("returnSub", soulseekConversationReturnSubKey);
+            d.put("ctxShowing", themedContextMenu != null && themedContextMenu.isShowing());
+            d.put("ctxTier", contextMenuTopTier());
+            d.put("msgPos", contextReachMessagePosition);
+            Debug898913Log.log("MainActivity.finishSoulseekConversationBack",
+                    "conversation back", "H-BACK-CTX", d);
+        } catch (Exception ignored) {}
+        // #endregion
+        dismissThemedContextMenu();
+        contextReachMessagePosition = -1;
+        contextReachPmBody = "";
+        contextReachPmFromDev = "";
+        final int retScreen = soulseekConversationReturnScreen;
+        final String retSub = soulseekConversationReturnSubKey;
+        soulseekConversationReturnScreen = -1;
+        soulseekConversationReturnSubKey = null;
+        final Runnable afterPop = new Runnable() {
+            @Override
+            public void run() {
+                String sub = retSub;
+                if (SettingsScreens.SOULSEEK_MESSAGES_THREAD.equals(sub)) {
+                    sub = SettingsScreens.SOULSEEK_MESSAGES;
+                }
+                if (retScreen == STATE_SETTINGS && sub != null) {
+                    currentScreenState = STATE_SETTINGS;
+                    if (layoutSettingsMode != null) layoutSettingsMode.setVisibility(View.VISIBLE);
+                    restoreSoulseekSettingsScreen(sub);
+                    updateStatusBarTitle();
+                } else if (retScreen >= 0 && retScreen != STATE_SETTINGS) {
+                    changeScreen(retScreen);
+                } else {
+                    buildSoulseekMessagesUI();
+                }
+            }
+        };
         if (!(soulseekConversationHost instanceof ViewGroup)) {
             if (isRoomThreadScreenActive()) {
                 buildSoulseekChatRoomsUI();
             } else {
-                buildSoulseekMessagesUI();
+                afterPop.run();
             }
             return;
         }
@@ -25521,13 +25722,32 @@ public class MainActivity extends Activity {
                 }
             });
         } else {
-            ListDrillTransition.pop(host, new Runnable() {
-                @Override
-                public void run() {
-                    buildSoulseekMessagesUI();
-                }
-            });
+            ListDrillTransition.pop(host, afterPop);
         }
+    }
+
+    /** Remember where the user was before opening a PM thread. */
+    private void captureSoulseekConversationReturn() {
+        if (SettingsScreens.SOULSEEK_MESSAGES_THREAD.equals(settingsSubScreenKey)) {
+            return;
+        }
+        if (keyboardComposeReturnScreen >= 0) {
+            soulseekConversationReturnScreen = keyboardComposeReturnScreen;
+            soulseekConversationReturnSubKey = null;
+        } else {
+            soulseekConversationReturnScreen = currentScreenState;
+            soulseekConversationReturnSubKey = settingsSubScreenKey;
+        }
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("returnScreen", soulseekConversationReturnScreen);
+            d.put("returnSub", soulseekConversationReturnSubKey);
+            d.put("composeReturn", keyboardComposeReturnScreen);
+            Debug898913Log.log("MainActivity.captureSoulseekConversationReturn",
+                    "captured", "H-BACK-CAP", d);
+        } catch (Exception ignored) {}
+        // #endregion
     }
 
     private void updateConversationBackButton() {
@@ -25976,8 +26196,15 @@ public class MainActivity extends Activity {
             buildSoulseekMessagesUI();
             return;
         }
+        if (soulseekConversationReturnScreen < 0) {
+            captureSoulseekConversationReturn();
+        }
+        dismissThemedContextMenu();
+        contextReachMessagePosition = -1;
         containerSettingsItems.removeAllViews();
-        soulseekMessagePeer = peer.trim();
+        final String resolvedPeer = (SolarDeveloperAccounts.isDeveloper(peer) || SolarDeveloperAccounts.hideFromReachUi(peer))
+                ? SolarDeveloperAccounts.VIRTUAL_PEER : peer.trim();
+        soulseekMessagePeer = resolvedPeer;
         setSettingsSubScreen(SettingsScreens.SOULSEEK_MESSAGES_THREAD, soulseekMessagePeer);
         updateStatusBarTitle();
         showReachBrowseList(false);
@@ -25986,10 +26213,16 @@ public class MainActivity extends Activity {
         resetConversationListHeaders();
         hideSoulseekRoomModeBar();
         if (tvConversationTitle != null) {
-            tvConversationTitle.setText(SolarDeveloperAccounts.displayNameForPeer(this, soulseekMessagePeer));
-            tvConversationTitle.setSelected(true);
-            enableMarquee(tvConversationTitle);
-            ThemeManager.applyThemedTextStyle(tvConversationTitle, ThemeManager.getTextColorPrimary());
+            if (SolarDeveloperAccounts.isVirtualPeer(soulseekMessagePeer)) {
+                tvConversationTitle.setVisibility(View.GONE);
+            } else {
+                tvConversationTitle.setVisibility(View.VISIBLE);
+                tvConversationTitle.setText(
+                        SolarDeveloperAccounts.displayNameForPeer(this, soulseekMessagePeer));
+                tvConversationTitle.setSelected(true);
+                enableMarquee(tvConversationTitle);
+                ThemeManager.applyThemedTextStyle(tvConversationTitle, ThemeManager.getTextColorPrimary());
+            }
         }
         soulseekConversationPeerOnline = null;
         if (listConversationThread != null) {
@@ -26022,6 +26255,7 @@ public class MainActivity extends Activity {
         }
         if (SolarDeveloperAccounts.isVirtualPeer(soulseekMessagePeer)) {
             SolarDeveloperMessaging.onThreadOpened(this, prefs);
+            SolarDiagSessionManager.ensureSession(this, prefs);
             SoulseekClient client = ensureSoulseekClient();
             if (client != null) client.warmConnectionAsync();
         } else {
@@ -26065,13 +26299,13 @@ public class MainActivity extends Activity {
             restoreSettingsAfterSoulseekAccount();
             return;
         }
-        // Aggregated Solar Development — standard PM thread, not Soulseek user lookup.
+        // Aggregated Solar Development — profile or PM thread, not raw Soulseek user lookup.
         if (isDevSupportExperimentEnabled()
-                && SolarDeveloperAccounts.isAggregatedDeveloperQuery(user)) {
+                && SolarDeveloperAccounts.matchesDeveloperSearchQuery(user)) {
             currentScreenState = STATE_SETTINGS;
             layoutWifiKeyboard.setVisibility(View.GONE);
             layoutSettingsMode.setVisibility(View.VISIBLE);
-            openSolarDevelopmentThread();
+            openSolarDevelopmentProfile();
             return;
         }
         currentScreenState = STATE_SETTINGS;
@@ -26114,13 +26348,17 @@ public class MainActivity extends Activity {
             return;
         }
         if (isDeveloperSupportMessageCompose()) {
-            final String trimmed = text;
+            final String quote = soulseekReplyQuoteText != null ? soulseekReplyQuoteText.trim() : "";
             soulseekReplyQuoteText = "";
+            final String outbound = quote.isEmpty()
+                    ? text
+                    : ReachMessageFormat.formatReplyWire(quote, text);
             SoulseekClient client = ensureSoulseekClient();
             if (client != null) {
                 client.warmConnectionAsync();
             }
-            SolarDeveloperMessaging.sendUserMessage(MainActivity.this, prefs, client, trimmed,
+            SolarDiagSessionManager.ensureSession(MainActivity.this, prefs);
+            SolarDeveloperMessaging.sendUserMessage(MainActivity.this, prefs, client, outbound,
                     new SoulseekClient.MessageSendCallback() {
                 @Override
                 public void onSent() {
@@ -26220,7 +26458,9 @@ public class MainActivity extends Activity {
 
     /** True when compose keyboard fans out to hidden developer Soulseek accounts. */
     private boolean isDeveloperSupportMessageCompose() {
-        return SolarDeveloperAccounts.isVirtualPeer(soulseekKeyboardMessageTo);
+        return SolarDeveloperAccounts.isVirtualPeer(soulseekKeyboardMessageTo)
+                || SolarDeveloperAccounts.isDeveloper(soulseekKeyboardMessageTo)
+                || SolarDeveloperAccounts.hideFromReachUi(soulseekKeyboardMessageTo);
     }
 
     private void openSoulseekMessageCompose(final String peer) {
@@ -26694,6 +26934,118 @@ public class MainActivity extends Activity {
         buildSoulseekConversationUI(SolarDeveloperAccounts.VIRTUAL_PEER);
     }
 
+    /** Other Y1 Users / Find User — SolarDev profile stats under Solar Development label. */
+    private void openSolarDevelopmentProfile() {
+        if (!isDevSupportExperimentEnabled()) return;
+        if (!canOpenDeveloperSupport()) {
+            Toast.makeText(this, R.string.settings_report_unreachable, Toast.LENGTH_LONG).show();
+            return;
+        }
+        showSoulseekConversationPanel(false);
+        setSettingsSubScreen(SettingsScreens.SOULSEEK_FIND_REACH);
+        updateStatusBarTitle();
+        applyReachBrowseLayoutMode();
+        containerSettingsItems.removeAllViews();
+        Button loadingBack = createListButton(getString(R.string.soulseek_back_settings));
+        loadingBack.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildSoulseekSettingsUI();
+            }
+        });
+        containerSettingsItems.addView(loadingBack);
+        Button loading = createListButton(getString(R.string.soulseek_searching));
+        loading.setEnabled(false);
+        containerSettingsItems.addView(loading);
+        final int gen = ++soulseekReachUserActionsGen;
+        SoulseekClient client = ensureSoulseekClient();
+        if (client == null) {
+            containerSettingsItems.removeAllViews();
+            containerSettingsItems.addView(loadingBack);
+            addSettingsInfoParagraph(getString(R.string.soulseek_reach_users_failed, "Offline"));
+            return;
+        }
+        SoulseekUserDirectory.watch(client, SolarDeveloperAccounts.SOLAR_DEV,
+                new SoulseekUserDirectory.Callback() {
+            @Override
+            public void onUserInfo(final SoulseekUserDirectory.UserInfo info) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (gen != soulseekReachUserActionsGen) return;
+                        populateSolarDevelopmentActionsPanel(info, new Runnable() {
+                            @Override
+                            public void run() {
+                                buildSoulseekSettingsUI();
+                            }
+                        });
+                    }
+                });
+            }
+
+            @Override
+            public void onError(final String reason) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (gen != soulseekReachUserActionsGen) return;
+                        populateSolarDevelopmentActionsPanel(null, new Runnable() {
+                            @Override
+                            public void run() {
+                                buildSoulseekSettingsUI();
+                            }
+                        });
+                    }
+                });
+            }
+        });
+    }
+
+    /** Solar Development user panel — SolarDev stats, no country flag, no wire username. */
+    private void populateSolarDevelopmentActionsPanel(final SoulseekUserDirectory.UserInfo info,
+            final Runnable onBack) {
+        containerSettingsItems.removeAllViews();
+        Button btnBack = createListButton(getString(R.string.soulseek_back_settings));
+        btnBack.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                onBack.run();
+            }
+        });
+        containerSettingsItems.addView(btnBack);
+
+        final String displayName = getString(R.string.solar_development_display_name);
+        String status = info != null && info.isOnline()
+                ? getString(R.string.soulseek_user_online) : getString(R.string.soulseek_user_offline);
+        String filesLine = info != null && info.files > 0
+                ? getString(R.string.soulseek_peer_files, info.files)
+                : getString(R.string.soulseek_user_no_files);
+        TextView tv = new TextView(this);
+        tv.setText(getString(R.string.soulseek_reach_status_line, displayName, status, filesLine));
+        tv.setTypeface(ThemeManager.getCustomFont());
+        containerSettingsItems.addView(tv);
+
+        if (info != null && info.username != null) {
+            soulseekPeerSharedFiles.put(info.username.toLowerCase(Locale.US), info.files);
+        }
+
+        Button btnMsg = createListButton(getString(R.string.soulseek_compose_message));
+        btnMsg.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                openSolarDevelopmentThread();
+            }
+        });
+        containerSettingsItems.addView(btnMsg);
+
+        if (containerSettingsItems.getChildCount() > 1) {
+            containerSettingsItems.getChildAt(1).requestFocus();
+        }
+    }
+
     private void probeAboutOtaAvailability(final Button placeholder) {
         if (!ConnectivityHelper.isOnline(this)) {
             replaceAboutOtaPlaceholder(placeholder, null, true);
@@ -26871,24 +27223,6 @@ public class MainActivity extends Activity {
         });
         containerSettingsItems.addView(btnBack);
 
-        final LinearLayout btnFlowEnabled = createSettingsRow(RowKeys.DEBUG_FLOW_ENABLED,
-                R.string.settings_debug_flow_enabled, false);
-        btnFlowEnabled.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                clickFeedback();
-                boolean enable = !isFlowEnabled();
-                prefs.edit().putBoolean(PREF_DEBUG_FLOW_ENABLED, enable).apply();
-                applyAlbumArtDisplayExclusivity(3);
-                syncPlayerAlbumArt3dVisibility();
-                refreshCurrentAlbumArtDisplay();
-                refreshSettingsPreview(RowKeys.DEBUG_FLOW_ENABLED);
-                refreshSettingsPreview(RowKeys.ARTWORK_PERSPECTIVE);
-            }
-        });
-        containerSettingsItems.addView(btnFlowEnabled);
-        refreshSettingsPreview(RowKeys.DEBUG_FLOW_ENABLED);
-
         final LinearLayout btnFlowOkLibrary = createSettingsRow(RowKeys.DEBUG_FLOW_OK_LIBRARY,
                 R.string.settings_debug_flow_ok_library, false);
         btnFlowOkLibrary.setOnClickListener(new View.OnClickListener() {
@@ -26927,7 +27261,7 @@ public class MainActivity extends Activity {
             @Override
             public void onClick(View v) {
                 clickFeedback();
-                boolean enable = !prefs.getBoolean(PREF_DEBUG_FLOW_NO_REFLECTIONS, false);
+                boolean enable = !prefs.getBoolean(PREF_DEBUG_FLOW_NO_REFLECTIONS, true);
                 prefs.edit().putBoolean(PREF_DEBUG_FLOW_NO_REFLECTIONS, enable).apply();
                 refreshSettingsPreview(RowKeys.DEBUG_FLOW_NO_REFLECTIONS);
                 applyFlowNoReflectionsPref(enable);
@@ -26951,7 +27285,7 @@ public class MainActivity extends Activity {
         });
         containerSettingsItems.addView(btnMultiTrack);
         refreshSettingsPreview(RowKeys.FLOW_MULTI_TRACK_ALBUMS);
-        btnFlowEnabled.requestFocus();
+        btnFlowOkLibrary.requestFocus();
     }
 
     private void replaceAboutOtaPlaceholder(Button placeholder, Button replacement, boolean showUnavailable) {
@@ -32333,6 +32667,7 @@ public class MainActivity extends Activity {
                 @Override
                 public void run() {
                     if (!persist) return;
+                    if (ReachIntroMessage.isIntro(text)) return;
                     boolean downloadActive = soulseekUiMode == SOULSEEK_UI_DOWNLOAD
                             && soulseekActiveDownload != null;
                     boolean samePeer = downloadActive && fromUser != null
@@ -32401,6 +32736,7 @@ public class MainActivity extends Activity {
                 @Override
                 public void run() {
                     if (!persist) return;
+                    if (ReachIntroMessage.isIntro(text)) return;
                     if (isRoomThreadScreenActive()
                             && room != null && room.equalsIgnoreCase(soulseekChatRoomName)) {
                         if (SettingsScreens.SOULSEEK_CHAT_ROOM_WALL.equals(settingsSubScreenKey)) {
@@ -32558,6 +32894,8 @@ public class MainActivity extends Activity {
                     SoulseekClient client = soulseekClient;
                     if (client != null) {
                         ensureInnioasisRoomJoined();
+                        SolarDevelopmentBootstrap.onSoulseekConnected(
+                                MainActivity.this, prefs, client);
                     }
                 }
             });
@@ -36132,12 +36470,18 @@ public class MainActivity extends Activity {
     private void finishSoulseekUserEntry() {
         pendingSoulseekUser = typedPassword.trim();
         if (pendingSoulseekUser.isEmpty()) {
-            SoulseekAccount.resetToAuto(prefs, MainActivity.this);
+            // Empty confirm keeps the stashed auto username/password — no new friend code.
+            SoulseekAccount.load(prefs, MainActivity.this);
+            if (!soulseekKeyboardStashedAutoUser.isEmpty()) {
+                typedPassword = soulseekKeyboardStashedAutoUser;
+                soulseekUsernameAutoPhase = true;
+                updateKeyboardUI();
+            }
             if (soulseekClient != null) {
                 soulseekClient.shutdown();
                 soulseekClient = null;
             }
-            Toast.makeText(this, getString(R.string.soulseek_auto_account), Toast.LENGTH_LONG).show();
+            soulseekKeyboardStashedAutoUser = "";
             restoreSettingsAfterSoulseekAccount();
             return;
         }
@@ -39553,9 +39897,73 @@ public class MainActivity extends Activity {
     }
 
     private File coverFileForTrack(File track) {
-        String safe = track.getName().replace(".mp3", "").replace(".flac", "")
-                .replace(".m4a", "").replace(".wav", "");
-        return new File(getCoversFolder(), safe + ".jpg");
+        return new File(getCoversFolder(), AudioTagWriter.sidecarBaseName(track.getName()) + ".jpg");
+    }
+
+    /** Try embedding fetched metadata; fall back to prefs overlay + sidecar when unsupported. */
+    private void persistFetchedMetadata(File track, String title, String artist, String album,
+            android.graphics.Bitmap coverBitmap) {
+        if (track == null || !track.isFile()) return;
+        byte[] coverJpeg = null;
+        File coverFile = coverFileForTrack(track);
+        try {
+            File coverFolder = coverFile.getParentFile();
+            if (coverFolder != null && !coverFolder.exists()) coverFolder.mkdirs();
+            if (coverBitmap != null && !coverBitmap.isRecycled()) {
+                java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+                coverBitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, baos);
+                coverJpeg = baos.toByteArray();
+                java.io.FileOutputStream fos = new java.io.FileOutputStream(coverFile);
+                fos.write(coverJpeg);
+                fos.close();
+            }
+        } catch (Exception ignored) {}
+
+        AudioTags.Info meta = new AudioTags.Info();
+        meta.title = title != null ? title : "";
+        meta.artist = artist != null ? artist : "";
+        meta.album = album != null ? album : "";
+        AudioTagWriter.EmbedResult embedded = AudioTagWriter.tryEmbed(track, meta, coverJpeg);
+        String path = track.getAbsolutePath();
+        if (embedded == AudioTagWriter.EmbedResult.EMBEDDED) {
+            DeezerMetadata.clearOverlay(this, path);
+        } else if (prefs != null) {
+            prefs.edit()
+                    .putString("meta_title_" + path, meta.title)
+                    .putString("meta_artist_" + path, meta.artist)
+                    .putString("meta_album_" + path, meta.album)
+                    .commit();
+        }
+        patchLibraryMetadataForPath(path, meta.title, meta.artist, meta.album);
+    }
+
+    /** After Deezer sidecar download — embed when the file format supports tags. */
+    private void tryEmbedMetadataFromPrefs(File track, File coverFile) {
+        if (track == null || !track.isFile() || prefs == null) return;
+        String path = track.getAbsolutePath();
+        AudioTags.Info meta = new AudioTags.Info();
+        meta.title = DeezerMetadata.title(prefs, path, "");
+        meta.artist = DeezerMetadata.artist(prefs, path, "");
+        meta.album = DeezerMetadata.album(prefs, path, "");
+        if (meta.title.isEmpty() && meta.artist.isEmpty() && meta.album.isEmpty()) return;
+        byte[] coverJpeg = readCoverJpegBytes(coverFile);
+        if (AudioTagWriter.tryEmbed(track, meta, coverJpeg) == AudioTagWriter.EmbedResult.EMBEDDED) {
+            DeezerMetadata.clearOverlay(this, path);
+            patchLibraryMetadataForPath(path, meta.title, meta.artist, meta.album);
+        }
+    }
+
+    private static byte[] readCoverJpegBytes(File coverFile) {
+        if (coverFile == null || !coverFile.isFile() || coverFile.length() < 4096) return null;
+        try {
+            java.io.FileInputStream in = new java.io.FileInputStream(coverFile);
+            byte[] data = new byte[(int) coverFile.length()];
+            int read = in.read(data);
+            in.close();
+            return read > 0 ? data : null;
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private File getCoversFolder() {
@@ -40189,21 +40597,8 @@ public class MainActivity extends Activity {
                         final android.graphics.Bitmap coverBitmap = android.graphics.BitmapFactory.decodeStream(in);
                         in.close();
 
-                        File coverFolder = getCoversFolder();
-                        if (!coverFolder.exists()) coverFolder.mkdirs();
-                        String safeFileName = track.getName().replace(".mp3", "").replace(".flac", "");
-                        final File coverFile = new File(coverFolder, safeFileName + ".jpg");
-                        java.io.FileOutputStream fos = new java.io.FileOutputStream(coverFile);
-                        coverBitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, fos);
-                        fos.close();
-
-                        // 🚀 [무조건 저장] 검색에 성공했다면 무조건 영구 저장소에 깔끔한 태그를 덮어씌웁니다.
-                        prefs.edit()
-                                .putString("meta_title_" + track.getAbsolutePath(), finalTitle)
-                                .putString("meta_artist_" + track.getAbsolutePath(), finalArtist)
-                                .putString("meta_album_" + track.getAbsolutePath(), finalAlbum)
-                                .commit();
-                        patchLibraryMetadataForPath(track.getAbsolutePath(), finalTitle, finalArtist, finalAlbum);
+                        persistFetchedMetadata(track, finalTitle, finalArtist, finalAlbum, coverBitmap);
+                        final File coverFile = coverFileForTrack(track);
 
                         runOnUiThread(new Runnable() {
                             @Override
@@ -41175,7 +41570,7 @@ public class MainActivity extends Activity {
 
             @Override
             public boolean isDebugFlowNoReflections() {
-                return prefs.getBoolean(PREF_DEBUG_FLOW_NO_REFLECTIONS, false);
+                return prefs.getBoolean(PREF_DEBUG_FLOW_NO_REFLECTIONS, true);
             }
 
             @Override
@@ -41440,7 +41835,7 @@ public class MainActivity extends Activity {
     }
 
     private boolean isFlowEnabled() {
-        return prefs != null && prefs.getBoolean(PREF_DEBUG_FLOW_ENABLED, false);
+        return FlowSettings.isEnabled(prefs);
     }
 
     /** Debug session — current screen state int for USB reclaim logs. */

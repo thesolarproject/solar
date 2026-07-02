@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Solar</string>
+    <string name="solar_development_display_name">Solar Development</string>
+    <string name="solar_developer_message_from">Solar Development 메시지</string>
+    <string name="solar_developer_pm_from_label">Solar Development</string>
+    <string name="solar_developer_reach_badge">개발자 지원</string>
     <string name="common_back">뒤로</string>
     <string name="common_enable">사용</string>
     <string name="common_cancel_back">@string/common_back</string>
@@ -161,7 +165,7 @@
     <string name="reach_hint_download">Soulseek 피어 전송으로 다운로드 중…</string>
     <string name="reach_error_too_many_peers">피어 연결이 너무 많습니다. 잠시 후 다시 시도하세요.</string>
     <string name="keyboard_enter">[ENT]</string>
-    <string name="keyboard_blank_auto">비워두면 자동 계정</string>
+    <string name="keyboard_blank_auto">Soulseek 사용자 이름 입력</string>
     <string name="keyboard_enter_password">비밀번호 입력…</string>
     <string name="keyboard_enter_wifi_password">비밀번호 입력…</string>
     <string name="browser_up">📁 ..</string>
@@ -738,6 +742,9 @@
     <string name="toast_bg_cleared">사용자 배경이 지워졌습니다.</string>
     <string name="toast_bg_none">설정된 사용자 배경이 없습니다.</string>
     <string name="toast_bg_applied">배경이 적용되었습니다!</string>
+    <string name="settings_flow">Flow</string>
+    <string name="settings_flow_hold_play_pause_hint">Play/Pause를 길게 누르면 Flow 화면이 열립니다.</string>
+    <string name="settings_sub_flow">Flow 실험 기능</string>
     <string name="settings_debug_flow_theme">테마 장식</string>
     <string name="status_flow">Flow</string>
     <string name="flow_open">Flow</string>

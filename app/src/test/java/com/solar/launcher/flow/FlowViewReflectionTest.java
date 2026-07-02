@@ -8,47 +8,27 @@ import static org.junit.Assert.assertTrue;
 public class FlowViewReflectionTest {
 
     @Test
-    public void centerSkipsReflectionDuringHandoff() {
-        assertTrue(FlowView.shouldSkipCoverReflection(false, true, false, true));
+    public void reflectionsOnUnlessDebugPref() {
+        assertFalse(FlowView.shouldSkipCoverReflection(false));
+        assertTrue(FlowView.shouldSkipCoverReflection(true));
     }
 
     @Test
-    public void centerSkipsReflectionDuringReflectFade() {
-        assertTrue(FlowView.shouldSkipCoverReflection(false, false, false, true, 0.5f));
+    public void scrollingDoesNotSuppressReflections() {
+        assertFalse(FlowView.shouldSkipCoverReflection(false, false, true, true));
+        assertFalse(FlowView.shouldSkipCoverReflection(false, false, true, false));
     }
 
     @Test
-    public void sideSkipsReflectionDuringHandoff() {
-        assertTrue(FlowView.shouldSkipCoverReflection(false, true, false, false));
+    public void handoffDoesNotSuppressReflections() {
+        assertFalse(FlowView.shouldSkipCoverReflection(false, true, false, true));
+        assertFalse(FlowView.shouldSkipCoverReflection(false, true, false, false));
+        assertFalse(FlowView.shouldSkipCoverReflection(false, false, false, true, 0.5f));
     }
 
     @Test
-    public void centerSkipsReflectionWhileScrolling() {
-        assertTrue(FlowView.shouldSkipCoverReflection(false, false, true, true));
-    }
-
-    @Test
-    public void sideSkipsReflectionWhileScrolling() {
-        assertTrue(FlowView.shouldSkipCoverReflection(false, false, true, false));
-    }
-
-    @Test
-    public void noReflectionsOverridesCenter() {
+    public void noReflectionsOverridesAllCovers() {
         assertTrue(FlowView.shouldSkipCoverReflection(true, false, false, true));
-    }
-
-    @Test
-    public void centerKeepsReflectionWhenIdle() {
-        assertFalse(FlowView.shouldSkipCoverReflection(false, false, false, true));
-    }
-
-    @Test
-    public void centerKeepsReflectionAfterReflectFadeComplete() {
-        assertFalse(FlowView.shouldSkipCoverReflection(false, false, false, true, 1f));
-    }
-
-    @Test
-    public void sideSkipsReflectionWhenIdle() {
-        assertTrue(FlowView.shouldSkipCoverReflection(false, false, false, false));
+        assertTrue(FlowView.shouldSkipCoverReflection(true, false, true, false));
     }
 }

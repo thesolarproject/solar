@@ -223,8 +223,8 @@ public final class FlowFlipController {
     /** Side carousel dim factor during flip/back (~45–50% at STATE_BACK — visible shadow, not blackout). */
     public float sideDimAlpha() {
         if (state == STATE_IDLE) return 1f;
-        if (state == STATE_BACK) return 0.47f;
-        return 0.47f + 0.53f * (1f - Math.abs(flipProgress * 2f - 1f));
+        if (state == STATE_BACK || state == STATE_HANDOFF) return 0.47f;
+        return 1f - 0.53f * flipProgress;
     }
 
     /** Immutable flip-back snapshot for Now Playing → Flow restore. */

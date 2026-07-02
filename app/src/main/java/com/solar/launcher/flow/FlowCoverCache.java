@@ -77,16 +77,19 @@ public final class FlowCoverCache {
      */
     public synchronized void evictFarFrom(int focusIndex, List<FlowItem> items) {
         if (items == null || items.isEmpty() || cache.size() <= MAX_ENTRIES / 2) return;
-        Map<String, Integer> keyToIndex = new HashMap<String, Integer>(items.size());
+        java.util.Set<String> cachedKeys = new java.util.HashSet<String>(cache.keySet());
+        Map<String, Integer> keyToIndex = new java.util.HashMap<String, Integer>(cachedKeys.size());
         for (int i = 0; i < items.size(); i++) {
             FlowItem item = items.get(i);
-            if (item != null && item.coverKey != null) keyToIndex.put(item.coverKey, i);
+            if (item != null && item.coverKey != null && cachedKeys.contains(item.coverKey)) {
+                keyToIndex.put(item.coverKey, i);
+            }
         }
         Iterator<Map.Entry<String, Bitmap>> it = cache.entrySet().iterator();
         while (it.hasNext() && cache.size() > MAX_ENTRIES / 2) {
             Map.Entry<String, Bitmap> e = it.next();
             Integer idx = keyToIndex.get(e.getKey());
-            if (idx != null && Math.abs(idx - focusIndex) > EVICT_DISTANCE) {
+            if (idx == null || Math.abs(idx - focusIndex) > EVICT_DISTANCE) {
                 recycleUnlessPlaceholder(e.getValue());
                 it.remove();
             }

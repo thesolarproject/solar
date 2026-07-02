@@ -21,6 +21,13 @@ jobs:
           chmod +x scripts/verify-ota-pat.sh
           ./scripts/verify-ota-pat.sh
 
+      - name: Configure solar-update Pages (branch deploy)
+        env:
+          SOLAR_GITHUB_PAT: ${{ secrets.SOLAR_GITHUB_PAT }}
+        run: |
+          chmod +x scripts/configure-solar-update-pages.sh
+          ./scripts/configure-solar-update-pages.sh
+
       - name: Sync APKs from GitHub releases
         env:
           SOLAR_GITHUB_PAT: ${{ secrets.SOLAR_GITHUB_PAT }}

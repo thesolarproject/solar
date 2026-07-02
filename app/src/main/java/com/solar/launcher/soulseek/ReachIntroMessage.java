@@ -5,34 +5,35 @@ import android.content.SharedPreferences;
 
 /** Auto-intro PM/room message visible only to non-Reach Soulseek clients. */
 public final class ReachIntroMessage {
-    public static final String MARKER = "\u0001REACH_INTRO\u0001";
+    public static final String MARKER = "using the Reach client. They may write replies slowly";
+    public static final String OLD_MARKER = "\u0001REACH_INTRO\u0001";
 
     private ReachIntroMessage() {}
 
     public static String build(Context ctx, String username, String modelLabel) {
         if (ctx == null || username == null || username.isEmpty()) return "";
-        String body = ctx.getString(
+        return ctx.getString(
                 com.solar.launcher.R.string.reach_intro_message, username, modelLabel);
-        return MARKER + body;
     }
 
     public static boolean isIntro(String text) {
-        return text != null && text.contains(MARKER);
+        return text != null && (text.contains(MARKER) || text.contains(OLD_MARKER));
     }
 
     public static String strip(String text) {
         if (text == null) return "";
-        String t = text;
-        while (t.contains(MARKER)) {
-            int idx = t.indexOf(MARKER);
-            int end = t.indexOf('\n', idx);
-            if (end < 0) {
-                t = t.substring(0, idx).trim();
-            } else {
-                t = (t.substring(0, idx) + t.substring(end + 1)).trim();
+        String[] lines = text.split("\n");
+        StringBuilder sb = new StringBuilder();
+        for (String line : lines) {
+            if (line.contains(MARKER) || line.contains(OLD_MARKER)) {
+                continue;
             }
+            if (sb.length() > 0) {
+                sb.append("\n");
+            }
+            sb.append(line);
         }
-        return t.trim();
+        return sb.toString().trim();
     }
 
     public static String stripFromQuote(String quote) {
@@ -41,8 +42,9 @@ public final class ReachIntroMessage {
 
     public static boolean shouldPersistForReachClient(String text, String sender, String selfUsername,
             SharedPreferences prefs) {
-        if (!isIntro(text)) return true;
-        return !shouldHideIncoming(text, sender, selfUsername, prefs);
+        // Reach clients never store auto-intro lines — wire send to legacy clients unchanged.
+        if (isIntro(text)) return false;
+        return true;
     }
 
     public static boolean shouldHideIncoming(String text, String sender, String selfUsername,

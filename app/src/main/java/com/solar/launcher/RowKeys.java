@@ -81,6 +81,8 @@ public final class RowKeys {
     public static final String DEBUG_FLOW_OK_LIBRARY = "settings.debug.flow_ok_library";
     public static final String DEBUG_FLOW_THEME = "settings.debug.flow_theme";
     public static final String DEBUG_FLOW_NO_REFLECTIONS = "settings.debug.flow_no_reflections";
+    /** Root Settings — master Flow on/off (experimental toggles stay under Debug → Flow). */
+    public static final String FLOW = "settings.flow_enabled";
     public static final String FLOW_SETTINGS = "settings.flow";
     public static final String FLOW_MULTI_TRACK_ALBUMS = "settings.flow.multi_track_albums";
     public static final String ARTWORK_PERSPECTIVE = "settings.artwork_perspective";
@@ -229,6 +231,7 @@ public final class RowKeys {
         if (DEBUG_FLOW_OK_LIBRARY.equals(rowKey)) return R.string.settings_debug_flow_ok_library;
         if (DEBUG_FLOW_THEME.equals(rowKey)) return R.string.settings_debug_flow_theme;
         if (DEBUG_FLOW_NO_REFLECTIONS.equals(rowKey)) return R.string.settings_debug_flow_no_reflections;
+        if (FLOW.equals(rowKey)) return R.string.settings_flow;
         if (FLOW_SETTINGS.equals(rowKey)) return R.string.settings_sub_flow;
         if (FLOW_MULTI_TRACK_ALBUMS.equals(rowKey)) return R.string.settings_flow_multi_track_albums;
         if (SYSTEM_UPDATE.equals(rowKey)) return R.string.settings_app_version;

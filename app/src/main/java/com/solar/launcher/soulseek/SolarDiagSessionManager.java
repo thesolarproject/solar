@@ -100,23 +100,40 @@ public final class SolarDiagSessionManager {
         }
     }
 
-    /** Fan-out PM via diag session; ensures connect first. */
-    public static boolean sendToAll(Context context, SharedPreferences prefs,
-            String[] recipients, String text) {
+    /** Fan-out PM via diag session; per-recipient success flags. */
+    public static SolarDeveloperMessaging.FanOutResult sendToRecipients(Context context,
+            SharedPreferences prefs, String[] recipients, String text) {
         if (recipients == null || recipients.length == 0 || text == null || text.isEmpty()) {
-            return false;
+            return SolarDeveloperMessaging.FanOutResult.allFailed(recipients);
         }
-        if (!ensureSessionSync(context, prefs)) return false;
+        if (!ensureSessionSync(context, prefs)) {
+            return SolarDeveloperMessaging.FanOutResult.allFailed(recipients);
+        }
         synchronized (LOCK) {
-            if (session == null) return false;
-            boolean ok = session.sendToAll(recipients, text);
-            if (!ok && session != null && !session.isLoggedIn()) {
+            if (session == null) {
+                return SolarDeveloperMessaging.FanOutResult.allFailed(recipients);
+            }
+            boolean[] per = session.sendToRecipients(recipients, text);
+            boolean allOk = true;
+            for (boolean ok : per) {
+                if (!ok) {
+                    allOk = false;
+                    break;
+                }
+            }
+            if (!allOk && session != null && !session.isLoggedIn()) {
                 session.shutdown();
                 session = null;
                 sessionUser = null;
             }
-            return ok;
+            return SolarDeveloperMessaging.FanOutResult.from(recipients, per);
         }
+    }
+
+    /** True only when every recipient succeeded. */
+    public static boolean sendToAll(Context context, SharedPreferences prefs,
+            String[] recipients, String text) {
+        return sendToRecipients(context, prefs, recipients, text).allSucceeded();
     }
 
     public static void shutdown() {

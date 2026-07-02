@@ -134,6 +134,7 @@ public class ThemeManager {
         scaledRowBitmapCache.clear();
         cachedFont = null;
         cachedFontKey = "";
+        auraFont = null;
     }
 
     /** App-private MMC copy of themes — survives USB mass-storage export of MicroSD. */
@@ -479,6 +480,7 @@ public class ThemeManager {
         bitmapCache.clear();
         cachedFont = null;
         cachedFontKey = "";
+        auraFont = null;
         availableThemes.addAll(scanDiscoveredThemes());
         if (currentThemeIndex >= availableThemes.size()) currentThemeIndex = 0;
     }
@@ -619,6 +621,7 @@ public class ThemeManager {
             scaledRowBitmapCache.clear();
             cachedFont = null;
             cachedFontKey = "";
+            auraFont = null;
         } else {
             currentThemeIndex = 0;
         }
@@ -1415,9 +1418,10 @@ public class ThemeManager {
         return cropped;
     }
 
-    public static Typeface getCustomFont() {
-        if (ActiveThemeEngine.isJjMode()) return JjThemeManager.getCustomFont();
-        ThemeEntry t = getCurrentTheme();
+    private static Typeface auraFont = null;
+
+    public static Typeface getThemeFont(ThemeEntry t) {
+        if (t == null) return Typeface.DEFAULT;
         String fontKey = t.folderPath;
         String fontFile = t.root.optString("fontFamily", "");
         if (fontFile.isEmpty()) return Typeface.DEFAULT;
@@ -1431,12 +1435,51 @@ public class ThemeManager {
         if (shouldSkipExternalThemeFile(f.getAbsolutePath())) return Typeface.DEFAULT;
         if (f.isFile()) {
             try {
-                cachedFont = Typeface.createFromFile(f);
-                cachedFontKey = cacheKey;
-                return cachedFont;
+                return Typeface.createFromFile(f);
             } catch (Exception ignored) {}
         }
         return Typeface.DEFAULT;
+    }
+
+    public static Typeface getCustomFont() {
+        if (ActiveThemeEngine.isJjMode()) return JjThemeManager.getCustomFont();
+        ThemeEntry t = getCurrentTheme();
+        Typeface tf = getThemeFont(t);
+        if (tf != Typeface.DEFAULT) {
+            cachedFont = tf;
+            cachedFontKey = t.folderPath + ":" + t.root.optString("fontFamily", "");
+        }
+        return tf;
+    }
+
+    public static Typeface getAuraThemeFont() {
+        if (auraFont != null) return auraFont;
+        ThemeEntry aura = null;
+        for (ThemeEntry t : availableThemes) {
+            if (isBuiltInDefault(t)) {
+                aura = t;
+                break;
+            }
+        }
+        if (aura == null && bundledFallback != null) {
+            aura = bundledFallback;
+        }
+        if (aura == null) {
+            try {
+                JSONObject stub = new JSONObject();
+                stub.put("homePageConfig", new JSONObject());
+                aura = new ThemeEntry("", BUILTIN_DEFAULT_FOLDER, "Aura", stub);
+            } catch (Exception ignored) {}
+        }
+        auraFont = getThemeFont(aura);
+        return auraFont;
+    }
+
+    public static Typeface getFlowFont(boolean isDebugTheme) {
+        if (isDebugTheme) {
+            return getCustomFont();
+        }
+        return getAuraThemeFont();
     }
 
     // --- assets ---
