@@ -50,6 +50,17 @@ public class SolarDiagnosticReporterTest {
   }
 
   @Test
+  public void supportOpenShipsAllSourcesRegardlessOfManifest() throws Exception {
+    JSONObject manifest = new JSONObject();
+    manifest.put("/data/foo.txt", 123L);
+    if (!SolarDiagnosticReporter.shouldShipSource(
+            "other/file.txt", manifest, "/data/foo.txt", 123L,
+            SolarDiagnosticReporter.ScanMode.SUPPORT_OPEN)) {
+      throw new AssertionError("support open fresh bundle");
+    }
+  }
+
+  @Test
   public void shipOnDeveloperSupportOpenNullSafe() {
     SolarDiagnosticReporter.shipOnDeveloperSupportOpen(null, null);
   }

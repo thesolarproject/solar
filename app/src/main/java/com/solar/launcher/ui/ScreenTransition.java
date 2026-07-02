@@ -21,10 +21,10 @@ public final class ScreenTransition {
 
     private static final float MODAL_PANEL_START_SCALE = 0.94f;
 
-    /** Alpha for the screen we are leaving at end of push/slide — full fade avoids pop-in. */
+    /** Alpha for outgoing *content* on horizontal push/pop — lists fade so incoming chrome does not pop. */
     private static final float OUTGOING_END_ALPHA = 0f;
-    /** Incoming slide starts slightly transparent, eases to opaque with the motion. */
-    private static final float INCOMING_SLIDE_START_ALPHA = 0.96f;
+    /** Vertical player slides keep both panels opaque so wallpapers slide as solid bands. */
+    private static final float VERTICAL_INCOMING_START_ALPHA = 1f;
 
     private static final DecelerateInterpolator EASE = new DecelerateInterpolator(1.6f);
 
@@ -137,7 +137,7 @@ public final class ScreenTransition {
         final float outEnd = entering ? -distancePx * 0.15f : distancePx;
 
         inView.setVisibility(View.VISIBLE);
-        inView.setAlpha(INCOMING_SLIDE_START_ALPHA);
+        inView.setAlpha(VERTICAL_INCOMING_START_ALPHA);
         inView.setTranslationY(inStart);
         if (outView != null) {
             outView.setVisibility(View.VISIBLE);
@@ -165,10 +165,11 @@ public final class ScreenTransition {
                 if (onComplete != null) onComplete.run();
             }
         };
-        inView.animate().translationY(0f).alpha(1f).setDuration(PLAYER_MS).setInterpolator(EASE)
+        inView.animate().translationY(0f).setDuration(PLAYER_MS).setInterpolator(EASE)
                 .setListener(endListener(done)).start();
         if (outView != null) {
-            outView.animate().translationY(outEnd).alpha(OUTGOING_END_ALPHA)
+            // Translate only — fading the player/menu to transparent exposes the window (black).
+            outView.animate().translationY(outEnd)
                     .setDuration(PLAYER_MS).setInterpolator(EASE).start();
         }
         animateBackdropPushPop(outBackdrop, inBackdrop, entering, distancePx, true);
@@ -401,7 +402,7 @@ public final class ScreenTransition {
             if (inBackdrop != null) {
                 inBackdrop.setVisibility(View.VISIBLE);
                 inBackdrop.setTranslationY(inStart);
-                inBackdrop.setAlpha(INCOMING_SLIDE_START_ALPHA);
+                inBackdrop.setAlpha(VERTICAL_INCOMING_START_ALPHA);
             }
             if (outBackdrop != null) {
                 outBackdrop.setVisibility(View.VISIBLE);
@@ -433,11 +434,12 @@ public final class ScreenTransition {
             final float outEnd = forward ? -distancePx * 0.15f : distancePx;
             if (inBackdrop != null) {
                 inBackdrop.setTranslationY(inStart);
-                inBackdrop.animate().translationY(0f).alpha(1f)
+                inBackdrop.animate().translationY(0f)
                         .setDuration(duration).setInterpolator(EASE).start();
             }
             if (outBackdrop != null) {
-                outBackdrop.animate().translationY(outEnd).alpha(OUTGOING_END_ALPHA)
+                // Wallpaper layers slide in lockstep — never fade to black between themes.
+                outBackdrop.animate().translationY(outEnd)
                         .setDuration(duration).setInterpolator(EASE).start();
             }
         } else {
@@ -449,7 +451,7 @@ public final class ScreenTransition {
                         .setDuration(duration).setInterpolator(EASE).start();
             }
             if (outBackdrop != null) {
-                outBackdrop.animate().translationX(outEnd).alpha(OUTGOING_END_ALPHA)
+                outBackdrop.animate().translationX(outEnd)
                         .setDuration(duration).setInterpolator(EASE).start();
             }
         }

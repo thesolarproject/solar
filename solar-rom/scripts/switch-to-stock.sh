@@ -44,11 +44,17 @@ switch_to_stock() {
         sh /system/etc/solar/sync-y1-keymap.sh
     fi
     echo "Disabling Rockbox"
-    am force-stop "$ROCKBOX_PKG"
-    pm disable "$ROCKBOX_PKG"
-    if ! verify_rockbox_disabled; then
+    i=0
+    while [ "$i" -lt 30 ]; do
+        am force-stop "$ROCKBOX_PKG" 2>/dev/null
         pm disable "$ROCKBOX_PKG" 2>/dev/null
-        log -p w -t SolarRockbox "Rockbox still enabled after disable — retried"
+        verify_rockbox_disabled && break
+        sleep 1
+        i=$((i + 1))
+    done
+    if ! verify_rockbox_disabled; then
+        log -p e -t SolarRockbox "Rockbox still enabled — refusing to enable Solar"
+        exit 1
     fi
     echo "Enabling Solar"
     pm enable "$SOLAR_PKG"

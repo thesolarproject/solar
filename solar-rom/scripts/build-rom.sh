@@ -338,6 +338,9 @@ audit_rom_contents() {
     elif ! grep -q 'pm disable' "$sys_mount/etc/solar/disable-rockbox-for-solar.sh" 2>/dev/null; then
         echo "audit fail: disable-rockbox-for-solar.sh must pm disable org.rockbox" >&2
         errors=$((errors + 1))
+    elif ! grep -q 'packages -d' "$sys_mount/etc/solar/disable-rockbox-for-solar.sh" 2>/dev/null; then
+        echo "audit fail: disable-rockbox-for-solar.sh must gate marker on Rockbox disabled state" >&2
+        errors=$((errors + 1))
     fi
 
     if [ ! -f "$sys_mount/etc/solar/switch-to-stock.sh" ]; then
@@ -346,6 +349,9 @@ audit_rom_contents() {
     elif grep -qiE '(^|[[:space:]]|/)reboot\b|reboot -p|/system/bin/reboot' \
             "$sys_mount/etc/solar/switch-to-stock.sh" 2>/dev/null; then
         echo "audit fail: switch-to-stock.sh must not reboot (unified keymap)" >&2
+        errors=$((errors + 1))
+    elif ! grep -q 'verify_rockbox_disabled' "$sys_mount/etc/solar/switch-to-stock.sh" 2>/dev/null; then
+        echo "audit fail: switch-to-stock.sh must verify Rockbox disabled before enabling Solar" >&2
         errors=$((errors + 1))
     fi
 

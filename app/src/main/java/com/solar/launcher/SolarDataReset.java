@@ -60,12 +60,14 @@ public final class SolarDataReset {
             }
             if (sel.caches) {
                 clearCaches(app);
+                clearLibraryDatabase(app);
                 out.cachesCleared = true;
             }
             if (sel.microSdContents) {
                 wipeMicroSdRoot();
             }
             if (sel.solarPrefs) {
+                clearLibraryDatabase(app);
                 clearAllSharedPreferences(app);
                 out.solarPrefsCleared = true;
             }
@@ -90,6 +92,12 @@ public final class SolarDataReset {
         clearDirectoryContents(new File(ThemeManager.PATH_THEMES), false);
         clearDirectoryContents(new File(ActiveThemeEngine.jjThemesRoot()), false);
         clearDirectoryContents(ThemeManager.internalThemesDir(app), false);
+    }
+
+    /** Drop SQLite music index so the next scan rebuilds from disk. */
+    static void clearLibraryDatabase(Context app) {
+        if (app == null) return;
+        MusicLibraryStore.getInstance(app).clearAll();
     }
 
     static void clearCaches(Context app) {

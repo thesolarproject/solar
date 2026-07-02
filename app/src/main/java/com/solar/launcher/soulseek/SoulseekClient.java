@@ -1019,6 +1019,11 @@ public final class SoulseekClient extends Thread {
     return loggedIn && serverSocket != null && !serverSocket.isClosed() && serverSocket.isConnected();
   }
 
+  /** True when the Reach server session is connected — safe for outbound PM fan-out. */
+  public boolean isLoggedIn() {
+    return isServerSessionAlive();
+  }
+
   private void invalidateServerSessionLocked(String reason) {
     loggedIn = false;
     hasDistribParent = false;

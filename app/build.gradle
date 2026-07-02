@@ -53,8 +53,8 @@ android {
         applicationId "com.solar.launcher"
         minSdk 17
         targetSdk 35
-        versionCode 3417230
-        versionName "20260701-0150"
+        versionCode 3419468
+        versionName "20260702-1508"
         buildConfigField "boolean", "FEATURE_OTA_UPDATE", "true"
         buildConfigField "String", "OTA_UPDATES_URL", "\"https://thesolarproject.github.io/solar-update/updates.xml\""
         def podcastIndexKey = project.findProperty("PODCAST_INDEX_API_KEY") ?: ""
@@ -96,6 +96,8 @@ android {
 
 afterEvaluate {
     tasks.named("preReleaseBuild").configure { dependsOn("syncReleaseVersion") }
+    // adb / local debug APKs get the same UTC build-start stamp as release.
+    tasks.named("preDebugBuild").configure { dependsOn("syncReleaseVersion") }
 }
 
 dependencies {

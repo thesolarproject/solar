@@ -27,4 +27,14 @@ public class FlowCoverResolverTest {
         String key = FlowCoverResolver.albumMatchKey("No Art", "Band");
         assertEquals(AlbumNames.matchKey("No Art") + "|" + ArtistNames.matchKey("Band"), key);
     }
+
+    @Test
+    public void likelyPlaceholderFileUsesSmallJpegHeuristic() {
+        if (AlbumArtCache.isLikelyPlaceholderFile(null)) {
+            throw new AssertionError("null is not a placeholder file");
+        }
+        if (AlbumArtCache.isLikelyPlaceholderFile(new java.io.File("missing.jpg"))) {
+            throw new AssertionError("missing file is not a placeholder file");
+        }
+    }
 }

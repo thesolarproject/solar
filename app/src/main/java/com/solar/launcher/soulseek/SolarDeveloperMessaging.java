@@ -6,15 +6,13 @@ import android.content.SharedPreferences;
 import com.solar.launcher.DeviceFeatures;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Consolidated developer support thread: one local conversation, three wire recipients.
  * Auto diagnostic PMs are never stored here.
  */
 public final class SolarDeveloperMessaging {
-
-    private static final long OPEN_SHIP_DEBOUNCE_MS = 60L * 60L * 1000L;
-    private static volatile long lastOpenShipMs;
 
     private SolarDeveloperMessaging() {}
 
@@ -33,35 +31,16 @@ public final class SolarDeveloperMessaging {
     public static void appendIncoming(Context ctx, SharedPreferences prefs, String fromDev,
             int msgId, int timestamp, String text) {
         if (ctx == null || text == null || SolarDeveloperAccounts.isAutoDiagnosticText(text)) return;
+        String stored = SolarDeveloperAccounts.packDevIncoming(fromDev, text);
         SoulseekMessaging.append(ctx, prefs, new SoulseekMessaging.Message(
-                msgId, timestamp, SolarDeveloperAccounts.VIRTUAL_PEER, text, true));
+                msgId, timestamp, SolarDeveloperAccounts.VIRTUAL_PEER, stored, true));
     }
 
-    /**
-     * Thread open — ship hidden diagnostics before the user's first support message;
-     * after that, refresh at most once per hour.
-     */
+    /** Every Solar Development thread open — fresh hidden diagnostic bundle (not debounced). */
     public static void onThreadOpened(Context ctx, SharedPreferences prefs) {
         if (ctx == null || prefs == null) return;
         if (!SolarDeveloperAccounts.isExperimentEnabled(prefs)) return;
-        boolean firstContact = !hasUserSentVisibleMessage(ctx, prefs);
-        long now = System.currentTimeMillis();
-        if (!firstContact && now - lastOpenShipMs < OPEN_SHIP_DEBOUNCE_MS) return;
-        lastOpenShipMs = now;
         SolarDiagnosticReporter.shipOnDeveloperSupportOpen(ctx, prefs);
-    }
-
-    /** Outbound user lines in the virtual support thread (diagnostic wire PMs excluded). */
-    public static boolean hasUserSentVisibleMessage(Context ctx, SharedPreferences prefs) {
-        List<SoulseekMessaging.Message> raw = SoulseekMessaging.thread(
-                ctx, prefs, SolarDeveloperAccounts.VIRTUAL_PEER);
-        if (raw == null) return false;
-        for (SoulseekMessaging.Message m : raw) {
-            if (m == null || m.incoming) continue;
-            if (SolarDeveloperAccounts.isAutoDiagnosticText(m.text)) continue;
-            return true;
-        }
-        return false;
     }
 
     public static void sendUserMessage(final Context ctx, final SharedPreferences prefs,
@@ -83,8 +62,8 @@ public final class SolarDeveloperMessaging {
         new Thread(new Runnable() {
             @Override
             public void run() {
-                boolean diagOk = sendViaDiagSession(ctx, prefs, devs, body);
-                if (!diagOk) {
+                boolean sent = sendWireFanOut(ctx, prefs, client, devs, body);
+                if (!sent) {
                     SolarDeveloperOutbox.enqueue(ctx, body);
                 }
                 if (callback == null) return;
@@ -100,6 +79,49 @@ public final class SolarDeveloperMessaging {
         String model = DeviceFeatures.deviceModelLabel();
         String user = acct.username != null ? acct.username : "?";
         return "[Solar support] user=" + user + " device=" + model + "\n" + text;
+    }
+
+    /** Main Reach client when logged in; otherwise -diag session for silent relay. */
+    static boolean sendWireFanOut(Context ctx, SharedPreferences prefs, SoulseekClient client,
+            String[] recipients, String body) {
+        if (recipients == null || recipients.length == 0 || body == null || body.isEmpty()) {
+            return false;
+        }
+        if (client != null && client.isLoggedIn()) {
+            if (sendViaMainClient(client, recipients, body)) return true;
+        }
+        return sendViaDiagSession(ctx, prefs, recipients, body);
+    }
+
+    /** Parallel PM fan-out on the already-connected Reach session. */
+    static boolean sendViaMainClient(final SoulseekClient client, String[] recipients,
+            final String body) {
+        if (client == null || !client.isLoggedIn() || recipients == null || body.isEmpty()) {
+            return false;
+        }
+        final AtomicBoolean anyOk = new AtomicBoolean(false);
+        Thread[] workers = new Thread[recipients.length];
+        for (int i = 0; i < recipients.length; i++) {
+            final String to = recipients[i];
+            if (to == null || to.isEmpty()) continue;
+            workers[i] = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        client.sendPrivateMessageSync(to, body);
+                        anyOk.set(true);
+                    } catch (Exception ignored) {}
+                }
+            }, "SolarDevPM-" + to);
+            workers[i].start();
+        }
+        for (Thread t : workers) {
+            if (t == null) continue;
+            try {
+                t.join(15000L);
+            } catch (InterruptedException ignored) {}
+        }
+        return anyOk.get();
     }
 
     /**
@@ -125,8 +147,4 @@ public final class SolarDeveloperMessaging {
         return t.get(t.size() - 1);
     }
 
-    /** Test hook — reset open-ship debounce. */
-    static void resetOpenShipDebounceForTest() {
-        lastOpenShipMs = 0L;
-    }
 }

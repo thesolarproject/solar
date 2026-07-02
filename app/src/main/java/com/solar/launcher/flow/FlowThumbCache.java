@@ -39,7 +39,13 @@ public final class FlowThumbCache {
 
     public static boolean has(File dir, String coverKey, int thumbPx) {
         File f = fileForKey(dir, coverKey, thumbPx);
-        return f != null && f.isFile() && f.length() > 0;
+        return f != null && f.isFile() && f.length() > 0
+                && !AlbumArtCache.isLikelyPlaceholderFile(f);
+    }
+
+    public static void delete(File dir, String coverKey, int thumbPx) {
+        File f = fileForKey(dir, coverKey, thumbPx);
+        if (f != null && f.isFile()) f.delete();
     }
 
     /** Decode at native file size — file is already thumbPx square. */

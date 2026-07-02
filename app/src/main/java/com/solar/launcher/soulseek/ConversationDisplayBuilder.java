@@ -120,8 +120,14 @@ public final class ConversationDisplayBuilder {
       if (ReachIntroMessage.isIntro(m.text)) continue;
 
       String display = ReachMessageFormat.displayText(m.text);
+      if (SolarDeveloperAccounts.isDevIncoming(m.text)) {
+        display = SolarDeveloperAccounts.displayBody(m.text);
+      }
       if (display.isEmpty() && !ReachIntroMessage.isIntro(m.text)) {
         display = m.text != null ? m.text.trim() : "";
+        if (SolarDeveloperAccounts.isDevIncoming(display)) {
+          display = SolarDeveloperAccounts.displayBody(display);
+        }
       }
       out.add(newEntry(m, display, false, reactionsFor(reactionsByParent, i), roomMode));
       emitted.add(i);

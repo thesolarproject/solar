@@ -39,6 +39,8 @@ public final class ScreenBackdropTransition {
     public interface Resolver {
         BackdropSnapshot resolveSnapshot(int screenState);
         void bindPlayerBlurEarly();
+        /** Mirror live NP blur onto the outgoing backdrop slot when leaving Now Playing. */
+        void bindOutgoingPlayerBackdrop(ImageView wall, ImageView mask);
         int screenWidthPx();
         int screenHeightPx();
     }
@@ -105,16 +107,19 @@ public final class ScreenBackdropTransition {
         outgoingSnapshot = resolveCached(resolver, from, fromCacheKey);
         incomingSnapshot = resolveCached(resolver, to, toCacheKey);
 
-        // Outgoing slot already shows current wallpaper on wallOut — ensure mask matches.
-        if (outgoingSnapshot != null) {
+        boolean playerTarget = to == ScreenTransitionMap.STATE_PLAYER;
+        boolean playerSource = from == ScreenTransitionMap.STATE_PLAYER;
+
+        // Outgoing slot: NP blur lives in layout_player_mode — mirror it for slide-down exits.
+        if (playerSource) {
+            resolver.bindOutgoingPlayerBackdrop(wallOut, maskOut);
+            if (backdropOutSlot != null) backdropOutSlot.setVisibility(View.VISIBLE);
+        } else if (outgoingSnapshot != null) {
             bindSnapshot(wallOut, maskOut, outgoingSnapshot, resolver);
         }
 
-        crossfadeOnly = outgoingSnapshot != null && incomingSnapshot != null
+        crossfadeOnly = !playerSource && outgoingSnapshot != null && incomingSnapshot != null
                 && outgoingSnapshot.visuallySame(incomingSnapshot);
-
-        boolean playerTarget = to == ScreenTransitionMap.STATE_PLAYER;
-        boolean playerSource = from == ScreenTransitionMap.STATE_PLAYER;
 
         if (playerTarget) {
             resolver.bindPlayerBlurEarly();

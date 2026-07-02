@@ -42,6 +42,8 @@ public final class FlowView extends View {
         void prefetchCarouselCovers(int visualCenter, int radius);
         /** Carousel settled on center — schedule reflection bakes for center ±radius. */
         void scheduleCenterBakes(int center, int radius);
+        /** User scrolled — drop NP handoff pin so neighbors use catalog art. */
+        void onCarouselScrollStarted();
     }
 
     private final FlowEngine engine = new FlowEngine();
@@ -53,8 +55,10 @@ public final class FlowView extends View {
     private final Paint backRowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint backSelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint placeholderPaint = new Paint();
+    private final Paint shadowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF drawRect = new RectF();
     private final RectF bakedDestRect = new RectF();
+    private final RectF shadowRect = new RectF();
     private final Matrix matrix = new Matrix();
     private final Camera camera = new Camera();
     private final int[] drawOrder = new int[CoverFlowLayout.SIDE_SLIDES * 2 + 1];
@@ -100,6 +104,18 @@ public final class FlowView extends View {
     private long handoffReflectRevealStartMs;
     private static final int REFLECT_REVEAL_MS = 150;
     private long handoffTitleRevealStartMs;
+    // #region agent log
+    /** Session 898913 — throttle for dimmed-center detector in onDraw. */
+    private long dbg898913LastDrawLogMs;
+    private long dbg898913LastNeighborLogMs;
+    private boolean dbg898913WasScrolling;
+    /** Throttle per-slot draw-path glitch logs in drawCoverAt. */
+    private long dbg898913LastGlitchLogMs;
+    private long dbg898913LastPathLogMs;
+    private float dbg898913LastDisplaySize = -1f;
+    private int dbg898913DrawFrame;
+    private final float[] dbg898913MatrixVals = new float[9];
+    // #endregion
     /** Debug session — log first few carousel frames only. */
     private int debugDrawFramesLeft;
     private boolean debugBackFaceLogged;
@@ -127,10 +143,23 @@ public final class FlowView extends View {
             long now = System.currentTimeMillis();
             engine.tick(now);
             boolean scrolling = engine.isAnimating();
+            // #region agent log
+            if (com.solar.launcher.Debug898913Log.ENABLED && dbg898913WasScrolling && !scrolling) {
+                logCarouselNeighborsDebug("FlowView.animTick", "scroll settled", "H-E", 0);
+            }
+            dbg898913WasScrolling = scrolling;
+            // #endregion
             boolean flipping = flip.tick(now);
             tickTitleFade(now);
             tickHandoffTitleReveal(now);
             tickHandoffReflectReveal(now);
+            // Idle guard — handoff prep can zero side alpha; restore when not morphing.
+            if (!com.solar.launcher.flow.FlowPlayerHandoff.isHandoffAnimating()
+                    && !handoffRevealActive
+                    && !engine.isCarouselScrolling()) {
+                if (handoffCenterRevealAlpha < 1f) handoffCenterRevealAlpha = 1f;
+                if (handoffSideRevealAlpha < 1f) handoffSideRevealAlpha = 1f;
+            }
             if (!engine.isCarouselScrolling()) {
                 flushDeferredCarouselSideEffects();
                 if (guidedScrollTarget >= 0) {
@@ -208,8 +237,21 @@ public final class FlowView extends View {
     }
 
     public void setItems(List<FlowItem> items) {
+        int n = items != null ? items.size() : 0;
+        int focus = n > 0 ? Math.min(engine.getFocusIndex(), n - 1) : 0;
+        setItemsAndFocus(items, focus);
+    }
+
+    /** Bind catalog and focus atomically — avoids one frame of wrong covers at old index. */
+    public void setItemsAndFocus(List<FlowItem> items, int focusIndex) {
         this.items = items != null ? items : java.util.Collections.<FlowItem>emptyList();
         engine.setItemCount(this.items.size());
+        if (!this.items.isEmpty()) {
+            int idx = focusIndex;
+            if (idx < 0) idx = 0;
+            if (idx >= this.items.size()) idx = this.items.size() - 1;
+            engine.setFocusIndex(idx);
+        }
         lastNotifiedFocus = -1;
         deferredFocusNotify = -1;
         deferredPrefetchCenter = -1;
@@ -217,7 +259,10 @@ public final class FlowView extends View {
         cancelGuidedScroll();
         debugDrawFramesLeft = 3;
         debugBackFaceLogged = false;
+        cachedMetrics = null;
         if (!this.items.isEmpty()) {
+            // Sync small-rack metrics before animTick — stale large-rack spacing caused 2px neighbor peek.
+            viewportMetrics();
             postOnAnimation(animTick);
         }
     }
@@ -259,6 +304,15 @@ public final class FlowView extends View {
         if (!FlowPlayerHandoff.isHandoffAnimating()) {
             handoffCenterRevealAlpha = 0f;
         }
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("centerAlphaNow", handoffCenterRevealAlpha);
+            d.put("handoffAnim", FlowPlayerHandoff.isHandoffAnimating());
+            com.solar.launcher.Debug898913Log.log("FlowView.prepareHandoffFlyerOnly",
+                    "center alpha suppressed for morph", "H-C", d);
+        } catch (Exception ignored) {}
+        // #endregion
     }
 
     /**
@@ -277,6 +331,15 @@ public final class FlowView extends View {
         handoffReflectRevealAlpha = 0f;
         titleAlpha = 0f;
         titleFadeFrom = -1;
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("centerAlphaNow", handoffCenterRevealAlpha);
+            d.put("handoffAnim", FlowPlayerHandoff.isHandoffAnimating());
+            com.solar.launcher.Debug898913Log.log("FlowView.prepareHandoffHidden",
+                    "all reveal alphas zeroed (unmeasured prep)", "H-C", d);
+        } catch (Exception ignored) {}
+        // #endregion
     }
 
     public void setHandoffPin(String coverKey, Bitmap bitmap) {
@@ -310,8 +373,11 @@ public final class FlowView extends View {
         if (!isVisualCenter || handoffPinBitmap == null || handoffPinBitmap.isRecycled()) {
             return cached;
         }
-        if (handoffPinKey == null || handoffPinKey.isEmpty()
-                || handoffPinKey.equals(item.coverKey)) {
+        if (handoffPinKey == null || handoffPinKey.isEmpty()) {
+            return handoffPinBitmap;
+        }
+        if (handoffPinKey.equals(item.coverKey)
+                || (item.matchKey != null && handoffPinKey.equals(item.matchKey))) {
             return handoffPinBitmap;
         }
         return cached;
@@ -368,6 +434,29 @@ public final class FlowView extends View {
         invalidate();
         scheduleBakesAround(engine.getFocusIndex(), 2);
         postOnAnimation(animTick);
+    }
+
+    /** Crossfade / instant reveal — all cover slots opaque; no handoff choreography. */
+    public void resetHandoffRevealForDisplay() {
+        handoffDrawSuppressed = false;
+        handoffRevealActive = false;
+        handoffTitleRevealStartMs = 0L;
+        handoffReflectRevealStartMs = 0L;
+        handoffCenterRevealAlpha = 1f;
+        handoffSideRevealAlpha = 1f;
+        handoffReflectRevealAlpha = 1f;
+        titleAlpha = 1f;
+        titleFadeFrom = -1;
+        // Keep any handoff pin — crossfade seeds center art from NP; cleared on landing.
+        invalidate();
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("centerAlpha", handoffCenterRevealAlpha);
+            com.solar.launcher.Debug898913Log.log("FlowView.resetHandoffRevealForDisplay",
+                    "all reveal alphas reset for crossfade", "H-C", d);
+        } catch (Exception ignored) {}
+        // #endregion
     }
 
     public void finishHandoffReveal() {
@@ -558,10 +647,15 @@ public final class FlowView extends View {
         engine.setViewport(viewW, viewH);
         boolean moved = engine.scrollByReturningMoved(delta);
         if (moved) {
+            // #region agent log
+            logCarouselNeighborsDebug("FlowView.scrollWheel", "wheel input", "H-E,H-A", delta);
+            // #endregion
+            clearHandoffPin();
+            if (callback != null) callback.onCarouselScrollStarted();
             if (engine.isCarouselScrolling()) {
-                deferredPrefetchCenter = engine.getFocusIndex();
+                deferredPrefetchCenter = engine.getVisualCenterIndex();
                 if (callback != null) {
-                    callback.prefetchCarouselCovers(engine.getVisualCenterIndex(), 3);
+                    callback.prefetchCarouselCovers(engine.getVisualCenterIndex(), 5);
                 }
                 // #region agent log
                 if (com.solar.launcher.DebugSessionLog.ENABLED) {
@@ -639,9 +733,9 @@ public final class FlowView extends View {
         engine.setViewport(viewW, viewH);
         if (engine.scrollByReturningMoved(delta)) {
             if (engine.isCarouselScrolling()) {
-                deferredPrefetchCenter = engine.getFocusIndex();
+                deferredPrefetchCenter = engine.getVisualCenterIndex();
                 if (callback != null) {
-                    callback.prefetchCarouselCovers(engine.getVisualCenterIndex(), 3);
+                    callback.prefetchCarouselCovers(engine.getVisualCenterIndex(), 5);
                 }
             } else {
                 prefetchAround(engine.getFocusIndex());
@@ -777,9 +871,8 @@ public final class FlowView extends View {
 
     public void prefetchAround(int center) {
         if (callback == null || cache == null) return;
-        if (!engine.isCarouselScrolling()) {
-            callback.warmCarouselCovers(center, 2);
-        }
+        // Worker warm even mid-scroll — disk hits land without waiting for scroll end.
+        callback.warmCarouselCovers(center, 3);
         for (int d = -3; d <= 3; d++) {
             int idx = center + d;
             if (idx < 0 || idx >= items.size()) continue;
@@ -800,6 +893,8 @@ public final class FlowView extends View {
         int focus = engine.isAnimating() ? engine.getVisualCenterIndex() : engine.getFocusIndex();
         if (focus != lastNotifiedFocus) {
             if (lastNotifiedFocus >= 0 && focus != lastNotifiedFocus) {
+                titleMarquee.reset();
+                subtitleMarquee.reset();
                 titleFadeFrom = lastNotifiedFocus;
                 titleFadeTo = focus;
                 titleFadeStartMs = System.currentTimeMillis();
@@ -870,6 +965,22 @@ public final class FlowView extends View {
         // #region agent log
         final boolean perfLog = com.solar.launcher.DebugSessionLog.ENABLED;
         final long drawStartMs = perfLog ? System.currentTimeMillis() : 0L;
+        if (com.solar.launcher.Debug898913Log.ENABLED
+                && handoffCenterRevealAlpha < 0.99f
+                && !FlowPlayerHandoff.isHandoffAnimating()
+                && System.currentTimeMillis() - dbg898913LastDrawLogMs > 2000L) {
+            dbg898913LastDrawLogMs = System.currentTimeMillis();
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("centerAlpha", handoffCenterRevealAlpha);
+                d.put("sideAlpha", handoffSideRevealAlpha);
+                d.put("titleAlpha", titleAlpha);
+                d.put("reflectAlpha", handoffReflectRevealAlpha);
+                d.put("pinKey", handoffPinKey != null ? handoffPinKey : "");
+                com.solar.launcher.Debug898913Log.log("FlowView.onDraw",
+                        "center cover dimmed while NOT handoff-animating", "H-C", d);
+            } catch (Exception ignored) {}
+        }
         // #endregion
         super.onDraw(canvas);
         if (handoffDrawSuppressed) return;
@@ -883,6 +994,13 @@ public final class FlowView extends View {
         if (w <= 0 || h <= 0 || items.isEmpty()) {
             drawEmptyHint(canvas, w, h);
             return;
+        }
+        // Idle guard — handoff prep can zero side alpha while animTick is not posted.
+        if (!com.solar.launcher.flow.FlowPlayerHandoff.isHandoffAnimating()
+                && !handoffRevealActive
+                && !engine.isCarouselScrolling()) {
+            if (handoffCenterRevealAlpha < 1f) handoffCenterRevealAlpha = 1f;
+            if (handoffSideRevealAlpha < 1f) handoffSideRevealAlpha = 1f;
         }
 
         // #region agent log
@@ -904,6 +1022,31 @@ public final class FlowView extends View {
         // #endregion
 
         CoverFlowLayout.Metrics metrics = viewportMetrics();
+        // #region agent log
+        dbg898913DrawFrame++;
+        if (com.solar.launcher.Debug898913Log.ENABLED
+                && Math.abs(metrics.displaySize - dbg898913LastDisplaySize) > 0.5f) {
+            dbg898913LastDisplaySize = metrics.displaySize;
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("runId", "pre-fix");
+                d.put("displaySize", metrics.displaySize);
+                d.put("viewW", metrics.viewW);
+                d.put("viewH", metrics.viewH);
+                d.put("offsetX", metrics.offsetX);
+                com.solar.launcher.Debug898913Log.logAlways(
+                        "FlowView.onDraw", "metrics changed", "H-D", d);
+            } catch (Exception ignored) {}
+        }
+        // #endregion
+        // #region agent log
+        if (com.solar.launcher.Debug898913Log.ENABLED && !engine.isCarouselScrolling()
+                && !flip.isFlippedOrFlipping()
+                && System.currentTimeMillis() - dbg898913LastNeighborLogMs > 3000L) {
+            dbg898913LastNeighborLogMs = System.currentTimeMillis();
+            logCarouselNeighborsDebug("FlowView.onDraw", "idle carousel", "H-C,H-D", 0);
+        }
+        // #endregion
         int count = engine.fillDrawOrder(drawOrder, drawDepth);
         int centerIdx = engine.getVisualCenterIndex();
         float flipP = flip.flipProgress();
@@ -934,6 +1077,179 @@ public final class FlowView extends View {
             logDrawMsIfSlow(drawStartMs);
         }
         // #endregion
+    }
+
+    /** Debug 898913 — catalog index vs visible slot poses (neighbor / two-step scroll). */
+    private void logCarouselNeighborsDebug(String location, String message, String hypothesisId,
+            int wheelDelta) {
+        if (!com.solar.launcher.Debug898913Log.ENABLED || items.isEmpty()) return;
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            int focus = engine.getFocusIndex();
+            int visualCenter = engine.getVisualCenterIndex();
+            float visualOff = engine.getVisualOffset();
+            d.put("wheelDelta", wheelDelta);
+            d.put("focusIndex", focus);
+            d.put("visualCenter", visualCenter);
+            d.put("visualOffset", visualOff);
+            d.put("targetIndex", engine.getTargetIndex());
+            d.put("scrolling", engine.isCarouselScrolling());
+            d.put("itemCount", items.size());
+            d.put("sideRevealAlpha", handoffSideRevealAlpha);
+            d.put("centerRevealAlpha", handoffCenterRevealAlpha);
+            CoverFlowLayout.Metrics m = viewportMetrics();
+            float vw = m.viewW > 0f ? m.viewW : viewW;
+            float vh = m.viewH > 0f ? m.viewH : viewH;
+            org.json.JSONArray slots = new org.json.JSONArray();
+            int visibleRight = 0;
+            int visibleLeft = 0;
+            for (int dIdx = -2; dIdx <= 2; dIdx++) {
+                int idx = focus + dIdx;
+                if (idx < 0 || idx >= items.size()) continue;
+                FlowEngine.SlotTransform t = engine.slotTransform(idx, vw, vh, 0f);
+                float rel = idx - visualOff;
+                org.json.JSONObject slot = new org.json.JSONObject();
+                slot.put("d", dIdx);
+                slot.put("idx", idx);
+                slot.put("title", items.get(idx).title);
+                slot.put("rel", rel);
+                slot.put("alpha", t.alpha);
+                slot.put("cx", t.centerX);
+                slot.put("width", t.width);
+                slot.put("rotY", t.rotationYDeg);
+                slot.put("depth", t.depthOrder);
+                slot.put("drawAlpha", t.alpha * (idx == visualCenter
+                        ? handoffCenterRevealAlpha : handoffSideRevealAlpha));
+                if (idx == visualCenter + 1 || idx == visualCenter - 1) {
+                    FlowEngine.SlotTransform c = engine.slotTransform(visualCenter, vw, vh, 0f);
+                    float centerEdge = idx > visualCenter
+                            ? c.centerX + c.width * 0.5f
+                            : c.centerX - c.width * 0.5f;
+                    float hinge = idx > visualCenter
+                            ? t.centerX - t.width * 0.5f
+                            : t.centerX + t.width * 0.5f;
+                    double rad = Math.toRadians(t.rotationYDeg);
+                    float faceEdge = idx > visualCenter
+                            ? hinge + (float) (t.width * Math.cos(rad))
+                            : hinge - (float) (t.width * Math.cos(rad));
+                    slot.put("visiblePeekPx", Math.abs(faceEdge - centerEdge));
+                }
+                slots.put(slot);
+                if (t.alpha > 0.05f && rel > 0.5f) visibleRight++;
+                if (t.alpha > 0.05f && rel < -0.5f) visibleLeft++;
+            }
+            d.put("slots", slots);
+            d.put("visibleLeft", visibleLeft);
+            d.put("visibleRight", visibleRight);
+            d.put("drawCount", engine.fillDrawOrder(drawOrder, drawDepth));
+            org.json.JSONArray drawSeq = new org.json.JSONArray();
+            int drawN = engine.fillDrawOrder(drawOrder, drawDepth);
+            for (int k = 0; k < drawN; k++) {
+                org.json.JSONObject row = new org.json.JSONObject();
+                int idx = drawOrder[k];
+                row.put("k", k);
+                row.put("idx", idx);
+                row.put("depth", drawDepth[k]);
+                row.put("rel", idx - visualOff);
+                row.put("sideRank", engine.poseForItemPublic(idx) != null
+                        ? engine.poseForItemPublic(idx).sideRank : -1);
+                drawSeq.put(row);
+            }
+            d.put("drawSeq", drawSeq);
+            d.put("displaySize", m.displaySize);
+            d.put("viewW", m.viewW);
+            d.put("viewH", m.viewH);
+            com.solar.launcher.Debug898913Log.log(location, message, hypothesisId, d);
+        } catch (Exception ignored) {}
+    }
+
+    /** Debug 898913 — detect bake+tilt distortion, matrix blow-up, or bad slot sizing. */
+    private void logDrawCoverGlitchIfNeeded(int index, float totalRotY, float pivotX,
+            FlowEngine.SlotTransform t, CoverFlowLayout.Metrics metrics, boolean usingBaked) {
+        long nowMs = System.currentTimeMillis();
+        matrix.getValues(dbg898913MatrixVals);
+        float scaleX = (float) Math.hypot(dbg898913MatrixVals[0], dbg898913MatrixVals[1]);
+        float scaleY = (float) Math.hypot(dbg898913MatrixVals[3], dbg898913MatrixVals[4]);
+        float aspectDistort = scaleY > 0.01f ? scaleX / scaleY : scaleX;
+        boolean isCenter = index == engine.getVisualCenterIndex();
+        boolean bakedOnTilt = usingBaked && Math.abs(totalRotY) > 8f;
+        boolean matrixBlowup = scaleX > 3f || scaleY > 3f || scaleX < 0.12f || scaleY < 0.12f
+                || aspectDistort > 4f || aspectDistort < 0.25f;
+        boolean tinySide = !isCenter && drawRect.width() < 40f && t.alpha > 0.1f;
+        boolean hugeSlot = drawRect.width() > metrics.viewW * 0.75f;
+        // Always log bake+tilt (hypothesis A); throttle other suspects.
+        if (!bakedOnTilt) {
+            if (!com.solar.launcher.Debug898913Log.ENABLED) return;
+            if (!matrixBlowup && !tinySide && !hugeSlot) return;
+            if (nowMs - dbg898913LastGlitchLogMs < 250L) return;
+        } else if (nowMs - dbg898913LastGlitchLogMs < 150L) {
+            return;
+        }
+        dbg898913LastGlitchLogMs = nowMs;
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("runId", "pre-fix");
+            d.put("frame", dbg898913DrawFrame);
+            d.put("index", index);
+            d.put("isCenter", isCenter);
+            d.put("rotY", totalRotY);
+            d.put("pivotX", pivotX);
+            d.put("zDepth", t.zDepth);
+            d.put("drawW", drawRect.width());
+            d.put("drawH", drawRect.height());
+            d.put("tWidth", t.width);
+            d.put("displaySize", metrics.displaySize);
+            d.put("scaleX", scaleX);
+            d.put("scaleY", scaleY);
+            d.put("aspectDistort", aspectDistort);
+            d.put("usingBaked", usingBaked);
+            d.put("bakedOnTilt", bakedOnTilt);
+            d.put("matrixBlowup", matrixBlowup);
+            d.put("tinySide", tinySide);
+            d.put("hugeSlot", hugeSlot);
+            d.put("scrolling", engine.isCarouselScrolling());
+            d.put("visualOffset", engine.getVisualOffset());
+            String hyp = bakedOnTilt ? "H-A" : (matrixBlowup ? "H-B" : (tinySide ? "H-C" : "H-D"));
+            d.put("runId", "post-fix-egress");
+            com.solar.launcher.Debug898913Log.logAlways(
+                    "FlowView.drawCoverAt", "glitch suspect", hyp, d);
+        } catch (Exception ignored) {}
+    }
+
+    /** Debug 898913 — which draw branch ran and whether tilt+bake could shear. */
+    private void logDrawPathIfNeeded(int index, String path, float totalRotY,
+            FlowEngine.SlotTransform t, CoverFlowLayout.Metrics metrics, boolean usingBaked) {
+        if (!com.solar.launcher.Debug898913Log.ENABLED) return;
+        long nowMs = System.currentTimeMillis();
+        boolean isCenter = index == engine.getVisualCenterIndex();
+        boolean suspect = usingBaked && Math.abs(totalRotY) > 8f
+                || (!isCenter && "reflect".equals(path))
+                || drawRect.width() > metrics.viewW * 0.75f;
+        if (!suspect && nowMs - dbg898913LastPathLogMs < 2000L) return;
+        if (suspect || nowMs - dbg898913LastPathLogMs >= 2000L) {
+            dbg898913LastPathLogMs = nowMs;
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("runId", "pre-fix");
+                d.put("index", index);
+                d.put("path", path);
+                d.put("isCenter", isCenter);
+                d.put("rotY", totalRotY);
+                d.put("zDepth", t.zDepth);
+                d.put("depthOrder", t.depthOrder);
+                d.put("sideRank", engine.poseForItemPublic(index) != null
+                        ? engine.poseForItemPublic(index).sideRank : -1);
+                d.put("drawW", drawRect.width());
+                d.put("displaySize", metrics.displaySize);
+                d.put("usingBaked", usingBaked);
+                d.put("suspect", suspect);
+                d.put("scrolling", engine.isCarouselScrolling());
+                String hyp = usingBaked && Math.abs(totalRotY) > 8f ? "H-C"
+                        : (!isCenter && "reflect".equals(path) ? "H-C" : "H-B");
+                com.solar.launcher.Debug898913Log.log(
+                        "FlowView.drawCoverAt", "draw path", hyp, d);
+            } catch (Exception ignored) {}
+        }
     }
 
     private void logDrawMsIfSlow(long drawStartMs) {
@@ -1002,8 +1318,8 @@ public final class FlowView extends View {
         bmp = coverBitmapForDraw(index, item, bmp);
         if (bmp == null && callback != null && !backFace) {
             boolean isVisualCenter = index == engine.getVisualCenterIndex();
-            if (!(isVisualCenter && (FlowPlayerHandoff.isHandoffAnimating() || handoffRevealActive)
-                    && handoffPinBitmap != null)) {
+            // Pinned NP art covers the center slot during crossfade — no async grey placeholder.
+            if (!(isVisualCenter && handoffPinBitmap != null && !handoffPinBitmap.isRecycled())) {
                 callback.requestCover(index, item.coverKey, item);
             }
         }
@@ -1020,14 +1336,33 @@ public final class FlowView extends View {
         }
 
         canvas.save();
+        float totalRotY = t.rotationYDeg + extraRotY;
+        // Center OK-flip uses full 180° on card center; carousel scroll uses edge hinge.
+        float pivotX = (backFace || Math.abs(extraRotY) > 0.01f)
+                ? t.centerX
+                : CoverFlowLayout.pivotXForCoverFlow(totalRotY, drawRect.left, drawRect.right);
         camera.save();
         camera.translate(0, 0, t.zDepth);
-        camera.rotateY(t.rotationYDeg + extraRotY);
+        camera.rotateY(totalRotY);
         matrix.reset();
         camera.getMatrix(matrix);
         camera.restore();
-        matrix.preTranslate(-t.centerX, -t.centerY);
-        matrix.postTranslate(t.centerX, t.centerY);
+        matrix.preTranslate(-pivotX, -t.centerY);
+        matrix.postTranslate(pivotX, t.centerY);
+        // #region agent log
+        boolean dbgUsingBaked = false;
+        if (!backFace && bmp != null && !bmp.isRecycled()) {
+            boolean skipReflectDbg = shouldSkipCoverReflection(noReflections,
+                    FlowPlayerHandoff.isHandoffAnimating(), engine.isCarouselScrolling(),
+                    index == engine.getVisualCenterIndex(), handoffReflectRevealAlpha);
+            if (!skipReflectDbg) {
+                Bitmap bakedDbg = bakeCache.peek(item.coverKey, metrics, true);
+                dbgUsingBaked = bakedDbg != null && !bakedDbg.isRecycled()
+                        && Math.abs(totalRotY) < 8f;
+            }
+        }
+        logDrawCoverGlitchIfNeeded(index, totalRotY, pivotX, t, metrics, dbgUsingBaked);
+        // #endregion
         canvas.concat(matrix);
 
         if (backFace) {
@@ -1039,6 +1374,17 @@ public final class FlowView extends View {
                 canvas.restore();
                 coverPaint.setAlpha(255);
                 return;
+            }
+            // Floor shadow slab — outer covers recede into darkness during egress.
+            if (t.shadowStrength > 0.05f) {
+                float sh = t.shadowStrength;
+                shadowPaint.setColor(0xFF000000);
+                shadowPaint.setAlpha((int) (130 * sh * slotAlpha));
+                float padX = drawRect.width() * (0.05f + 0.06f * sh);
+                float padY = drawRect.height() * (0.08f + 0.10f * sh);
+                shadowRect.set(drawRect.left + padX, drawRect.top + padY * 1.4f,
+                        drawRect.right - padX * 0.4f, drawRect.bottom + padY);
+                canvas.drawRect(shadowRect, shadowPaint);
             }
             coverPaint.setAlpha((int) (255 * slotAlpha));
             if (bmp != null && !bmp.isRecycled()) {
@@ -1081,22 +1427,37 @@ public final class FlowView extends View {
                 }
                 // #endregion
                 if (skipReflect) {
+                    // #region agent log
+                    logDrawPathIfNeeded(index, "coverOnly", totalRotY, t, metrics, false);
+                    // #endregion
                     FlowAlbumArt3d.drawCover(canvas, bmp, drawRect, 0f, slotAlpha, coverPaint);
                 } else {
                     Bitmap baked = bakeCache.peek(item.coverKey, metrics, true);
-                    if (baked != null && !baked.isRecycled()) {
+                    // Tall baked composite (cover+floor) shears into vertical stripes under edge-pivot rotateY.
+                    boolean bakeOkForTilt = Math.abs(totalRotY) < 8f;
+                    if (baked != null && !baked.isRecycled() && bakeOkForTilt) {
+                        // #region agent log
+                        logDrawPathIfNeeded(index, "baked", totalRotY, t, metrics, true);
+                        // #endregion
                         bakedDestRect.set(drawRect.left, drawRect.top,
                                 drawRect.right, drawRect.top + drawRect.width() + reflectH);
                         canvas.drawBitmap(baked, null, bakedDestRect, coverPaint);
                     } else {
+                        // #region agent log
+                        logDrawPathIfNeeded(index, "reflect", totalRotY, t, metrics, false);
+                        // #endregion
                         FlowAlbumArt3d.drawCoverWithReflection(canvas, bmp, drawRect, 0f, slotAlpha,
                                 reflectH, metrics.reflectTable, coverPaint, reflectionPaint);
-                        bakeCache.scheduleBake(item.coverKey, bmp, metrics, true);
+                        if (bakeOkForTilt) {
+                            bakeCache.scheduleBake(item.coverKey, bmp, metrics, true);
+                        }
                     }
                 }
             } else {
                 if (isVisualCenter && handoffPinBitmap != null && !handoffPinBitmap.isRecycled()
-                        && (handoffPinKey == null || handoffPinKey.equals(item.coverKey))) {
+                        && (handoffPinKey == null || handoffPinKey.isEmpty()
+                        || handoffPinKey.equals(item.coverKey)
+                        || (item.matchKey != null && handoffPinKey.equals(item.matchKey)))) {
                     bmp = handoffPinBitmap;
                 }
                 if (bmp != null && !bmp.isRecycled()) {

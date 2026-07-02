@@ -8,6 +8,7 @@ import org.junit.Test;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -28,6 +29,15 @@ public class FlowCatalogTest {
                 new ArtistBrowsePolicy.Track("Snoop Dogg", "Doggystyle", "Snoop Dogg", 300L));
     }
 
+    /** Policy tracks mirror library rows — album rack filter uses the same artist universe. */
+    private static List<ArtistBrowsePolicy.Track> policyFromRows(List<FlowCatalog.SongRow> rows) {
+        List<ArtistBrowsePolicy.Track> out = new ArrayList<ArtistBrowsePolicy.Track>();
+        for (FlowCatalog.SongRow row : rows) {
+            out.add(new ArtistBrowsePolicy.Track(row.artist, row.album, row.albumArtist, row.lastModified));
+        }
+        return out;
+    }
+
     @Test
     public void artistOrderMatchesPolicy() {
         List<FlowItem> flow = FlowCatalog.buildArtists(tracks, prefs);
@@ -43,7 +53,7 @@ public class FlowCatalogTest {
         File f = new File("/tmp/a.mp3");
         List<FlowCatalog.SongRow> rows = Arrays.asList(
                 new FlowCatalog.SongRow(f, "t", "Snoop Dogg", "Doggystyle", "Snoop Dogg", 1L));
-        List<FlowItem> albums = FlowCatalog.buildAlbums(rows, prefs, tracks);
+        List<FlowItem> albums = FlowCatalog.buildAlbums(rows, prefs, policyFromRows(rows));
         assertFalse(albums.isEmpty());
         assertEquals("Doggystyle", albums.get(0).title);
     }
@@ -54,7 +64,7 @@ public class FlowCatalogTest {
         f.deleteOnExit();
         List<FlowCatalog.SongRow> rows = Arrays.asList(
                 new FlowCatalog.SongRow(f, "Track", "Band", "No Art Album", "Band", 1L));
-        List<FlowItem> albums = FlowCatalog.buildAlbums(rows, prefs, tracks);
+        List<FlowItem> albums = FlowCatalog.buildAlbums(rows, prefs, policyFromRows(rows));
         assertEquals(1, albums.size());
         assertEquals("No Art Album", albums.get(0).title);
         assertFalse(albums.get(0).coverKey.isEmpty());
@@ -77,10 +87,34 @@ public class FlowCatalogTest {
                 new LibraryBrowsePrefsTest.MemSharedPreferences();
         mem.edit().putInt("lib_song_sort", LibraryBrowsePrefs.SONG_SORT_ALBUM).commit();
         LibraryBrowsePrefs albumSortPrefs = new LibraryBrowsePrefs(mem);
-        List<FlowItem> albums = FlowCatalog.buildAlbums(library, albumSortPrefs, tracks);
+        List<FlowItem> albums = FlowCatalog.buildAlbums(library, albumSortPrefs, policyFromRows(library));
         assertEquals(1, albums.size());
         List<File> sorted = albums.get(0).tracks;
         assertEquals(3, sorted.size());
+        assertEquals(f2, sorted.get(0));
+        assertEquals(f3, sorted.get(1));
+        assertEquals(f1, sorted.get(2));
+    }
+
+    @Test
+    public void albumSongSortIndependentOfGlobalSongSort() throws IOException {
+        File f1 = File.createTempFile("flow_alb_sort_c", ".mp3");
+        File f2 = File.createTempFile("flow_alb_sort_a", ".mp3");
+        File f3 = File.createTempFile("flow_alb_sort_b", ".mp3");
+        f1.deleteOnExit();
+        f2.deleteOnExit();
+        f3.deleteOnExit();
+        List<FlowCatalog.SongRow> library = Arrays.asList(
+                new FlowCatalog.SongRow(f1, "Three", "Artist", "Album", "Artist", 1L, 3),
+                new FlowCatalog.SongRow(f2, "One", "Artist", "Album", "Artist", 1L, 1),
+                new FlowCatalog.SongRow(f3, "Two", "Artist", "Album", "Artist", 1L, 2));
+        LibraryBrowsePrefsTest.MemSharedPreferences mem =
+                new LibraryBrowsePrefsTest.MemSharedPreferences();
+        mem.edit().putInt("lib_song_sort", LibraryBrowsePrefs.SONG_SORT_TITLE).commit();
+        mem.edit().putInt("lib_album_song_sort", LibraryBrowsePrefs.SONG_SORT_ALBUM).commit();
+        LibraryBrowsePrefs albumPrefs = new LibraryBrowsePrefs(mem);
+        List<FlowItem> albums = FlowCatalog.buildAlbums(library, albumPrefs, policyFromRows(library));
+        List<File> sorted = albums.get(0).tracks;
         assertEquals(f2, sorted.get(0));
         assertEquals(f3, sorted.get(1));
         assertEquals(f1, sorted.get(2));
@@ -98,9 +132,9 @@ public class FlowCatalogTest {
                 new FlowCatalog.SongRow(f1, "Solo", "Artist", "Solo Album", "Artist", 1L),
                 new FlowCatalog.SongRow(f2, "One", "Band", "Full Album", "Band", 1L),
                 new FlowCatalog.SongRow(f3, "Two", "Band", "Full Album", "Band", 1L));
-        List<FlowItem> all = FlowCatalog.buildAlbums(rows, prefs, tracks, false);
+        List<FlowItem> all = FlowCatalog.buildAlbums(rows, prefs, policyFromRows(rows), false);
         assertEquals(2, all.size());
-        List<FlowItem> filtered = FlowCatalog.buildAlbums(rows, prefs, tracks, true);
+        List<FlowItem> filtered = FlowCatalog.buildAlbums(rows, prefs, policyFromRows(rows), true);
         assertEquals(1, filtered.size());
         assertEquals("Full Album", filtered.get(0).title);
     }
@@ -123,9 +157,9 @@ public class FlowCatalogTest {
                 new FlowCatalog.SongRow(f1, "a", "Artist", "Solo", "Artist", 1L),
                 new FlowCatalog.SongRow(f2, "b", "Artist", "Duo", "Artist", 1L),
                 new FlowCatalog.SongRow(f2, "c", "Artist", "Duo", "Artist", 1L));
-        List<FlowItem> all = FlowCatalog.buildAlbums(rows, prefs, tracks, false);
+        List<FlowItem> all = FlowCatalog.buildAlbums(rows, prefs, policyFromRows(rows), false);
         assertEquals(2, all.size());
-        List<FlowItem> multi = FlowCatalog.buildAlbums(rows, prefs, tracks, true);
+        List<FlowItem> multi = FlowCatalog.buildAlbums(rows, prefs, policyFromRows(rows), true);
         assertEquals(1, multi.size());
         assertEquals("Duo", multi.get(0).title);
     }
@@ -142,9 +176,80 @@ public class FlowCatalogTest {
                 new FlowCatalog.SongRow(f1, "t1", "Feat Artist", "Shared", "Shared", 1L),
                 new FlowCatalog.SongRow(f2, "t2", "Main Artist", "Shared", "Shared", 1L),
                 new FlowCatalog.SongRow(f3, "t3", "Main Artist", "Shared", "Shared", 1L));
-        List<FlowItem> albums = FlowCatalog.buildAlbums(rows, prefs, tracks);
+        List<FlowItem> albums = FlowCatalog.buildAlbums(rows, prefs, policyFromRows(rows));
         assertEquals(1, albums.size());
         assertTrue(albums.get(0).coverKey.toLowerCase(java.util.Locale.US).contains("main artist"));
+    }
+
+    @Test
+    public void albumsSortByArtistThenTitle() throws IOException {
+        LibraryBrowsePrefsTest.MemSharedPreferences mem =
+                new LibraryBrowsePrefsTest.MemSharedPreferences();
+        mem.edit().putInt("lib_album_rack_sort",
+                LibraryBrowsePrefs.ALBUM_RACK_SORT_ARTIST_THEN_TITLE).commit();
+        LibraryBrowsePrefs artistRackPrefs = new LibraryBrowsePrefs(mem);
+        File f1 = File.createTempFile("flow_gravy", ".mp3");
+        File f2 = File.createTempFile("flow_kanye", ".mp3");
+        File f3 = File.createTempFile("flow_gorillaz", ".mp3");
+        f1.deleteOnExit();
+        f2.deleteOnExit();
+        f3.deleteOnExit();
+        List<FlowCatalog.SongRow> rows = Arrays.asList(
+                new FlowCatalog.SongRow(f1, "t", "Baby Gravy", "Goodness Gracious", "Baby Gravy", 1L),
+                new FlowCatalog.SongRow(f2, "t", "Kanye West", "Graduation", "Kanye West", 1L),
+                new FlowCatalog.SongRow(f3, "t", "Gorillaz", "Gorillaz", "Gorillaz", 1L));
+        List<FlowItem> albums = FlowCatalog.buildAlbums(rows, artistRackPrefs, policyFromRows(rows));
+        assertEquals(3, albums.size());
+        assertEquals("Goodness Gracious", albums.get(0).title);
+        assertEquals("Gorillaz", albums.get(1).title);
+        assertEquals("Graduation", albums.get(2).title);
+    }
+
+    @Test
+    public void albumsDefaultSortTitleAz() throws IOException {
+        File f1 = File.createTempFile("flow_zed", ".mp3");
+        File f2 = File.createTempFile("flow_abc", ".mp3");
+        f1.deleteOnExit();
+        f2.deleteOnExit();
+        List<FlowCatalog.SongRow> rows = Arrays.asList(
+                new FlowCatalog.SongRow(f1, "t", "Zed", "Z Album", "Zed", 1L),
+                new FlowCatalog.SongRow(f2, "t", "Amy", "A Album", "Amy", 1L));
+        List<FlowItem> albums = FlowCatalog.buildAlbums(rows, prefs, policyFromRows(rows));
+        assertEquals("A Album", albums.get(0).title);
+        assertEquals("Z Album", albums.get(1).title);
+    }
+
+    @Test
+    public void libraryAlbumTitlesMatchFlowCatalogOrder() throws IOException {
+        File f1 = File.createTempFile("flow_lib_a", ".mp3");
+        File f2 = File.createTempFile("flow_lib_b", ".mp3");
+        File f3 = File.createTempFile("flow_lib_c", ".mp3");
+        f1.deleteOnExit();
+        f2.deleteOnExit();
+        f3.deleteOnExit();
+        List<FlowCatalog.SongRow> rows = Arrays.asList(
+                new FlowCatalog.SongRow(f1, "t", "Zed", "Z Album", "Zed", 1L),
+                new FlowCatalog.SongRow(f2, "t", "Amy", "A Album", "Amy", 1L),
+                new FlowCatalog.SongRow(f3, "t", "Mid", "M Album", "Mid", 1L));
+        List<String> libraryTitles = LibraryAlbumRack.albumTitles(rows, prefs, policyFromRows(rows));
+        List<FlowItem> flowItems = FlowCatalog.buildAlbums(rows, prefs, policyFromRows(rows));
+        assertEquals(flowItems.size(), libraryTitles.size());
+        for (int i = 0; i < flowItems.size(); i++) {
+            assertEquals(flowItems.get(i).title, libraryTitles.get(i));
+        }
+    }
+
+    @Test
+    public void catalogOptionsKeyChangesWithAlbumRackSort() {
+        LibraryBrowsePrefsTest.MemSharedPreferences mem =
+                new LibraryBrowsePrefsTest.MemSharedPreferences();
+        LibraryBrowsePrefs titlePrefs = new LibraryBrowsePrefs(mem);
+        int keyTitle = FlowCatalog.catalogOptionsKey(titlePrefs, false);
+        mem.edit().putInt("lib_album_rack_sort",
+                LibraryBrowsePrefs.ALBUM_RACK_SORT_ARTIST_THEN_TITLE).commit();
+        LibraryBrowsePrefs artistPrefs = new LibraryBrowsePrefs(mem);
+        int keyArtist = FlowCatalog.catalogOptionsKey(artistPrefs, false);
+        assertTrue(keyTitle != keyArtist);
     }
 
     @Test

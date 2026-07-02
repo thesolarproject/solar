@@ -57,6 +57,22 @@ public class SolarDeveloperAccountsTest {
   }
 
   @Test
+  public void devIncomingPackParseRoundTrip() {
+    String packed = SolarDeveloperAccounts.packDevIncoming("SolarDev", "Hello there");
+    if (!SolarDeveloperAccounts.isDevIncoming(packed)) throw new AssertionError("marked");
+    SolarDeveloperAccounts.DevIncoming parsed = SolarDeveloperAccounts.parseDevIncoming(packed);
+    if (!"SolarDev".equals(parsed.fromDev)) throw new AssertionError("from=" + parsed.fromDev);
+    if (!"Hello there".equals(parsed.body)) throw new AssertionError("body=" + parsed.body);
+    if (!"Hello there".equals(SolarDeveloperAccounts.displayBody(packed))) {
+      throw new AssertionError("display");
+    }
+    SolarDeveloperAccounts.DevIncoming plain =
+            SolarDeveloperAccounts.parseDevIncoming("plain text");
+    if (!plain.fromDev.isEmpty()) throw new AssertionError("plain from");
+    if (!"plain text".equals(plain.body)) throw new AssertionError("plain body");
+  }
+
+  @Test
   public void wireRecipientsDevSenderSkipsSelf() {
     String[] t = SolarDeveloperAccounts.wireRecipientsForSender("SolarDev");
     if (t.length != 2) throw new AssertionError("count=" + t.length);

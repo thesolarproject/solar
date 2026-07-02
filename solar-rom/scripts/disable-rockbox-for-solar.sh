@@ -6,7 +6,10 @@ SOLAR_PKG="com.solar.launcher"
 ROCKBOX_PKG="org.rockbox"
 MARKER="/data/data/.solar_rom_home_ready"
 
-[ -f "$MARKER" ] && exit 0
+# Marker means we succeeded once — skip only when Rockbox is still disabled.
+if [ -f "$MARKER" ] && pm list packages -d 2>/dev/null | grep -q "^package:${ROCKBOX_PKG}$"; then
+    exit 0
+fi
 pm path "$ROCKBOX_PKG" >/dev/null 2>&1 || exit 0
 
 try_disable() {

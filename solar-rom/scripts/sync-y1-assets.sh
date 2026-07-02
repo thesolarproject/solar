@@ -8,3 +8,5 @@ mkdir -p "$DST"
 for f in switch-to-stock.sh switch-to-rockbox.sh sync-rockbox-libs.sh sync-y1-keymap.sh disable-rockbox-for-solar.sh solar-usb-recovery-agent.sh Y1-Rockbox.kl; do
     cp "$SRC/$f" "$DST/$f"
 done
+chmod +x "$ROOT/solar-rom/scripts/verify-y1-assets.sh"
+"$ROOT/solar-rom/scripts/verify-y1-assets.sh"

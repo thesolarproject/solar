@@ -44,16 +44,28 @@ public final class FlowCoverResolver {
             case PLAYLIST: {
                 File flowDir = host.getFlowThumbCacheDir();
                 if (flowDir != null && item.coverKey != null) {
-                    Bitmap flowThumb = FlowThumbCache.get(flowDir, item.coverKey, thumbPx);
-                    if (flowThumb != null) return flowThumb;
+                    File flowFile = FlowThumbCache.fileForKey(flowDir, item.coverKey, thumbPx);
+                    if (flowFile != null && flowFile.isFile()
+                            && AlbumArtCache.isLikelyPlaceholderFile(flowFile)) {
+                        flowFile.delete();
+                    } else {
+                        Bitmap flowThumb = FlowThumbCache.get(flowDir, item.coverKey, thumbPx);
+                        if (flowThumb != null) return flowThumb;
+                    }
                 }
                 File artDir = host.getAlbumArtCacheDir();
                 if (artDir != null && item.coverKey != null) {
-                    Bitmap disk = AlbumArtCache.get(artDir, item.coverKey);
-                    if (disk != null) {
-                        Bitmap scaled = scale(disk, thumbPx);
-                        maybeCacheFlowThumb(flowDir, item.coverKey, scaled, thumbPx);
-                        return scaled;
+                    File artFile = AlbumArtCache.fileForKey(artDir, item.coverKey);
+                    if (artFile != null && artFile.isFile()
+                            && AlbumArtCache.isLikelyPlaceholderFile(artFile)) {
+                        artFile.delete();
+                    } else {
+                        Bitmap disk = AlbumArtCache.get(artDir, item.coverKey);
+                        if (disk != null) {
+                            Bitmap scaled = scale(disk, thumbPx);
+                            maybeCacheFlowThumb(flowDir, item.coverKey, scaled, thumbPx);
+                            return scaled;
+                        }
                     }
                 }
                 return null;
@@ -146,26 +158,19 @@ public final class FlowCoverResolver {
         return cachePlaceholder(thumbPx, albumKey, artDir, flowThumbDir);
     }
 
-    /** ♪ tile for art-less albums — cached like real art so Flow indexing and handoffs stay aligned. */
+    /** ♪ tile for art-less albums — memory only; never persist (blocks real embed on next open). */
     private static Bitmap cachePlaceholder(int thumbPx, String albumKey, File artDir, File flowThumbDir) {
-        Bitmap ph = placeholder(thumbPx, "♪", 0xFF333333);
-        maybeCacheAlbumArt(artDir, albumKey, ph);
-        maybeCacheFlowThumb(flowThumbDir, albumKey, ph, thumbPx);
-        return ph;
+        return placeholder(thumbPx, "♪", 0xFF333333);
     }
 
     private static void maybeCacheAlbumArt(File artDir, String albumKey, Bitmap bmp) {
         if (artDir == null || albumKey == null || albumKey.isEmpty() || bmp == null) return;
-        if (!AlbumArtCache.has(artDir, albumKey)) {
-            AlbumArtCache.put(artDir, albumKey, bmp);
-        }
+        AlbumArtCache.put(artDir, albumKey, bmp);
     }
 
     private static void maybeCacheFlowThumb(File flowDir, String coverKey, Bitmap bmp, int thumbPx) {
         if (flowDir == null || coverKey == null || coverKey.isEmpty() || bmp == null) return;
-        if (!FlowThumbCache.has(flowDir, coverKey, thumbPx)) {
-            FlowThumbCache.put(flowDir, coverKey, bmp, thumbPx);
-        }
+        FlowThumbCache.put(flowDir, coverKey, bmp, thumbPx);
     }
 
     public static Bitmap artistInitials(String name, int sizePx, Typeface font) {

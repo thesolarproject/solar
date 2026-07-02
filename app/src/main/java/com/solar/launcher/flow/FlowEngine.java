@@ -1,12 +1,14 @@
 package com.solar.launcher.flow;
 
 /**
- * Cover Flow scroll engine — 16.16 slide_frame + sin deceleration (PictureFlow physics),
+ * Cover Flow scroll engine — time-based ease per album step (Classipod ~300ms),
  * Apple/Classipod pose layout via {@link CoverFlowLayout}.
  */
 public final class FlowEngine {
 
     public static final int VISIBLE_RADIUS = CoverFlowLayout.SIDE_SLIDES;
+    /** One wheel detent — frame-rate independent on MT6572. */
+    public static final long SCROLL_MS = 290L;
 
     private int itemCount;
     private int centerIndex;
@@ -14,6 +16,12 @@ public final class FlowEngine {
     private int step;
     private int slideFrameInt;
     private int fade;
+
+    /** Time-based scroll segment — restarts when target queues mid-animation. */
+    private long scrollAnimStartMs;
+    private int scrollAnimFromFixed;
+    private int scrollAnimToFixed;
+    private boolean scrollAnimPendingStart;
 
     private final CoverFlowLayout.SlidePose centerSlide = new CoverFlowLayout.SlidePose();
     private final CoverFlowLayout.SlidePose[] leftSlides =
@@ -57,19 +65,14 @@ public final class FlowEngine {
      * OK / flip must use this so fast wheel + select flips the cover on screen, not the target index.
      */
     public int getVisualCenterIndex() {
-        if (step == 0 || itemCount <= 0) return centerIndex;
-        CoverFlowLayout.Metrics m = metrics();
-        int bestIdx = centerSlide.itemIndex;
-        float best = CoverFlowLayout.centernessFromPose(centerSlide, m);
-        CoverFlowLayout.SlidePose incoming = step > 0 ? rightSlides[0] : leftSlides[0];
-        if (incoming.itemIndex >= 0 && incoming.itemIndex < itemCount) {
-            float c = CoverFlowLayout.centernessFromPose(incoming, m);
-            if (c > best) {
-                best = c;
-                bestIdx = incoming.itemIndex;
-            }
+        if (itemCount <= 0) return 0;
+        float visual = getVisualOffset();
+        int lo = clamp((int) Math.floor(visual), 0, itemCount - 1);
+        int hi = clamp(lo + 1, 0, itemCount - 1);
+        if (hi > lo) {
+            return (visual - lo) < 0.5f ? lo : hi;
         }
-        return bestIdx;
+        return lo;
     }
 
     /** End scroll animation on the cover the user sees at center (wheel OK during motion). */
@@ -80,6 +83,8 @@ public final class FlowEngine {
         targetIndex = visual;
         slideFrameInt = visual << 16;
         step = 0;
+        scrollAnimStartMs = 0L;
+        scrollAnimPendingStart = false;
         resetSlides(null);
     }
 
@@ -95,9 +100,10 @@ public final class FlowEngine {
     }
 
     private CoverFlowLayout.Metrics metrics() {
-        return viewportMetrics != null
-                ? viewportMetrics
-                : CoverFlowLayout.metricsForViewport(viewportW, viewportH);
+        if (viewportMetrics != null) {
+            return viewportMetrics;
+        }
+        return CoverFlowLayout.metricsForViewport(viewportW, viewportH);
     }
 
     public float getVisualOffset() {
@@ -141,7 +147,11 @@ public final class FlowEngine {
 
     public void tick(long nowMs) {
         if (step == 0) return;
-        updateScrollAnimation();
+        if (scrollAnimPendingStart) {
+            scrollAnimStartMs = nowMs;
+            scrollAnimPendingStart = false;
+        }
+        updateScrollAnimation(nowMs);
     }
 
     public boolean isAnimating() {
@@ -155,6 +165,11 @@ public final class FlowEngine {
 
     public int getScrollStep() {
         return step;
+    }
+
+    /** Queued carousel destination — visible to flow unit tests. */
+    int getTargetIndex() {
+        return targetIndex;
     }
 
     public int visibleSlotMin() {
@@ -174,16 +189,26 @@ public final class FlowEngine {
         public float rotationYDeg;
         public float zDepth;
         public float depthOrder;
+        /** 0 = bright front rack, 1 = deep shadow at carousel edge. */
+        public float shadowStrength;
+        /** 0 = rotate on left edge, 1 = right edge — Classipod inner-edge pivot. */
+        public float pivotXFrac = 0.5f;
     }
 
     public SlotTransform slotTransform(int itemIndex, float viewW, float viewH, float ignoredVisual) {
-        CoverFlowLayout.Metrics m = metrics();
-        CoverFlowLayout.SlidePose pose = poseForItem(itemIndex);
-        return CoverFlowLayout.toSlotTransform(pose, m);
+        if (itemIndex < 0 || itemIndex >= itemCount) {
+            SlotTransform empty = new SlotTransform();
+            empty.alpha = 0f;
+            return empty;
+        }
+        float rel = itemIndex - getVisualOffset();
+        CoverFlowLayout.SlidePose pose = CoverFlowLayout.poseFromRelative(rel, metrics());
+        pose.itemIndex = itemIndex;
+        return CoverFlowLayout.toSlotTransform(pose, metrics());
     }
 
     public SlotTransform centerSlotTransform(float viewW, float viewH) {
-        return CoverFlowLayout.toSlotTransform(centerSlide, metrics());
+        return slotTransform(getVisualCenterIndex(), viewW, viewH, 0f);
     }
 
     public int findIndexForKey(java.util.List<FlowItem> items, String focusKey) {
@@ -215,10 +240,15 @@ public final class FlowEngine {
             }
         } else if (step < 0) {
             targetIndex = centerIndex;
-            step = targetIndex < centerSlide.itemIndex ? -1 : 1;
-            if (step > 0) updateScrollAnimation();
+            step = 1;
+            restartScrollSegment();
         } else {
-            targetIndex = Math.min(centerIndex + 2, itemCount - 1);
+            // Queue one album ahead of active target — never skip using stale centerIndex.
+            int next = Math.min(targetIndex + 1, itemCount - 1);
+            if (next != targetIndex) {
+                targetIndex = next;
+                restartScrollSegment();
+            }
         }
     }
 
@@ -230,15 +260,39 @@ public final class FlowEngine {
             }
         } else if (step > 0) {
             targetIndex = centerIndex;
-            step = targetIndex <= centerSlide.itemIndex ? -1 : 1;
-            if (step < 0) updateScrollAnimation();
+            step = -1;
+            restartScrollSegment();
         } else {
-            targetIndex = Math.max(0, centerIndex - 2);
+            int next = Math.max(targetIndex - 1, 0);
+            if (next != targetIndex) {
+                targetIndex = next;
+                restartScrollSegment();
+            }
         }
     }
 
     private void startAnimation() {
-        step = targetIndex < centerSlide.itemIndex ? -1 : 1;
+        step = targetIndex > (slideFrameInt >> 16) ? 1 : -1;
+        restartScrollSegment();
+    }
+
+    /** New ease segment from current frame toward queued targetIndex. */
+    private void restartScrollSegment() {
+        restartScrollSegment(0L);
+    }
+
+    private void restartScrollSegment(long nowMs) {
+        scrollAnimFromFixed = slideFrameInt;
+        scrollAnimToFixed = targetIndex << 16;
+        if (nowMs > 0L) {
+            scrollAnimStartMs = nowMs;
+            scrollAnimPendingStart = false;
+        } else {
+            scrollAnimStartMs = 0L;
+            scrollAnimPendingStart = true;
+        }
+        step = scrollAnimToFixed >= scrollAnimFromFixed ? 1 : -1;
+        if (scrollAnimToFixed == scrollAnimFromFixed) step = 0;
     }
 
     private void resetSlides(CoverFlowLayout.Metrics m) {
@@ -255,114 +309,64 @@ public final class FlowEngine {
             CoverFlowLayout.SlidePose si = leftSlides[i];
             si.itemIndex = centerIndex - 1 - i;
             si.angle = CoverFlowLayout.ITILT;
-            si.cx = -(m.offsetX + m.slideSpacing * i);
+            si.cx = -CoverFlowLayout.cxForSideRank(i + 1, m);
             si.cy = m.offsetY;
-            si.alpha = (i == 0) ? 128 : 256;
+            si.alpha = 256;
             si.drawBucket = 0;
             si.sideRank = i;
 
             si = rightSlides[i];
             si.itemIndex = centerIndex + 1 + i;
             si.angle = -CoverFlowLayout.ITILT;
-            si.cx = m.offsetX + m.slideSpacing * i;
+            si.cx = CoverFlowLayout.cxForSideRank(i + 1, m);
             si.cy = m.offsetY;
-            si.alpha = (i == 0) ? 128 : 256;
+            si.alpha = 256;
             si.drawBucket = 1;
             si.sideRank = i;
         }
     }
 
-    private void updateScrollAnimation() {
+    private void updateScrollAnimation(long nowMs) {
         if (step == 0) return;
-        CoverFlowLayout.Metrics m = metrics();
 
-        int speed = PictureFlowLayout.rockboxScrollSpeed(slideFrameInt, targetIndex);
-        slideFrameInt += speed * step;
+        long elapsed = nowMs - scrollAnimStartMs;
+        float t = Math.min(1f, elapsed / (float) SCROLL_MS);
+        float eased = easeOutCubic(t);
+        slideFrameInt = scrollAnimFromFixed
+                + Math.round((scrollAnimToFixed - scrollAnimFromFixed) * eased);
 
-        int index = slideFrameInt >> 16;
+        // Rockbox edge fade hint during scroll.
         int pos = slideFrameInt & 0xffff;
-        int neg = 65536 - pos;
-        int tick = step < 0 ? neg : pos;
-        float ftick = tick / 65536f;
         fade = pos / 256;
 
-        if (step < 0) index++;
-        if (centerIndex != index) {
-            centerIndex = index;
-            slideFrameInt = index << 16;
-            centerSlide.itemIndex = centerIndex;
-            for (int i = 0; i < CoverFlowLayout.SIDE_SLIDES; i++) {
-                leftSlides[i].itemIndex = centerIndex - 1 - i;
-                rightSlides[i].itemIndex = centerIndex + 1 + i;
-            }
-        }
-
-        centerSlide.angle = (step * tick * CoverFlowLayout.ITILT) >> 16;
-        centerSlide.cx = -step * m.offsetX * ftick;
-        centerSlide.cy = m.offsetY * ftick;
-
-        if (centerIndex == targetIndex) {
-            resetSlides(m);
-            slideFrameInt = centerIndex << 16;
-            step = 0;
-            fade = 256;
+        if (t >= 1f) {
+            finishScrollAtTarget();
             return;
         }
 
-        for (int i = 0; i < CoverFlowLayout.SIDE_SLIDES; i++) {
-            CoverFlowLayout.SlidePose si = leftSlides[i];
-            si.angle = CoverFlowLayout.ITILT;
-            si.cx = -(m.offsetX + m.slideSpacing * i + step * m.slideSpacing * ftick);
-            si.cy = m.offsetY;
-
-            si = rightSlides[i];
-            si.angle = -CoverFlowLayout.ITILT;
-            si.cx = m.offsetX + m.slideSpacing * i - step * m.slideSpacing * ftick;
-            si.cy = m.offsetY;
+        // Retarget direction if user reversed queue mid-segment.
+        if (targetIndex < (slideFrameInt >> 16) && step > 0) {
+            step = -1;
+            restartScrollSegment(nowMs);
+        } else if (targetIndex > (slideFrameInt >> 16) && step < 0) {
+            step = 1;
+            restartScrollSegment(nowMs);
         }
-
-        if (step > 0) {
-            float ftickNeg = neg / 65536f;
-            rightSlides[0].angle = -(neg * CoverFlowLayout.ITILT) >> 16;
-            rightSlides[0].cx = m.offsetX * ftickNeg;
-            rightSlides[0].cy = m.offsetY * ftickNeg;
-        } else {
-            float ftickPos = pos / 65536f;
-            leftSlides[0].angle = (pos * CoverFlowLayout.ITILT) >> 16;
-            leftSlides[0].cx = -m.offsetX * ftickPos;
-            leftSlides[0].cy = m.offsetY * ftickPos;
-        }
-
-        if (targetIndex < centerIndex && step > 0) step = -1;
-        if (targetIndex > centerIndex && step < 0) step = 1;
-
-        applyScrollAlphas();
     }
 
-    private void applyScrollAlphas() {
-        int n = CoverFlowLayout.SIDE_SLIDES;
-        if (step == 0) {
-            for (int i = 0; i < n; i++) {
-                leftSlides[i].alpha = (i == 0) ? 128 : 256;
-                rightSlides[i].alpha = (i == 0) ? 128 : 256;
-            }
-            centerSlide.alpha = 256;
-            return;
-        }
+    private static float easeOutCubic(float t) {
+        float u = 1f - t;
+        return 1f - u * u * u;
+    }
 
-        int alpha = ((step > 0) ? 0 : 128) - fade / 2;
-        for (int index = n - 1; index >= 0; index--) {
-            leftSlides[index].alpha = Math.max(0, Math.min(256, alpha));
-            alpha += 128;
-            if (alpha > 256) alpha = 256;
-        }
-        alpha = ((step > 0) ? 128 : 0) + fade / 2;
-        for (int index = n - 1; index >= 0; index--) {
-            rightSlides[index].alpha = Math.max(0, Math.min(256, alpha));
-            alpha += 128;
-            if (alpha > 256) alpha = 256;
-        }
-        centerSlide.alpha = 256;
+    private void finishScrollAtTarget() {
+        centerIndex = targetIndex;
+        slideFrameInt = targetIndex << 16;
+        step = 0;
+        fade = 256;
+        scrollAnimStartMs = 0L;
+        scrollAnimPendingStart = false;
+        resetSlides(metrics());
     }
 
     public int fillDrawOrder(int[] out) {
@@ -375,7 +379,10 @@ public final class FlowEngine {
         if (raw <= 1 || depthOut == null) return raw;
         CoverFlowLayout.Metrics m = metrics();
         for (int i = 0; i < raw; i++) {
-            depthOut[i] = CoverFlowLayout.depthOrderFromPose(poseForItem(out[i]), m);
+            float rel = out[i] - getVisualOffset();
+            CoverFlowLayout.SlidePose pose = CoverFlowLayout.poseFromRelative(rel, m);
+            pose.itemIndex = out[i];
+            depthOut[i] = CoverFlowLayout.depthOrderFromPose(pose, m);
         }
         for (int i = 1; i < raw; i++) {
             int idx = out[i];
@@ -393,42 +400,36 @@ public final class FlowEngine {
     }
 
     private int fillDrawOrderUnsorted(int[] out) {
+        if (itemCount <= 0) return 0;
+        float visual = getVisualOffset();
+        int lo = Math.max(0, (int) Math.floor(visual) - CoverFlowLayout.SIDE_SLIDES - 1);
+        int hi = Math.min(itemCount - 1, (int) Math.ceil(visual) + CoverFlowLayout.SIDE_SLIDES + 1);
+        CoverFlowLayout.Metrics m = metrics();
         int n = 0;
-        int startSide = step != 0 ? CoverFlowLayout.SIDE_SLIDES - 1 : CoverFlowLayout.SIDE_SLIDES - 2;
-        if (startSide < 0) startSide = 0;
-        for (int i = startSide; i >= 0; i--) {
-            if (n >= out.length) break;
-            CoverFlowLayout.SlidePose p = leftSlides[i];
-            if (p.itemIndex >= 0 && p.itemIndex < itemCount && p.alpha > 0) out[n++] = p.itemIndex;
-        }
-        for (int i = startSide; i >= 0; i--) {
-            if (n >= out.length) break;
-            CoverFlowLayout.SlidePose p = rightSlides[i];
-            if (p.itemIndex >= 0 && p.itemIndex < itemCount && p.alpha > 0) out[n++] = p.itemIndex;
-        }
-        if (n < out.length && centerSlide.itemIndex >= 0 && centerSlide.itemIndex < itemCount
-                && centerSlide.alpha > 0) {
-            out[n++] = centerSlide.itemIndex;
+        for (int idx = lo; idx <= hi && n < out.length; idx++) {
+            CoverFlowLayout.SlidePose pose = CoverFlowLayout.poseFromRelative(idx - visual, m);
+            if (pose.alpha > 0) out[n++] = idx;
         }
         return n;
     }
 
     private CoverFlowLayout.SlidePose poseForItem(int itemIndex) {
-        if (centerSlide.itemIndex == itemIndex) return centerSlide;
-        for (int i = 0; i < CoverFlowLayout.SIDE_SLIDES; i++) {
-            if (leftSlides[i].itemIndex == itemIndex) return leftSlides[i];
-            if (rightSlides[i].itemIndex == itemIndex) return rightSlides[i];
+        if (itemIndex < 0 || itemIndex >= itemCount) {
+            CoverFlowLayout.SlidePose empty = new CoverFlowLayout.SlidePose();
+            empty.itemIndex = -1;
+            empty.alpha = 0;
+            return empty;
         }
-        CoverFlowLayout.SlidePose empty = new CoverFlowLayout.SlidePose();
-        empty.itemIndex = -1;
-        empty.alpha = 0;
-        return empty;
+        CoverFlowLayout.SlidePose pose =
+                CoverFlowLayout.poseFromRelative(itemIndex - getVisualOffset(), metrics());
+        pose.itemIndex = itemIndex;
+        return pose;
     }
 
     /** Exposed for flip fan-out in {@link FlowView}. */
     CoverFlowLayout.SlidePose poseForItemPublic(int itemIndex) {
-        CoverFlowLayout.SlidePose p = poseForItem(itemIndex);
-        return p.itemIndex >= 0 ? p : null;
+        if (itemIndex < 0 || itemIndex >= itemCount) return null;
+        return poseForItem(itemIndex);
     }
 
     private static int clamp(int v, int lo, int hi) {

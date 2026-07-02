@@ -59,9 +59,9 @@
     <string name="settings_sub_report_problem">Settings: Report a Problem</string>
     <string name="settings_report_problem">Report a Problem</string>
     <string name="settings_contact_developer">Contact the developer</string>
-    <string name="settings_diag_auto_report">Send diagnostic info</string>
-    <string name="settings_diag_auto_report_on_hint">Crash and error logs are sent to the developer over Reach.</string>
-    <string name="settings_diag_auto_report_off_hint">Diagnostic logs are not sent automatically.</string>
+    <string name="settings_diag_auto_report">Background diagnostic reports</string>
+    <string name="settings_diag_auto_report_on_hint">Ship new crash and error logs over Reach in the background.</string>
+    <string name="settings_diag_auto_report_off_hint">No background log shipping. Opening Solar Development still sends a fresh bundle.</string>
     <string name="settings_report_intro">Report on GitHub or message us from this device when Reach is connected.</string>
     <string name="settings_report_intro_offline">Reach reporting needs Wi‑Fi and peer connectivity. GitHub is always available.</string>
     <string name="settings_report_from_device_focus_hint">Opens a private message thread to the Solar developer on Reach.</string>
@@ -131,6 +131,14 @@
     <string name="lib_artist_sort_recent">Recently added</string>
     <string name="lib_song_sort">Sort songs by</string>
     <string name="lib_album_song_sort">Sort album tracks by</string>
+    <string name="lib_album_rack_sort">Sort albums by</string>
+    <string name="lib_album_rack_sort_title">Title A–Z</string>
+    <string name="lib_album_rack_sort_artist">Artist A–Z, then title</string>
+    <string name="lib_album_rack_sort_recent">Recently added</string>
+    <string name="lib_album_rack_sort_tracks">Most tracks</string>
+    <string name="lib_context_sort_albums">Sort albums: %1$s</string>
+    <string name="lib_context_norm_album">Normalize album case</string>
+    <string name="context_open_in_library">Open in Library</string>
     <string name="lib_album_owner_sub">Album owner subtitles</string>
     <string name="lib_guest_song_sub">Guest song subtitles</string>
     <string name="lib_context_sort_artists">Sort artists: %1$s</string>
@@ -145,6 +153,7 @@
     <string name="lib_preview_artist_sort">Order the Artists list A–Z, by track count, or by recently added.</string>
     <string name="lib_preview_song_sort">Default sort for song lists in Artists, Albums, Genres, and playlists.</string>
     <string name="lib_preview_album_song_sort">Default sort for album tracks.</string>
+    <string name="lib_preview_album_rack_sort">Order shared by Library Albums and Flow Albums.</string>
     <string name="lib_preview_album_sub">Under albums, show the album owner when it differs from the track artist.</string>
     <string name="lib_preview_guest_sub">On guest tracks, show which artist owns the album below the song title.</string>
     <string name="status_library_all_songs">Library: All Songs</string>
@@ -445,7 +454,8 @@
     <string name="library_sort_label">Sort: %1$s</string>
     <string name="library_sort_title">Title</string>
     <string name="library_sort_artist">Artist</string>
-    <string name="library_sort_album">Track</string>
+    <string name="library_sort_album">Album</string>
+    <string name="library_sort_track">Track #</string>
     <string name="library_sort_date">Date added</string>
     <string name="library_sort_now">Sort: %1$s</string>
     <string name="library_playlists_local_section">Local playlists</string>
@@ -1090,6 +1100,7 @@
     <string name="settings_debug_show_error_toasts">Error Toasts</string>
     <string name="settings_debug_show_error_toasts_hint">Soulseek and Deezer download warnings</string>
     <string name="settings_debug_dev_support_experiment">Developer support (experiment)</string>
+    <string name="settings_debug_radio_experiment">Radio (experiment)</string>
     <string name="settings_debug_flow_enabled">Flow Mode</string>
     <string name="settings_debug_flow_ok_library">OK → Library</string>
     <string name="settings_debug_flow_theme">Theme Decoration</string>
@@ -1113,6 +1124,8 @@
     <string name="library_art_cache_progress">Building album art… %1$d / %2$d</string>
     <string name="context_wifi_scanning">Scanning for networks…</string>
     <string name="context_bluetooth_scanning">Scanning for devices…</string>
+    <string name="bluetooth_status_paired">Paired</string>
+    <string name="bluetooth_status_nearby">Nearby</string>
     <string name="dialog_clear_cache_title">Clear Cache</string>
     <string name="dialog_clear_cache_message">Delete all downloaded album covers to free up storage space?</string>
     <string name="dialog_clear_cache_confirm">Clear</string>

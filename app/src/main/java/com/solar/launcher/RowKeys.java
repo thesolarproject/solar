@@ -64,6 +64,7 @@ public final class RowKeys {
     public static final String LIB_ARTIST_SORT = "library.artist_sort";
     public static final String LIB_SONG_SORT = "library.song_sort";
     public static final String LIB_ALBUM_SONG_SORT = "library.album_song_sort";
+    public static final String LIB_ALBUM_RACK_SORT = "library.album_rack_sort";
     public static final String LIB_ALBUM_SUB = "library.album_sub";
     public static final String LIB_GUEST_SUB = "library.guest_sub";
     public static final String ABOUT = "settings.about";
@@ -75,6 +76,7 @@ public final class RowKeys {
     public static final String DEBUG_JJ_THEMES = "settings.debug.jj_themes";
     public static final String DEBUG_SHOW_ERROR_TOASTS = "settings.debug.show_error_toasts";
     public static final String DEBUG_DEV_SUPPORT_EXPERIMENT = "settings.debug.dev_support_experiment";
+    public static final String DEBUG_RADIO_EXPERIMENT = "settings.debug.radio_experiment";
     public static final String DEBUG_FLOW_ENABLED = "settings.debug.flow_enabled";
     public static final String DEBUG_FLOW_OK_LIBRARY = "settings.debug.flow_ok_library";
     public static final String DEBUG_FLOW_THEME = "settings.debug.flow_theme";
@@ -222,6 +224,7 @@ public final class RowKeys {
         if (DEBUG_JJ_THEMES.equals(rowKey)) return R.string.settings_debug_jj_themes;
         if (DEBUG_SHOW_ERROR_TOASTS.equals(rowKey)) return R.string.settings_debug_show_error_toasts;
         if (DEBUG_DEV_SUPPORT_EXPERIMENT.equals(rowKey)) return R.string.settings_debug_dev_support_experiment;
+        if (DEBUG_RADIO_EXPERIMENT.equals(rowKey)) return R.string.settings_debug_radio_experiment;
         if (DEBUG_FLOW_ENABLED.equals(rowKey)) return R.string.settings_debug_flow_enabled;
         if (DEBUG_FLOW_OK_LIBRARY.equals(rowKey)) return R.string.settings_debug_flow_ok_library;
         if (DEBUG_FLOW_THEME.equals(rowKey)) return R.string.settings_debug_flow_theme;

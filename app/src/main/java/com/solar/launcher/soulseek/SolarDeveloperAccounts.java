@@ -27,6 +27,9 @@ public final class SolarDeveloperAccounts {
     /** Prefix on auto diagnostic PM bodies (hidden from support thread UI). */
     public static final String DIAG_MARKER = "\u0001SOLAR_DIAG\u0001";
 
+    /** Prefix on stored inbound developer PMs — preserves wire dev username in virtual thread. */
+    public static final String DEV_FROM_MARKER = "\u0001SOLAR_DEV_FROM\u0001";
+
     public static final String DIAG_SUFFIX = "-diag";
     public static final int USERNAME_MAX_LEN = 20;
 
@@ -117,6 +120,44 @@ public final class SolarDeveloperAccounts {
 
     public static boolean isAutoDiagnosticText(String text) {
         return text != null && text.contains(DIAG_MARKER);
+    }
+
+    /** Stored inbound developer PM with wire sender attribution. */
+    public static final class DevIncoming {
+        public final String fromDev;
+        public final String body;
+
+        DevIncoming(String fromDev, String body) {
+            this.fromDev = fromDev != null ? fromDev : "";
+            this.body = body != null ? body : "";
+        }
+    }
+
+    /** Prefix virtual-thread storage with the wire dev account name. */
+    public static String packDevIncoming(String fromDev, String text) {
+        String dev = fromDev != null ? fromDev.trim() : "";
+        String body = text != null ? text : "";
+        if (dev.isEmpty()) return body;
+        return DEV_FROM_MARKER + dev + "\n" + body;
+    }
+
+    public static boolean isDevIncoming(String text) {
+        return text != null && text.startsWith(DEV_FROM_MARKER);
+    }
+
+    /** Strip dev-from prefix for display; pass-through when not prefixed. */
+    public static DevIncoming parseDevIncoming(String text) {
+        if (!isDevIncoming(text)) {
+            return new DevIncoming("", text != null ? text : "");
+        }
+        String rest = text.substring(DEV_FROM_MARKER.length());
+        int nl = rest.indexOf('\n');
+        if (nl < 0) return new DevIncoming(rest.trim(), "");
+        return new DevIncoming(rest.substring(0, nl).trim(), rest.substring(nl + 1));
+    }
+
+    public static String displayBody(String text) {
+        return parseDevIncoming(text).body;
     }
 
     /** Derive -diag username from main Reach username (max 20 chars). */

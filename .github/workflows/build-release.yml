@@ -24,6 +24,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Record build start time (UTC)
+        run: echo "SOURCE_DATE_EPOCH=$(date -u +%s)" >> "$GITHUB_ENV"
+
       - name: Prepare release metadata
         id: meta
         env:
@@ -133,7 +136,7 @@ jobs:
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: Solar ${{ steps.meta.outputs.version_name }} (${{ steps.meta.outputs.short_sha }})
+          name: ${{ steps.meta.outputs.version_name }}
           body_path: RELEASE_NOTES.md
           files: |
             app/build/outputs/apk/release/app-release.apk

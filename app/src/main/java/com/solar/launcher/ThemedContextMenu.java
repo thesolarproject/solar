@@ -43,9 +43,12 @@ public final class ThemedContextMenu {
     private static final int TAG_RIBBON_SLOT = 0x70ca0014;
     private static final int TAG_QUEUE_DROP = 0x70ca0014;
     private static final int TAG_DECOR = 0x70ca0016;
+    private static final int TAG_STATE_SPIN = 0x70ca0017;
 
     /** Context-menu row: muted label + indeterminate spinner (Wi‑Fi/BT scan footer). */
     public static final String ICON_ROW_LOADING = "__loading__";
+    /** Right-column state sentinel — indeterminate spinner while BT A2DP is connecting. */
+    public static final String STATE_CONNECTING = "__connecting__";
 
     public static final class QueueRowSpec {
         public final String title;
@@ -1551,15 +1554,11 @@ public final class ThemedContextMenu {
             if (isHeaderRow(i)) continue;
             View row = itemsHost.getChildAt(i);
             if (row == null) continue;
-            TextView state = (TextView) row.findViewWithTag(TAG_STATE);
-            if (state == null) continue;
             String st = itemStateTexts != null && i < itemStateTexts.length ? itemStateTexts[i] : null;
-            if (st != null && st.length() > 0) {
-                state.setText(st);
-                state.setVisibility(View.VISIBLE);
-            } else {
-                state.setText("");
-                state.setVisibility(View.GONE);
+            String prior = rowStateTextFromView(row);
+            String next = st != null ? st : "";
+            if (!prior.equals(next)) {
+                applyRowState(row, next);
             }
         }
         refreshAll();
@@ -1646,21 +1645,12 @@ public final class ThemedContextMenu {
             View row = itemsHost.getChildAt(i);
             if (row == null) continue;
             String st = itemStateTexts != null && i < itemStateTexts.length ? itemStateTexts[i] : null;
-            TextView state = (TextView) row.findViewWithTag(TAG_STATE);
             boolean changed = false;
-            if (state != null) {
-                String prior = state.getVisibility() == View.VISIBLE ? state.getText().toString() : "";
-                String next = st != null ? st : "";
-                if (!prior.equals(next)) {
-                    changed = true;
-                    if (next.length() > 0) {
-                        state.setText(next);
-                        state.setVisibility(View.VISIBLE);
-                    } else {
-                        state.setText("");
-                        state.setVisibility(View.GONE);
-                    }
-                }
+            String prior = rowStateTextFromView(row);
+            String next = st != null ? st : "";
+            if (!prior.equals(next)) {
+                changed = true;
+                applyRowState(row, next);
             }
             if (changed) pulseWifiTickerRow(row);
         }
@@ -1684,6 +1674,10 @@ public final class ThemedContextMenu {
 
     private String rowStateTextFromView(View row) {
         if (row == null) return "";
+        ProgressBar spin = (ProgressBar) row.findViewWithTag(TAG_STATE_SPIN);
+        if (spin != null && spin.getVisibility() == View.VISIBLE) {
+            return STATE_CONNECTING;
+        }
         Object tag = row.getTag(TAG_STATE);
         if (tag instanceof TextView) {
             TextView state = (TextView) tag;
@@ -1833,10 +1827,45 @@ public final class ThemedContextMenu {
     }
 
     private void updateRowStateQuiet(View row, String stateText) {
-        if (row == null) return;
+        applyRowState(row, stateText);
+    }
+
+    /** Right column: muted text, checkmark, or connecting spinner. */
+    private void applyRowState(View row, String stateText) {
+        if (row == null || !(row instanceof FrameLayout)) return;
+        FrameLayout frame = (FrameLayout) row;
         Object tag = row.getTag(TAG_STATE);
         TextView state = tag instanceof TextView ? (TextView) tag
                 : (TextView) row.findViewWithTag(TAG_STATE);
+        ProgressBar spin = (ProgressBar) row.findViewWithTag(TAG_STATE_SPIN);
+        float density = activity.getResources().getDisplayMetrics().density;
+        int arrowW = 0;
+        Object arrowTag = row.getTag(TAG_ARROW);
+        if (arrowTag instanceof ImageView) {
+            ImageView arrow = (ImageView) arrowTag;
+            if (arrow.getDrawable() != null) arrowW = arrow.getWidth();
+        }
+        int spinSize = (int) (rowHeightPx * 0.55f);
+        int spinMarginEnd = arrowW + (int) (16 * density);
+
+        if (STATE_CONNECTING.equals(stateText)) {
+            if (state != null) {
+                state.setText("");
+                state.setVisibility(View.GONE);
+            }
+            if (spin == null) {
+                spin = new ProgressBar(activity, null, android.R.attr.progressBarStyleSmall);
+                spin.setTag(TAG_STATE_SPIN);
+                FrameLayout.LayoutParams spinLp = new FrameLayout.LayoutParams(spinSize, spinSize);
+                spinLp.gravity = Gravity.CENTER_VERTICAL | Gravity.END;
+                spinLp.rightMargin = spinMarginEnd;
+                frame.addView(spin, spinLp);
+            } else {
+                spin.setVisibility(View.VISIBLE);
+            }
+            return;
+        }
+        if (spin != null) spin.setVisibility(View.GONE);
         if (state == null) return;
         if (stateText != null && stateText.length() > 0) {
             state.setText(stateText);
@@ -3982,7 +4011,9 @@ public final class ThemedContextMenu {
         int iconSize = (int) (rowHeightPx * 0.72f);
         int iconGap = (int) (4 * density);
         boolean hasState = stateText != null && stateText.length() > 0;
-        boolean stackHint = hasState
+        boolean connectingState = STATE_CONNECTING.equals(stateText);
+        if (connectingState) hasState = true;
+        boolean stackHint = hasState && !connectingState
                 && (stateText.length() > 20
                         || (panelWidthPx > 0 && panelWidthPx < (int) (400 * density)));
 
@@ -4039,6 +4070,7 @@ public final class ThemedContextMenu {
                     LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
             row.addView(stack, stackLp);
             row.setTag(TAG_STATE, state);
+            applyRowState(row, stateText);
         } else {
             FrameLayout.LayoutParams labelLp = new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
@@ -4047,7 +4079,6 @@ public final class ThemedContextMenu {
             row.addView(label, labelLp);
             if (hasState) {
                 TextView state = new TextView(activity);
-                state.setText(stateText);
                 state.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
                 state.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, menuTextPx * 0.9f);
                 state.setSingleLine(true);
@@ -4060,6 +4091,7 @@ public final class ThemedContextMenu {
                 stateLp.rightMargin = arrowW + arrowMarginEnd + (int) (6 * density);
                 row.addView(state, stateLp);
                 row.setTag(TAG_STATE, state);
+                applyRowState(row, stateText);
             }
         }
 

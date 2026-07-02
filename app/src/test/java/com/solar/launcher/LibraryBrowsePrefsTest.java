@@ -30,6 +30,7 @@ public class LibraryBrowsePrefsTest {
         assertEquals(LibraryBrowsePrefs.FILTER_ALL, prefs.artistFilter());
         assertEquals(LibraryBrowsePrefs.ARTIST_SORT_NAME, prefs.artistSort());
         assertEquals(LibraryBrowsePrefs.SONG_SORT_TITLE, prefs.songSort());
+        assertEquals(LibraryBrowsePrefs.SONG_SORT_ALBUM, prefs.albumSongSort());
         assertTrue(prefs.albumOwnerSubtitles());
         assertTrue(prefs.guestSongSubtitles());
     }
@@ -48,6 +49,17 @@ public class LibraryBrowsePrefsTest {
 
         for (int i = 0; i < 4; i++) prefs.cycleSongSort();
         assertEquals(LibraryBrowsePrefs.SONG_SORT_TITLE, prefs.songSort());
+
+        for (int i = 0; i < 4; i++) prefs.cycleAlbumSongSort();
+        assertEquals(LibraryBrowsePrefs.SONG_SORT_ALBUM, prefs.albumSongSort());
+    }
+
+    @Test
+    public void albumSortLabelDiffersForTrackLists() {
+        assertEquals(R.string.library_sort_album,
+                LibraryBrowsePrefs.songSortLabelRes(LibraryBrowsePrefs.SONG_SORT_ALBUM, false));
+        assertEquals(R.string.library_sort_track,
+                LibraryBrowsePrefs.songSortLabelRes(LibraryBrowsePrefs.SONG_SORT_ALBUM, true));
     }
 
     /** Minimal in-memory SharedPreferences for JVM unit tests. */

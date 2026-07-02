@@ -36,7 +36,7 @@ SHORT_SHA="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unkn
 
 # ponytail: same commit on main/nightly gets identical YYYYMMDD-HHMM (only nightly- prefix differs).
 if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
-    SOURCE_DATE_EPOCH="$(git -C "$REPO_ROOT" log -1 --format=%ct 2>/dev/null || date +%s)"
+    SOURCE_DATE_EPOCH="$(date -u +%s)"
     export SOURCE_DATE_EPOCH
 fi
 

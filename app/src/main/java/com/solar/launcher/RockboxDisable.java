@@ -8,9 +8,9 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 
 /**
- * One-shot {@code pm disable org.rockbox} on Solar ROM first boot or first Solar launch.
- * ponytail: marker {@code /data/data/.solar_rom_home_ready} — skipped after first run so
- * Settings → Switch to Rockbox still works; switch-to-stock.sh re-disables on return.
+ * Disable org.rockbox while Solar is the active launcher.
+ * Marker {@code /data/data/.solar_rom_home_ready} skips the shell script only when Rockbox
+ * is already disabled — if Rockbox was re-enabled, recovery runs again on every launch.
  */
 public final class RockboxDisable {
     private static final String TAG = "RockboxDisable";
@@ -20,22 +20,27 @@ public final class RockboxDisable {
 
     private RockboxDisable() {}
 
-    /** Run when Rockbox is co-installed — re-run disable if both launchers ended up enabled. */
+    /** Run when Rockbox is co-installed — re-disable whenever both launchers are enabled. */
     public static void ensureOnce(Context context) {
         if (context == null) return;
         if (!LauncherSwitch.isRockboxAvailable(context)) return;
         if (!isSolarEnabled(context)) return;
-        final boolean dualEnabled = LauncherSwitch.isRockboxEnabled(context);
-        if (!dualEnabled && new File(MARKER_PATH).exists()) return;
+        final boolean rockboxEnabled = LauncherSwitch.isRockboxEnabled(context);
+        if (!rockboxEnabled && new File(MARKER_PATH).exists()) return;
         new Thread(new Runnable() {
             @Override
             public void run() {
                 try {
-                    if (!dualEnabled && new File(MARKER_PATH).exists()) return;
-                    boolean ok = runDisableScript(context);
-                    Log.i(TAG, ok ? "Rockbox disabled (one-shot)" : "disable script failed");
+                    if (!rockboxEnabled && new File(MARKER_PATH).exists()) return;
+                    boolean scriptOk = runDisableScript(context);
+                    if (!scriptOk || LauncherSwitch.isRockboxEnabled(context)) {
+                        LauncherSwitch.assertRockboxDisabledWhileSolarHome(context);
+                    } else {
+                        Log.i(TAG, "Rockbox disabled for Solar");
+                    }
                 } catch (Exception e) {
                     Log.w(TAG, "ensureOnce failed: " + e.getMessage());
+                    LauncherSwitch.assertRockboxDisabledWhileSolarHome(context);
                 }
             }
         }, "RockboxDisable").start();

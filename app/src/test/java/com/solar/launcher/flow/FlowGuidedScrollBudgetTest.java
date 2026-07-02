@@ -25,6 +25,13 @@ public class FlowGuidedScrollBudgetTest {
     }
 
     @Test
+    public void handoffZipJumpsToNeighborThenOneScroll() {
+        assertEquals(1, FlowGuidedScrollBudget.handoffStepDelta(1));
+        assertEquals(4, FlowGuidedScrollBudget.handoffStepDelta(5));
+        assertEquals(14, FlowGuidedScrollBudget.handoffStepDelta(15));
+    }
+
+    @Test
     public void expiredBudgetJumpsRemainingWhenFar() {
         assertEquals(15, FlowGuidedScrollBudget.stepDelta(15, 0L));
     }

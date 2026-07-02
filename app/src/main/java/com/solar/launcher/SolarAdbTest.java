@@ -44,4 +44,12 @@ final class SolarAdbTest {
     static void avrcpHarness(String phase, String detail) {
         Log.i(TAG, "avrcp_harness " + phase + " " + detail);
     }
+
+    /** Flow carousel geometry — scripts/test_flow_adb.sh checks neighbor peek. */
+    static void flowCarousel(int focus, int itemCount, float centerCx, float rightCx,
+            float rightRotY, float rightWidth) {
+        Log.i(TAG, "flow_carousel focus=" + focus + " count=" + itemCount
+                + " centerCx=" + centerCx + " rightCx=" + rightCx
+                + " rightRotY=" + rightRotY + " rightWidth=" + rightWidth);
+    }
 }

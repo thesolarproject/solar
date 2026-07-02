@@ -87,21 +87,34 @@ public final class LauncherSwitch {
                             "pm enable com.android.systemui/com.android.systemui.usb.UsbStorageActivity"}).waitFor();
                 } catch (Exception ignored) {}
 
-                if (!isRockboxEnabled(context)) return;
-                android.util.Log.w("LauncherSwitch", "org.rockbox enabled while Solar is home — disabling");
-                try {
-                    Runtime.getRuntime().exec(
-                            new String[]{"su", "-c", "am force-stop " + ROCKBOX_PACKAGE}).waitFor();
-                    Thread.sleep(300);
-                    int code = Runtime.getRuntime().exec(
-                            new String[]{"su", "-c", "pm disable " + ROCKBOX_PACKAGE}).waitFor();
-                    if (code != 0) {
-                        android.util.Log.w("LauncherSwitch", "pm disable org.rockbox exited " + code);
-                    } else if (isRockboxEnabled(context)) {
-                        android.util.Log.w("LauncherSwitch", "org.rockbox still enabled after pm disable");
+                for (int attempt = 0; attempt < 30; attempt++) {
+                    if (!isRockboxEnabled(context)) return;
+                    if (attempt == 0) {
+                        android.util.Log.w("LauncherSwitch",
+                                "org.rockbox enabled while Solar is home — disabling");
                     }
-                } catch (Exception e) {
-                    android.util.Log.w("LauncherSwitch", "disable Rockbox failed: " + e.getMessage());
+                    try {
+                        Runtime.getRuntime().exec(
+                                new String[]{"su", "-c", "am force-stop " + ROCKBOX_PACKAGE}).waitFor();
+                        Thread.sleep(300);
+                        int code = Runtime.getRuntime().exec(
+                                new String[]{"su", "-c", "pm disable " + ROCKBOX_PACKAGE}).waitFor();
+                        if (code != 0) {
+                            android.util.Log.w("LauncherSwitch",
+                                    "pm disable org.rockbox exited " + code);
+                        }
+                    } catch (Exception e) {
+                        android.util.Log.w("LauncherSwitch",
+                                "disable Rockbox failed: " + e.getMessage());
+                    }
+                    if (!isRockboxEnabled(context)) return;
+                    try {
+                        Thread.sleep(1000L);
+                    } catch (InterruptedException ignored) {}
+                }
+                if (isRockboxEnabled(context)) {
+                    android.util.Log.e("LauncherSwitch",
+                            "org.rockbox still enabled after disable retries");
                 }
             }
         }, "RockboxAutoDisable").start();

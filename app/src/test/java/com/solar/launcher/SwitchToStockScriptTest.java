@@ -30,6 +30,8 @@ public class SwitchToStockScriptTest {
         assertTrue(disable >= 0);
         assertTrue(enableSolar >= 0);
         assertTrue(disable < enableSolar);
+        assertTrue(body.contains("verify_rockbox_disabled"));
+        assertTrue(body.contains("refusing to enable Solar"));
     }
 
     private static String readFile(File f) throws Exception {

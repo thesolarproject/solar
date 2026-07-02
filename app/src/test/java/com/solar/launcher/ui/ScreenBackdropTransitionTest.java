@@ -1,5 +1,7 @@
 package com.solar.launcher.ui;
 
+import android.widget.ImageView;
+
 import org.junit.Test;
 
 import static org.junit.Assert.assertFalse;
@@ -47,6 +49,9 @@ public class ScreenBackdropTransitionTest {
 
             @Override
             public void bindPlayerBlurEarly() {}
+
+            @Override
+            public void bindOutgoingPlayerBackdrop(ImageView wall, ImageView mask) {}
 
             @Override
             public int screenWidthPx() {

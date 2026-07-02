@@ -347,6 +347,8 @@
     <string name="bluetooth_scanning">검색 중…</string>
     <string name="bluetooth_scan_complete">검색 완료 (다시 시도)</string>
     <string name="bluetooth_off">블루투스 꺼짐</string>
+    <string name="bluetooth_status_paired">페어링됨</string>
+    <string name="bluetooth_status_nearby">주변</string>
     <string name="wifi_power">Wi-Fi 전원</string>
     <string name="wifi_networks_header">Wi-Fi 네트워크</string>
     <string name="wifi_scan_networks">🔍 네트워크 검색</string>
@@ -376,6 +378,7 @@
     <string name="library_sort_title">제목</string>
     <string name="library_sort_artist">아티스트</string>
     <string name="library_sort_album">앨범</string>
+    <string name="library_sort_track">트랙 번호</string>
     <string name="library_sort_date">추가 날짜</string>
     <string name="library_sort_now">정렬: %1$s</string>
     <string name="library_playlists_local_section">로컬 재생목록</string>

@@ -42,7 +42,9 @@ public final class SolarDiagnosticReporter {
         /** Cold start / first internet this process — ship crash+logcat even if manifest matches. */
         STARTUP,
         /** Periodic background pass — only new/changed files. */
-        ROUTINE
+        ROUTINE,
+        /** Solar Development thread opened — full fresh bundle every time. */
+        SUPPORT_OPEN
     }
 
     private static final AtomicBoolean scanRunning = new AtomicBoolean(false);
@@ -62,12 +64,15 @@ public final class SolarDiagnosticReporter {
         return isEnabled(prefs) && SolarDeveloperAccounts.isExperimentEnabled(prefs);
     }
 
-    /** User opened Solar Development thread — startup-priority log ship (hidden wire PMs). */
+    /**
+     * Solar Development thread opened — always ship a full diagnostic bundle.
+     * Independent of {@link #PREF_DIAG_AUTO_REPORT} (background-only toggle).
+     */
     public static void shipOnDeveloperSupportOpen(final Context context, final SharedPreferences prefs) {
         if (context == null || prefs == null) return;
         if (!SolarDeveloperAccounts.isExperimentEnabled(prefs)) return;
         if (!ReachPolicy.isMasterEnabled(prefs)) return;
-        startScan(context, prefs, ScanMode.STARTUP);
+        startScan(context, prefs, ScanMode.SUPPORT_OPEN);
     }
 
     /** Called from {@link com.solar.launcher.SolarApplication} on every process start. */
@@ -176,7 +181,9 @@ public final class SolarDiagnosticReporter {
                 updated.put(k, manifest.optLong(k, 0));
             }
             if (mode == ScanMode.STARTUP) {
-                sendStartupBanner(context, prefs, main.username, diag.username);
+                sendSessionBanner(context, prefs, main.username, diag.username, "session_start");
+            } else if (mode == ScanMode.SUPPORT_OPEN) {
+                sendSessionBanner(context, prefs, main.username, diag.username, "support_thread_open");
             }
             int shipped = 0;
             for (LogSource src : sources) {
@@ -216,6 +223,7 @@ public final class SolarDiagnosticReporter {
 
     static boolean shouldShipSource(String label, JSONObject manifest, String path, long mtime,
             ScanMode mode) {
+        if (mode == ScanMode.SUPPORT_OPEN) return true;
         if (mode == ScanMode.STARTUP && isPriorityStartupSource(label)) return true;
         return manifest.optLong(path, -1) != mtime;
     }
@@ -230,10 +238,10 @@ public final class SolarDiagnosticReporter {
         return false;
     }
 
-    private static void sendStartupBanner(Context context, SharedPreferences prefs,
-            String mainUser, String diagUser) {
+    private static void sendSessionBanner(Context context, SharedPreferences prefs,
+            String mainUser, String diagUser, String event) {
         String body = SolarDeveloperAccounts.DIAG_MARKER
-                + "event: session_start\n"
+                + "event: " + event + "\n"
                 + "user: " + (mainUser != null ? mainUser : "?") + "\n"
                 + "diag: " + (diagUser != null ? diagUser : "?") + "\n"
                 + "sdk: " + Build.VERSION.SDK_INT + "\n"

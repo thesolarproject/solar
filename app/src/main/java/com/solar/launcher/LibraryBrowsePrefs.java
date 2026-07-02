@@ -23,6 +23,12 @@ public final class LibraryBrowsePrefs {
     public static final int SONG_SORT_ALBUM = 2;
     public static final int SONG_SORT_DATE = 3;
 
+    /** Shared album rack sort — Library Albums tab and Flow Albums carousel. */
+    public static final int ALBUM_RACK_SORT_TITLE = 0;
+    public static final int ALBUM_RACK_SORT_ARTIST_THEN_TITLE = 1;
+    public static final int ALBUM_RACK_SORT_RECENT = 2;
+    public static final int ALBUM_RACK_SORT_TRACK_COUNT = 3;
+
     private static final String PREFS = "SOLAR_SETTINGS";
     private static final String KEY_SPLIT = "lib_split_credits";
     private static final String KEY_NORM_ALBUM = "lib_normalize_album_case";
@@ -117,6 +123,17 @@ public final class LibraryBrowsePrefs {
     }
 
     private static final String KEY_ALBUM_SONG_SORT = "lib_album_song_sort";
+    private static final String KEY_ALBUM_RACK_SORT = "lib_album_rack_sort";
+
+    public int albumRackSort() {
+        return prefs.getInt(KEY_ALBUM_RACK_SORT, ALBUM_RACK_SORT_TITLE);
+    }
+
+    public int cycleAlbumRackSort() {
+        int next = (albumRackSort() + 1) % 4;
+        prefs.edit().putInt(KEY_ALBUM_RACK_SORT, next).commit();
+        return next;
+    }
 
     public int albumSongSort() {
         return prefs.getInt(KEY_ALBUM_SONG_SORT, SONG_SORT_ALBUM);
@@ -153,10 +170,25 @@ public final class LibraryBrowsePrefs {
         }
     }
 
+    public static int albumRackSortLabelRes(int sort) {
+        switch (sort) {
+            case ALBUM_RACK_SORT_ARTIST_THEN_TITLE: return R.string.lib_album_rack_sort_artist;
+            case ALBUM_RACK_SORT_RECENT: return R.string.lib_album_rack_sort_recent;
+            case ALBUM_RACK_SORT_TRACK_COUNT: return R.string.lib_album_rack_sort_tracks;
+            default: return R.string.lib_album_rack_sort_title;
+        }
+    }
+
+    /** Song-list sort label; album-track lists use {@code albumTrackList} for track-number mode. */
     public static int songSortLabelRes(int sort) {
+        return songSortLabelRes(sort, false);
+    }
+
+    public static int songSortLabelRes(int sort, boolean albumTrackList) {
         switch (sort) {
             case SONG_SORT_ARTIST: return R.string.library_sort_artist;
-            case SONG_SORT_ALBUM: return R.string.library_sort_album;
+            case SONG_SORT_ALBUM:
+                return albumTrackList ? R.string.library_sort_track : R.string.library_sort_album;
             case SONG_SORT_DATE: return R.string.library_sort_date;
             default: return R.string.library_sort_title;
         }
@@ -172,6 +204,7 @@ public final class LibraryBrowsePrefs {
         if (RowKeys.LIB_ARTIST_SORT.equals(rowKey)) return R.string.lib_preview_artist_sort;
         if (RowKeys.LIB_SONG_SORT.equals(rowKey)) return R.string.lib_preview_song_sort;
         if (RowKeys.LIB_ALBUM_SONG_SORT.equals(rowKey)) return R.string.lib_preview_album_song_sort;
+        if (RowKeys.LIB_ALBUM_RACK_SORT.equals(rowKey)) return R.string.lib_preview_album_rack_sort;
         if (RowKeys.LIB_ALBUM_SUB.equals(rowKey)) return R.string.lib_preview_album_sub;
         if (RowKeys.LIB_GUEST_SUB.equals(rowKey)) return R.string.lib_preview_guest_sub;
         return 0;

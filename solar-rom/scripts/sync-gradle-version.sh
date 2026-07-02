@@ -23,6 +23,10 @@ else
     BRANCH="nightly"
 fi
 
+if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
+    export SOURCE_DATE_EPOCH="$(date -u +%s)"
+fi
+
 eval "$(python3 "$RESOLVE" "$BRANCH" "$GRADLE")"
 python3 - "$GRADLE" "$version_name" "$version_code" <<'PY'
 import re, sys

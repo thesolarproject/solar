@@ -6,6 +6,8 @@ package com.solar.launcher.flow;
 public final class FlowGuidedScrollBudget {
 
     public static final long MAX_MS = 2000L;
+    /** NP-back zip path uses {@link #handoffStepDelta} — one wheel anim at the end. */
+    public static final long HANDOFF_SCROLL_MS = 360L;
     /** Measured Rockbox step on Y1 — budget uses this to decide jump vs wheel scroll. */
     public static final long MS_PER_WHEEL_STEP = 380L;
 
@@ -24,5 +26,15 @@ public final class FlowGuidedScrollBudget {
         int animStepsFit = (int) Math.max(1, budgetLeftMs / MS_PER_WHEEL_STEP);
         if (remaining <= animStepsFit) return 1;
         return Math.max(1, (remaining + animStepsFit - 1) / animStepsFit);
+    }
+
+    /**
+     * NP-back handoff zip — jump to neighbor, one animated wheel step into morph.
+     * @return albums to advance this tick (1 = scroll anim, &gt;1 = instant index jump)
+     */
+    public static int handoffStepDelta(int remaining) {
+        if (remaining <= 0) return 0;
+        if (remaining == 1) return 1;
+        return remaining - 1;
     }
 }

@@ -60,9 +60,9 @@ public final class SolarDeveloperOutbox {
             if (item == null) continue;
             String body = item.optString("body", "");
             if (body.isEmpty()) continue;
-            boolean diagOk = SolarDeveloperMessaging.sendViaDiagSession(ctx, prefs,
+            boolean sent = SolarDeveloperMessaging.sendWireFanOut(ctx, prefs, mainClient,
                     SolarDeveloperAccounts.developerUsernames(), body);
-            if (diagOk) {
+            if (sent) {
                 delivered++;
             } else {
                 remaining.put(item);

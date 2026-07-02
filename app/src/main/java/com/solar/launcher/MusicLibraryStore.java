@@ -24,6 +24,7 @@ public class MusicLibraryStore extends SQLiteOpenHelper {
     private static final int DB_VERSION = 3;
 
     private static MusicLibraryStore instance;
+    private boolean legacyTrackNumbersMigrated;
 
     /** Cached row — maps to {@link MainActivity}'s SongItem fields. */
     public static final class Track {
@@ -161,20 +162,27 @@ public class MusicLibraryStore extends SQLiteOpenHelper {
         return null;
     }
 
-    /** True when cached row matches current file stat — skip MediaMetadataRetriever.
-     *  ponytail: also re-scan when track_number is 0 (upgrade from v1 left zeros). */
+    /** True when cached row matches current file stat — skip MediaMetadataRetriever. */
     public boolean isFresh(File file) {
+        migrateLegacyZeroTrackNumbers();
         if (file == null || !file.isFile()) return false;
         Track t = get(file.getAbsolutePath());
         if (t == null) return false;
-        // force re-read to populate track number (0 = from v1 DB), but allow -1 (tried and failed)
-        if (t.trackNumber == 0) return false;
         return t.mtime == file.lastModified() && t.size == file.length();
+    }
+
+    /** v1/v2 rows used 0 for unknown track — treat as -1 so isFresh does not force full re-ID3. */
+    private void migrateLegacyZeroTrackNumbers() {
+        if (legacyTrackNumbersMigrated) return;
+        legacyTrackNumbersMigrated = true;
+        SQLiteDatabase db = getWritableDatabase();
+        db.execSQL("UPDATE tracks SET track_number = -1 WHERE track_number = 0");
     }
 
     public void upsert(File file, String title, String artist, String album,
             String genre, String albumArtist, String durationMs, int trackNumber) {
         if (file == null || !file.isFile()) return;
+        if (trackNumber == 0) trackNumber = -1;
         SQLiteDatabase db = getWritableDatabase();
         SQLiteStatement st = db.compileStatement(
                 "INSERT OR REPLACE INTO tracks"
@@ -191,6 +199,12 @@ public class MusicLibraryStore extends SQLiteOpenHelper {
         st.bindString(9, durationMs != null ? durationMs : "");
         st.bindLong(10, trackNumber);
         st.executeInsert();
+    }
+
+    /** Wipe all cached track rows — Settings reset / cache clear. */
+    public void clearAll() {
+        SQLiteDatabase db = getWritableDatabase();
+        db.delete("tracks", null, null);
     }
 
     /** Remove DB rows whose paths were not seen in the latest filesystem walk. */

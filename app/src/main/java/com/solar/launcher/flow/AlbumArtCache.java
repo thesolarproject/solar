@@ -38,7 +38,17 @@ public final class AlbumArtCache {
 
     public static boolean has(File dir, String albumMatchKey) {
         File f = fileForKey(dir, albumMatchKey);
-        return f != null && f.isFile() && f.length() > 0;
+        return f != null && f.isFile() && f.length() > 0 && !isLikelyPlaceholderFile(f);
+    }
+
+    /** Tiny grey ♪ tiles — treat as miss so track embed can replace stale cache. */
+    public static boolean isLikelyPlaceholderFile(File f) {
+        return f != null && f.isFile() && f.length() > 0L && f.length() < 2200L;
+    }
+
+    public static void delete(File dir, String albumMatchKey) {
+        File f = fileForKey(dir, albumMatchKey);
+        if (f != null && f.isFile()) f.delete();
     }
 
     public static Bitmap get(File dir, String albumMatchKey) {

@@ -347,6 +347,8 @@ public class MainActivity extends Activity {
     private volatile int libraryScanTrackCount = 0;
     /** Survives {@link #recreate()} — album art rebuild after reset cleared disk caches. */
     private static volatile boolean pendingAlbumArtCacheRebuild = false;
+    /** Tracks count when disk art cache last matched library — skips O(n) gap scan on startup. */
+    private static final String PREF_ART_CACHE_READY_TRACKS = "library_art_cache_ready_tracks";
     private volatile boolean albumArtCacheRebuildRunning = false;
     private int currentScreenState = STATE_MENU;
     // 💡 자체 날짜/시간 설정용 임시 변수
@@ -415,6 +417,13 @@ public class MainActivity extends Activity {
     private Button btnServerToggle;
     // 🚀 [추가] 화면 전체를 덮는 고급 로딩 인디케이터 오버레이
     private LinearLayout layoutLoadingOverlay;
+    /** Bitmask owners for the shared blocking overlay — scan vs Flow must not clobber each other. */
+    private static final int OVERLAY_LIB_SCAN = 1;
+    private static final int OVERLAY_FLOW = 2;
+    private static final int OVERLAY_ART_CACHE = 4;
+    private static final int OVERLAY_PODCAST = 8;
+    private static final int OVERLAY_MISC = 16;
+    private int blockingOverlayOwners;
     private TextView tvLoadingOverlayText;
     private ImageView ivMenuPreview, ivAlbumArt, ivPlayerBgBlur, ivPauseOverlay;
     private PlayerAlbumArt3dView ivAlbumArt3d;
@@ -1937,7 +1946,11 @@ public class MainActivity extends Activity {
                 registerDeferredSystemReceivers();
                 triggerAutoReconnect();
                 if (consumePendingAlbumArtCacheRebuild()) {
-                    scheduleAlbumArtCacheRebuild(false);
+                    if (!customLibrary.isEmpty()) {
+                        scheduleAlbumArtCacheRebuild(false);
+                    } else if (!libraryScanRunning && !isUsbMassStorageUiLocked()) {
+                        startLibraryScan(false);
+                    }
                 } else if (customLibrary.isEmpty() && !libraryScanRunning && !isUsbMassStorageUiLocked()) {
                     startLibraryScan(false);
                 }
@@ -2041,8 +2054,29 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         final long onCreateStartMs = android.os.SystemClock.uptimeMillis();
+        // Debug session logs off by default — enable via adb --ez solar_adb_debug_898913 true
+        DebugSessionLog.ENABLED = false;
         // #region agent log
-        DebugSessionLog.ENABLED = true; // session 4420c3 — Flow USB/Wi-Fi perf
+        Debug898913Log.ENABLED = getIntent().getBooleanExtra("solar_adb_debug_898913", false);
+        final Thread.UncaughtExceptionHandler prevHandler = Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
+            @Override
+            public void uncaughtException(Thread thread, Throwable throwable) {
+                try {
+                    org.json.JSONObject d = new org.json.JSONObject();
+                    d.put("thread", thread != null ? thread.getName() : "");
+                    d.put("exception", throwable.getClass().getName());
+                    d.put("message", throwable.getMessage() != null ? throwable.getMessage() : "");
+                    java.io.StringWriter sw = new java.io.StringWriter();
+                    throwable.printStackTrace(new java.io.PrintWriter(sw));
+                    String stack = sw.toString();
+                    d.put("stack", stack.length() > 2000 ? stack.substring(0, 2000) : stack);
+                    com.solar.launcher.Debug898913Log.logAlways(
+                            "MainActivity.uncaughtException", "fatal crash", "H-CRASH", d);
+                } catch (Exception ignored) {}
+                if (prevHandler != null) prevHandler.uncaughtException(thread, throwable);
+            }
+        });
         // #endregion
 // 🚀 앱이 켜지면 자기 자신을 변수에 등록합니다.
         instance = this;
@@ -2808,6 +2842,9 @@ public class MainActivity extends Activity {
             dbg.put("homeVisible", layoutMainMenu != null && layoutMainMenu.getVisibility() == View.VISIBLE);
             dbg.put("elapsedMs", android.os.SystemClock.uptimeMillis() - onCreateStartMs);
             DebugSessionLog.log("MainActivity.onCreate", "startup complete", "H1-H3", dbg);
+            dbg.put("flowHostReady", flowScreenHost != null);
+            com.solar.launcher.Debug898913Log.log("MainActivity.onCreate",
+                    "startup complete", "H-START", dbg);
         } catch (Exception ignored) {}
         // #endregion
 
@@ -3060,6 +3097,28 @@ public class MainActivity extends Activity {
             }, 4000);
         }
         scheduleThemeAutoVariantIfRequested();
+
+        scheduleAdbFlowCarouselIfRequested();
+    }
+
+    private void scheduleAdbFlowCarouselIfRequested() {
+        boolean fromIntent = getIntent() != null
+                && getIntent().getBooleanExtra("solar_adb_flow_carousel", false);
+        File flag = new File(getFilesDir(), "adb_flow_carousel.flag");
+        boolean fromFlag = flag.isFile();
+        if (!fromIntent && !fromFlag) {
+            return;
+        }
+        if (getIntent() != null) {
+            getIntent().removeExtra("solar_adb_flow_carousel");
+        }
+        if (fromFlag) {
+            flag.delete();
+        }
+        if (getIntent() != null && getIntent().getBooleanExtra("solar_adb_debug_898913", false)) {
+            Debug898913Log.ENABLED = true;
+        }
+        scheduleAdbFlowCarouselHarness();
     }
     // 💡 [추가] 화면 전체를 덮는 확실한 로딩 팝업 띄우기 함수
     private void showLoadingPopup() {
@@ -3082,12 +3141,57 @@ public class MainActivity extends Activity {
     }
 
     private void setBlockingLoading(boolean visible) {
-        if (layoutLoadingOverlay != null) {
-            layoutLoadingOverlay.setVisibility(visible ? View.VISIBLE : View.GONE);
+        if (visible) {
+            acquireBlockingOverlay(OVERLAY_MISC,
+                    tvLoadingOverlayText != null && tvLoadingOverlayText.getText() != null
+                            ? tvLoadingOverlayText.getText().toString() : "");
+        } else {
+            releaseBlockingOverlay(OVERLAY_MISC);
         }
-        if (!visible) {
+    }
+
+    /** Library scan overlay only on browse/menu screens — never block Flow / Now Playing. */
+    private boolean libraryScanOverlayAllowedHere() {
+        return currentScreenState == STATE_MENU
+                || currentScreenState == STATE_BROWSER
+                || currentScreenState == STATE_SETTINGS
+                || currentScreenState == STATE_MORE;
+    }
+
+    private void acquireBlockingOverlay(int owner, String text) {
+        if (owner == OVERLAY_LIB_SCAN && !libraryScanOverlayAllowedHere()) {
+            return;
+        }
+        blockingOverlayOwners |= owner;
+        setLoadingOverlayText(text);
+        refreshBlockingOverlayVisible();
+    }
+
+    private void releaseBlockingOverlay(int owner) {
+        blockingOverlayOwners &= ~owner;
+        refreshBlockingOverlayVisible();
+        if (blockingOverlayOwners == 0) {
             flushDeferredUsbConnectPromptIfNeeded();
         }
+    }
+
+    private void refreshBlockingOverlayVisible() {
+        if (layoutLoadingOverlay == null) return;
+        if (blockingOverlayOwners == 0) {
+            layoutLoadingOverlay.setVisibility(View.GONE);
+            return;
+        }
+        boolean libScanOnly = (blockingOverlayOwners & OVERLAY_LIB_SCAN) != 0
+                && (blockingOverlayOwners & ~OVERLAY_LIB_SCAN) == 0;
+        if (libScanOnly && !libraryScanOverlayAllowedHere()) {
+            layoutLoadingOverlay.setVisibility(View.GONE);
+            return;
+        }
+        layoutLoadingOverlay.setVisibility(View.VISIBLE);
+    }
+
+    private void updateBlockingOverlayText(String text) {
+        setLoadingOverlayText(text);
     }
 
     private void setLoadingOverlayText(String text) {
@@ -3098,14 +3202,73 @@ public class MainActivity extends Activity {
 
     /** Full-screen placeholder while Flow catalog/handoff prep runs off the UI thread. */
     private void showFlowStartingLoading() {
-        setLoadingOverlayText(getString(R.string.flow_starting));
-        setBlockingLoading(true);
+        acquireBlockingOverlay(OVERLAY_FLOW, getString(R.string.flow_starting));
     }
 
     private void hideFlowStartingLoading() {
-        if (!libraryScanRunning) {
-            setBlockingLoading(false);
+        releaseBlockingOverlay(OVERLAY_FLOW);
+    }
+
+    /** adb: open Flow albums, wheel-scroll, log fan-out geometry for scripts/test_flow_adb.sh */
+    private void scheduleAdbFlowCarouselHarness() {
+        SolarAdbTest.pass("flow_harness_scheduled");
+        new Handler().postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                SolarAdbTest.pass("flow_harness_tick");
+                try {
+                    openFlow(FlowLaunchRequest.picker(STATE_MENU));
+                    changeScreen(STATE_FLOW);
+                    new Handler().postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            runAdbFlowCarouselProbe(0);
+                        }
+                    }, 4000);
+                } catch (Throwable t) {
+                    SolarAdbTest.fail("flow_open " + t.getClass().getSimpleName());
+                }
+            }
+        }, 3500);
+    }
+
+    private void runAdbFlowCarouselProbe(final int step) {
+        if (flowScreenHost == null || currentScreenState != STATE_FLOW) {
+            SolarAdbTest.fail("flow_not_visible step=" + step);
+            return;
         }
+        float[] geom = flowScreenHost.adbCarouselGeometry();
+        if (geom == null || geom.length < 6) {
+            SolarAdbTest.fail("flow_geometry step=" + step);
+            return;
+        }
+        int focus = (int) geom[0];
+        int count = (int) geom[1];
+        SolarAdbTest.flowCarousel(focus, count, geom[2], geom[3], geom[4], geom[5]);
+        if (step == 0 && count >= 2) {
+            float peek = geom[3] - geom[2];
+            if (peek < geom[5] * 0.20f) {
+                SolarAdbTest.fail("neighbor_peek_too_small deltaCx=" + peek);
+                return;
+            }
+        }
+        if (step >= 2) {
+            SolarAdbTest.pass("flow_carousel_wheel steps=" + (step + 1));
+            return;
+        }
+        final int before = focus;
+        flowScreenHost.adbCarouselScrollWheel(1);
+        new Handler().postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                int after = flowScreenHost.adbCarouselFocusIndex();
+                if (after == before && flowScreenHost.adbCarouselItemCount() > 1) {
+                    SolarAdbTest.fail("wheel_no_move step=" + step);
+                    return;
+                }
+                runAdbFlowCarouselProbe(step + 1);
+            }
+        }, 1100);
     }
 
     private void runOnUiThreadSafe(Runnable r) {
@@ -6043,6 +6206,28 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** Copy live Now Playing blur onto the global outgoing backdrop for slide-down exits. */
+    private void bindOutgoingPlayerBackdrop(ImageView wall, ImageView mask) {
+        if (wall == null || ivPlayerBgBlur == null) return;
+        android.graphics.drawable.Drawable d = ivPlayerBgBlur.getDrawable();
+        if (d instanceof android.graphics.drawable.BitmapDrawable) {
+            android.graphics.Bitmap bmp =
+                    ((android.graphics.drawable.BitmapDrawable) d).getBitmap();
+            if (bmp != null) {
+                wall.setImageBitmap(bmp);
+            }
+        } else {
+            bindPlayerBlurBackdrop();
+            d = ivPlayerBgBlur.getDrawable();
+            if (d instanceof android.graphics.drawable.BitmapDrawable) {
+                android.graphics.Bitmap bmp =
+                        ((android.graphics.drawable.BitmapDrawable) d).getBitmap();
+                if (bmp != null) wall.setImageBitmap(bmp);
+            }
+        }
+        if (mask != null) mask.setVisibility(View.GONE);
+    }
+
     private String backdropCacheKey(int screenState) {
         StringBuilder sb = new StringBuilder();
         sb.append(screenState).append('|').append(getBackgroundMode());
@@ -6069,6 +6254,11 @@ public class MainActivity extends Activity {
                 @Override
                 public void bindPlayerBlurEarly() {
                     bindPlayerBlurBackdrop();
+                }
+
+                @Override
+                public void bindOutgoingPlayerBackdrop(ImageView wall, ImageView mask) {
+                    MainActivity.this.bindOutgoingPlayerBackdrop(wall, mask);
                 }
 
                 @Override
@@ -7579,6 +7769,7 @@ public class MainActivity extends Activity {
         }
         MenuPreviewLayout.Spec previewSpec = MenuPreviewLayout.homeSpec(this, isHomeDesktopMaskActive());
         if (ivMenuPreview.getVisibility() == View.VISIBLE) {
+            ivMenuPreview.setAlpha(1f);
             MenuPreviewLayout.applyImagePreview(ivMenuPreview, previewSpec);
         }
         if (previewSpec.hideTitlesBelowArt) {
@@ -8103,6 +8294,10 @@ public class MainActivity extends Activity {
                     Toast.LENGTH_SHORT).show();
             return;
         }
+        if (com.solar.launcher.radio.RadioExperiment.isRadioScreenState(state)
+                && !com.solar.launcher.radio.RadioExperiment.isEnabled(prefs)) {
+            return;
+        }
         if (ScreenTransition.isAnimating() || ListDrillTransition.isAnimating()
                 || FlowPlayerHandoff.isHandoffAnimating()) {
             if (isBack) {
@@ -8312,6 +8507,9 @@ public class MainActivity extends Activity {
         }
         if (state == STATE_FLOW && currentScreenState == STATE_PLAYER && playback.isMusicActive()) {
             markFlowNowPlayingBackReturn();
+        } else if (state == STATE_FLOW && currentScreenState != STATE_PLAYER && flowScreenHost != null) {
+            // Menu/library Play-hold → Flow: Back exits to origin, not Now Playing.
+            flowScreenHost.clearNowPlayingBackReturn();
         }
         if (state == STATE_PLAYER && currentScreenState != STATE_PLAYER) {
             if (currentScreenState == STATE_FLOW) {
@@ -8360,6 +8558,7 @@ public class MainActivity extends Activity {
             clearThemeGalleryPreview();
         }
         currentScreenState = state;
+        refreshBlockingOverlayVisible();
         scheduleSoulseekSharePolicyRefresh();
         layoutMainMenu.setVisibility(state == STATE_MENU ? View.VISIBLE : View.GONE);
         if (state != STATE_MENU && layoutMainMenu != null) {
@@ -8661,7 +8860,11 @@ public class MainActivity extends Activity {
             } else if (SettingsScreens.RESET.equals(settingsSubScreenKey)) {
                 buildResetSettingsUI();
             } else if (SettingsScreens.RADIO.equals(settingsSubScreenKey)) {
-                buildRadioSettingsUI();
+                if (com.solar.launcher.radio.RadioExperiment.isEnabled(prefs)) {
+                    buildRadioSettingsUI();
+                } else {
+                    buildSettingsUI();
+                }
             } else if (SettingsScreens.VIDEO.equals(settingsSubScreenKey)) {
                 buildVideoSettingsUI();
             } else if (SettingsScreens.LANGUAGE.equals(settingsSubScreenKey)) {
@@ -9355,7 +9558,15 @@ public class MainActivity extends Activity {
         final ConversationDisplayBuilder.Entry entry = ad.getEntryAt(contextReachMessagePosition);
         if (entry == null || entry.message == null || entry.message.statusEvent) return;
         final String quoteText = entry.displayText;
-        final String sender = entry.message.peer != null ? entry.message.peer.trim() : "";
+        String devFrom = "";
+        if (SolarDeveloperAccounts.isVirtualPeer(soulseekMessagePeer) && entry.message.incoming) {
+            devFrom = SolarDeveloperAccounts.parseDevIncoming(entry.message.text).fromDev;
+        }
+        final String sender = contextReachMessageIsRoom
+                ? (entry.message.peer != null ? entry.message.peer.trim() : "")
+                : (SolarDeveloperAccounts.isVirtualPeer(soulseekMessagePeer) && entry.message.incoming
+                        ? devFrom
+                        : (entry.message.peer != null ? entry.message.peer.trim() : ""));
         final String peer = contextReachMessageIsRoom ? sender : soulseekMessagePeer;
 
         java.util.ArrayList<String> labels = new java.util.ArrayList<String>();
@@ -9364,7 +9575,7 @@ public class MainActivity extends Activity {
         java.util.ArrayList<Runnable> actions = new java.util.ArrayList<Runnable>();
 
         labels.add(SolarDeveloperAccounts.isVirtualPeer(soulseekMessagePeer) && entry.message.incoming
-                ? buildSolarDeveloperPmDetailText(entry.displayText, sender)
+                ? buildSolarDeveloperPmDetailText(entry.displayText, devFrom)
                 : buildReachMessageDetailText(entry));
         states.add(null);
         headers.add(Boolean.TRUE);
@@ -12986,6 +13197,9 @@ public class MainActivity extends Activity {
         if (RowKeys.DEBUG_DEV_SUPPORT_EXPERIMENT.equals(rowKey)) {
             return stateOnOff(isDevSupportExperimentEnabled());
         }
+        if (RowKeys.DEBUG_RADIO_EXPERIMENT.equals(rowKey)) {
+            return stateOnOff(com.solar.launcher.radio.RadioExperiment.isEnabled(prefs));
+        }
         if (RowKeys.DEBUG_FLOW_ENABLED.equals(rowKey)) {
             return stateOnOff(isFlowEnabled());
         }
@@ -13101,7 +13315,11 @@ public class MainActivity extends Activity {
                 return getString(LibraryBrowsePrefs.songSortLabelRes(libraryBrowsePrefs.songSort()));
             }
             if (RowKeys.LIB_ALBUM_SONG_SORT.equals(rowKey)) {
-                return getString(LibraryBrowsePrefs.songSortLabelRes(libraryBrowsePrefs.albumSongSort()));
+                return getString(LibraryBrowsePrefs.songSortLabelRes(
+                        libraryBrowsePrefs.albumSongSort(), true));
+            }
+            if (RowKeys.LIB_ALBUM_RACK_SORT.equals(rowKey)) {
+                return getString(LibraryBrowsePrefs.albumRackSortLabelRes(libraryBrowsePrefs.albumRackSort()));
             }
             if (RowKeys.LIB_ALBUM_SUB.equals(rowKey)) return stateOnOff(libraryBrowsePrefs.albumOwnerSubtitles());
             if (RowKeys.LIB_GUEST_SUB.equals(rowKey)) return stateOnOff(libraryBrowsePrefs.guestSongSubtitles());
@@ -16138,7 +16356,8 @@ public class MainActivity extends Activity {
                                     org.json.JSONObject d = new org.json.JSONObject();
                                     d.put("fromDisk", fromDisk.size());
                                     d.put("wasMem", memSize);
-                                    QueueDebugLog.log("MainActivity.ensurePlaybackQueueSyncedFromStore", "restored from store", "H1", d);
+                                    d.put("index", fromDisk.index());
+                                    QueueDebugLog.log("MainActivity.ensurePlaybackQueueSyncedFromStore", "restored from store", "H7", d);
                                 } catch (Exception ignored) {}
                                 // #endregion
                             }
@@ -17041,7 +17260,7 @@ public class MainActivity extends Activity {
     private void refreshLibraryBrowseIfVisible() {
         if (currentScreenState != STATE_BROWSER) return;
         clearArtistOwnAlbumCache();
-        refreshFlowIfVisible();
+        invalidateFlowCatalogAndRefreshIfVisible();
         if (currentBrowserMode == BROWSER_ARTISTS) {
             buildVirtualCategories("ARTIST");
         } else if (currentBrowserMode == BROWSER_ARTIST_ALBUMS) {
@@ -18453,6 +18672,7 @@ public class MainActivity extends Activity {
             return true;
         }
         if (!globalPpLongFlowHandled && isFlowEnabled()
+                && currentScreenState != STATE_FLOW
                 && System.currentTimeMillis() - globalPpKeyDownAt >= FLOW_LAUNCH_HOLD_MS) {
             // NP Play-hold — morph album art into Flow; home preview or NP slot when eligible.
             if (currentScreenState == STATE_PLAYER) {
@@ -19206,15 +19426,6 @@ public class MainActivity extends Activity {
                 });
             }
         }
-        if (currentScreenState == STATE_BROWSER && (currentBrowserMode == BROWSER_ALBUMS
-                || currentBrowserMode == BROWSER_GENRES)) {
-            addContextAction(getString(R.string.library_sort_label, librarySortLabel()), new Runnable() {
-                @Override
-                public void run() {
-                    cycleLibrarySort();
-                }
-            });
-        }
         if (currentScreenState == STATE_BROWSER && currentBrowserMode == BROWSER_ARTISTS) {
             final String artistName = focusedCategoryName();
             if (artistName != null) {
@@ -19238,6 +19449,7 @@ public class MainActivity extends Activity {
                     }
                 });
             }
+            addAlbumRackBrowseContextActions();
             addFlowSectionContextAction(FlowMode.ALBUM,
                     albumName != null ? AlbumNames.matchKey(albumName) : null);
         }
@@ -19294,14 +19506,6 @@ public class MainActivity extends Activity {
                                     libraryBrowsePrefs.guestBrowseMode()))),
                             Toast.LENGTH_SHORT).show();
                     refreshLibraryBrowseIfVisible();
-                }
-            });
-            addContextAction(getString(R.string.library_sort_label, librarySortLabel()), new Runnable() {
-                @Override
-                public void run() {
-                    cycleLibrarySort();
-                    if (currentBrowserMode == BROWSER_ARTIST_ALBUMS) buildArtistAlbums();
-                    else if (currentBrowserMode == BROWSER_VIRTUAL_SONGS) buildVirtualSongs();
                 }
             });
             addContextAction(getString(R.string.lib_context_browse_settings), new Runnable() {
@@ -19545,8 +19749,39 @@ public class MainActivity extends Activity {
                 && listThemes != null && listThemes.getVisibility() == View.VISIBLE) {
             addThemeBrowserContextActions();
         }
+        if (currentScreenState == STATE_FLOW && flowScreenHost != null) {
+            populateFlowContextMenu();
+        }
         File musicTrack = focusedMusicTrackForContext();
         if (musicTrack != null) {
+            if (currentScreenState == STATE_FLOW && flowScreenHost != null && flowScreenHost.isFlipped()) {
+                final FlowScreenHost.FlowBackRow row = flowScreenHost.getSelectedBackRow();
+                if (row != null && row.track != null && row.track.equals(musicTrack)) {
+                    addContextAction(getString(R.string.context_action_play_now), new Runnable() {
+                        @Override
+                        public void run() {
+                            final FlowItem albumItem = flowScreenHost.getFocusedItem();
+                            if (albumItem != null && albumItem.tracks != null && !albumItem.tracks.isEmpty()) {
+                                playTrackList(albumItem.tracks, albumItem.tracks.indexOf(musicTrack), null);
+                            } else {
+                                playTrackList(java.util.Collections.singletonList(musicTrack), 0, null);
+                            }
+                        }
+                    });
+                    addContextAction(getString(R.string.context_action_add_to_queue), new Runnable() {
+                        @Override
+                        public void run() {
+                            appendTrackToMusicQueue(musicTrack);
+                        }
+                    });
+                    addContextAction(getString(R.string.context_action_add_to_playlist), new Runnable() {
+                        @Override
+                        public void run() {
+                            openAddToPlaylistFlow(java.util.Collections.singletonList(musicTrack));
+                        }
+                    });
+                }
+            }
             String plCtx = null;
             if (playback.musicActivePlaylistName() != null
                     && currentScreenState == STATE_PLAYER && playback.isMusicActive()) {
@@ -21604,21 +21839,23 @@ public class MainActivity extends Activity {
         });
         containerSettingsItems.addView(btnBack);
 
-        LinearLayout btnRadio = createSettingsRow(RowKeys.RADIO, R.string.settings_sub_radio, true);
-        btnRadio.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                clickFeedback();
-                settingsParentKey = SettingsScreens.MEDIA;
-                drillSettingsForward(new Runnable() {
-                    @Override
-                    public void run() {
-                        buildRadioSettingsUI();
-                    }
-                });
-            }
-        });
-        containerSettingsItems.addView(btnRadio);
+        if (com.solar.launcher.radio.RadioExperiment.isEnabled(prefs)) {
+            LinearLayout btnRadio = createSettingsRow(RowKeys.RADIO, R.string.settings_sub_radio, true);
+            btnRadio.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    settingsParentKey = SettingsScreens.MEDIA;
+                    drillSettingsForward(new Runnable() {
+                        @Override
+                        public void run() {
+                            buildRadioSettingsUI();
+                        }
+                    });
+                }
+            });
+            containerSettingsItems.addView(btnRadio);
+        }
 
         LinearLayout btnVideo = createSettingsRow(RowKeys.VIDEO, R.string.settings_sub_video, true);
         btnVideo.setOnClickListener(new View.OnClickListener() {
@@ -22075,6 +22312,18 @@ public class MainActivity extends Activity {
         });
         containerSettingsItems.addView(btnAlbumSongSort);
 
+        LinearLayout btnAlbumRackSort = createSettingsRow(RowKeys.LIB_ALBUM_RACK_SORT, R.string.lib_album_rack_sort, false);
+        btnAlbumRackSort.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                libraryBrowsePrefs.cycleAlbumRackSort();
+                refreshLibraryBrowseIfVisible();
+                refreshSettingsPreview(RowKeys.LIB_ALBUM_RACK_SORT);
+            }
+        });
+        containerSettingsItems.addView(btnAlbumRackSort);
+
         LinearLayout btnAlbumSub = createSettingsRow(RowKeys.LIB_ALBUM_SUB, R.string.lib_album_owner_sub, false);
         btnAlbumSub.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -22413,6 +22662,14 @@ public class MainActivity extends Activity {
 
     private void buildRadioSettingsUI() {
         if (mediaSuite == null) return;
+        if (!com.solar.launcher.radio.RadioExperiment.isEnabled(prefs)) {
+            if (SettingsScreens.MEDIA.equals(settingsParentKey)) {
+                buildMediaSettingsUI();
+            } else {
+                buildSettingsUI();
+            }
+            return;
+        }
         setSettingsSubScreen(SettingsScreens.RADIO);
         updateStatusBarTitle();
         containerSettingsItems.removeAllViews();
@@ -24928,6 +25185,23 @@ public class MainActivity extends Activity {
             Boolean online = (!roomMode && m.incoming) ? soulseekConversationPeerOnline : null;
             String subtitleOverride = roomMode && m.peer != null && !m.peer.isEmpty()
                     ? m.peer : null;
+            if (subtitleOverride == null
+                    && SolarDeveloperAccounts.isVirtualPeer(soulseekMessagePeer)) {
+                if (m.incoming) {
+                    SolarDeveloperAccounts.DevIncoming devFrom =
+                            SolarDeveloperAccounts.parseDevIncoming(m.text);
+                    String sub = getString(R.string.solar_developer_pm_from_label);
+                    if (devFrom.fromDev != null && !devFrom.fromDev.isEmpty()) {
+                        sub = sub + " " + devFrom.fromDev;
+                    }
+                    if (entry.timestamp != null && !entry.timestamp.isEmpty()) {
+                        sub = sub + " · " + entry.timestamp;
+                    }
+                    subtitleOverride = sub;
+                } else if (entry.timestamp != null && !entry.timestamp.isEmpty()) {
+                    subtitleOverride = entry.timestamp;
+                }
+            }
             ReachMessageRow.bindConversationEntry(MainActivity.this, row, entry,
                     m.incoming, highlighted, online, rowW, rowH, subtitleOverride);
         }
@@ -26515,6 +26789,22 @@ public class MainActivity extends Activity {
         containerSettingsItems.addView(btnDevSupport);
         refreshSettingsPreview(RowKeys.DEBUG_DEV_SUPPORT_EXPERIMENT);
 
+        final LinearLayout btnRadioExperiment = createSettingsRow(RowKeys.DEBUG_RADIO_EXPERIMENT,
+                R.string.settings_debug_radio_experiment, false);
+        btnRadioExperiment.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                boolean enable = !com.solar.launcher.radio.RadioExperiment.isEnabled(prefs);
+                prefs.edit().putBoolean(com.solar.launcher.radio.RadioExperiment.PREF_RADIO_EXPERIMENT,
+                        enable).apply();
+                refreshSettingsPreview(RowKeys.DEBUG_RADIO_EXPERIMENT);
+                scheduleRebuildHomeMenuIfVisible();
+            }
+        });
+        containerSettingsItems.addView(btnRadioExperiment);
+        refreshSettingsPreview(RowKeys.DEBUG_RADIO_EXPERIMENT);
+
         final LinearLayout btnDiag = createSettingsRow(RowKeys.DIAG_AUTO_REPORT,
                 R.string.settings_diag_auto_report, false);
         btnDiag.setOnClickListener(new View.OnClickListener() {
@@ -26968,7 +27258,7 @@ public class MainActivity extends Activity {
 
         createCategoryHeader(getString(R.string.home_screen_shortcuts));
 
-        for (final HomeMenuConfig.Entry entry : HomeMenuConfig.loadEditorCatalogEntries()) {
+        for (final HomeMenuConfig.Entry entry : HomeMenuConfig.loadEditorCatalogEntries(prefs)) {
             final LinearLayout row = createSettingsRow(
                     RowKeys.homeShortcut(entry.id), homeShortcutEditorLabel(entry), false, false);
             if (!entry.required) {
@@ -27243,11 +27533,19 @@ public class MainActivity extends Activity {
         libraryScanTrackCount = 0;
         final int gen = libraryScanGen;
         activeLibraryScanGen = gen;
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("gen", gen);
+            d.put("userInitiated", userInitiated);
+            d.put("libEmpty", customLibrary.isEmpty());
+            Debug898913Log.logAlways("MainActivity.startLibraryScan", "scan started", "H1", d);
+        } catch (Exception ignored) {}
+        // #endregion
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                setBlockingLoading(true);
-                setLoadingOverlayText(getString(R.string.library_scanning));
+                acquireBlockingOverlay(OVERLAY_LIB_SCAN, getString(R.string.library_scanning));
             }
         });
         new Thread(new Runnable() {
@@ -27279,6 +27577,16 @@ public class MainActivity extends Activity {
         java.util.HashSet<String> seenPaths = MusicLibraryStore.newKeepSet();
         java.util.ArrayList<SongItem> scanned = new java.util.ArrayList<SongItem>();
         buildCustomLibraryIncremental(rootFolder, store, seenPaths, scanned, gen);
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("gen", gen);
+            d.put("scanned", scanned.size());
+            d.put("ms", System.currentTimeMillis());
+            Debug898913Log.logAlways("MainActivity.runLibraryScanWorker",
+                    "filesystem walk done", "H3,H4", d);
+        } catch (Exception ignored) {}
+        // #endregion
         if (libraryScanGen != gen) {
             abortLibraryScanWorker(gen);
             return;
@@ -27286,17 +27594,27 @@ public class MainActivity extends Activity {
         store.deleteExcept(seenPaths);
         reconcileCustomLibrary(scanned);
         normalizeLibraryAlbumTitles();
-        buildAlbumArtCacheAfterScan(gen);
-        if (libraryScanGen != gen) {
-            abortLibraryScanWorker(gen);
-            return;
-        }
+        // Dismiss scan overlay before slow cover ingest — art cache continues on worker thread.
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
                 finishLibraryScan(gen, userInitiated);
             }
         });
+        // Art ingest off the scan critical path — do not block overlay dismissal.
+        scheduleAlbumArtIngestAsync(gen);
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("gen", gen);
+            Debug898913Log.logAlways("MainActivity.runLibraryScanWorker",
+                    "scan ui finish scheduled, art async", "H5", d);
+        } catch (Exception ignored) {}
+        // #endregion
+        if (libraryScanGen != gen) {
+            abortLibraryScanWorker(gen);
+            return;
+        }
     }
 
     /**
@@ -27349,19 +27667,80 @@ public class MainActivity extends Activity {
     }
 
     /**
+     * Drop tracks whose files vanished — sync SQLite + in-memory library.
+     * @return number of rows removed from {@link #customLibrary}
+     */
+    private int purgeStaleLibraryPaths(MusicLibraryStore store) {
+        final java.util.HashSet<String> keep = MusicLibraryStore.newKeepSet();
+        int pruned = 0;
+        synchronized (customLibrary) {
+            java.util.Iterator<SongItem> it = customLibrary.iterator();
+            while (it.hasNext()) {
+                SongItem song = it.next();
+                if (song == null || song.file == null || !song.file.isFile()
+                        || blacklist.contains(song.file.getAbsolutePath())) {
+                    it.remove();
+                    pruned++;
+                } else {
+                    keep.add(song.file.getAbsolutePath());
+                }
+            }
+        }
+        if (pruned > 0) {
+            store.deleteExcept(keep);
+            invalidateSongPathIndex();
+            invalidateShareDurationCache();
+            clearArtistOwnAlbumCache();
+        }
+        return pruned;
+    }
+
+    private void clearArtCacheReadyStamp() {
+        if (prefs == null) return;
+        prefs.edit().remove(PREF_ART_CACHE_READY_TRACKS).apply();
+    }
+
+    private void markArtCacheReadyStamp() {
+        if (prefs == null) return;
+        prefs.edit().putInt(PREF_ART_CACHE_READY_TRACKS, customLibrary.size()).apply();
+    }
+
+    /**
      * Skip filesystem walk when SQLite-hydrated library matches on-disk mtimes.
      * ponytail: won't detect new files until manual scan or MEDIA_MOUNTED — acceptable tradeoff.
      */
     private boolean tryFinishScanFromFreshCache(final int gen, final boolean userInitiated) {
-        if (customLibrary.isEmpty()) return false;
         final MusicLibraryStore store = MusicLibraryStore.getInstance(getApplicationContext());
+        purgeStaleLibraryPaths(store);
+        if (customLibrary.isEmpty()) return false;
+        int staleTrackCount = 0;
+        int zeroTrackNumCount = 0;
         synchronized (customLibrary) {
             for (SongItem item : customLibrary) {
                 if (item == null || item.file == null || !item.file.isFile()) return false;
-                if (!store.isFresh(item.file)) return false;
+                MusicLibraryStore.Track row = store.get(item.file.getAbsolutePath());
+                if (row != null && row.trackNumber == 0) zeroTrackNumCount++;
+                if (!store.isFresh(item.file)) staleTrackCount++;
             }
         }
-        if (!albumArtCacheHasGaps()) {
+        boolean hasGaps = albumArtCacheHasGaps();
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("gen", gen);
+            d.put("userInitiated", userInitiated);
+            d.put("libSize", customLibrary.size());
+            d.put("staleTracks", staleTrackCount);
+            d.put("zeroTrackNum", zeroTrackNumCount);
+            d.put("hasGaps", hasGaps);
+            d.put("artReadyStamp", prefs != null
+                    ? prefs.getInt(PREF_ART_CACHE_READY_TRACKS, -1) : -1);
+            Debug898913Log.logAlways("MainActivity.tryFinishScanFromFreshCache",
+                    staleTrackCount == 0 ? "fast-path eligible" : "full walk required", "H1,H2", d);
+        } catch (Exception ignored) {}
+        // #endregion
+        if (staleTrackCount > 0) return false;
+        if (!hasGaps) {
             if (libraryScanGen != gen) return true;
             runOnUiThread(new Runnable() {
                 @Override
@@ -27371,7 +27750,6 @@ public class MainActivity extends Activity {
             });
             return true;
         }
-        buildAlbumArtCacheAfterScan(gen);
         if (libraryScanGen != gen) return true;
         runOnUiThread(new Runnable() {
             @Override
@@ -27379,11 +27757,27 @@ public class MainActivity extends Activity {
                 finishLibraryScan(gen, userInitiated);
             }
         });
+        scheduleAlbumArtIngestAsync(gen);
         return true;
+    }
+
+    /** Background 240px JPEG ingest — must not extend library scan worker lifetime. */
+    private void scheduleAlbumArtIngestAsync(final int gen) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                buildAlbumArtCacheAfterScan(gen);
+            }
+        }, "AlbumArtIngest").start();
     }
 
     /** True when any album rack cover is missing from internal AlbumArtCache. */
     private boolean albumArtCacheHasGaps() {
+        if (pendingAlbumArtCacheRebuild) return true;
+        if (prefs != null) {
+            int readyTracks = prefs.getInt(PREF_ART_CACHE_READY_TRACKS, -1);
+            if (readyTracks >= 0 && readyTracks == customLibrary.size()) return false;
+        }
         if (customLibrary.isEmpty()) return false;
         File artDir = com.solar.launcher.flow.AlbumArtCache.cacheDir(getApplicationContext());
         boolean multiTrack = prefs != null && prefs.getBoolean(PREF_FLOW_MULTI_TRACK_ALBUMS, false);
@@ -27409,6 +27803,15 @@ public class MainActivity extends Activity {
     /** Pre-scale album art to 240px JPEG on internal storage for fast Flow navigation. */
     private void buildAlbumArtCacheAfterScan(int gen) {
         if (libraryScanGen != gen) return;
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("gen", gen);
+            d.put("libSize", customLibrary.size());
+            Debug898913Log.log("MainActivity.buildAlbumArtCacheAfterScan",
+                    "art cache ingest start", "H1", d);
+        } catch (Exception ignored) {}
+        // #endregion
         final File artDir = com.solar.launcher.flow.AlbumArtCache.cacheDir(getApplicationContext());
         final File flowDir = com.solar.launcher.flow.FlowThumbCache.cacheDir(getApplicationContext());
         final com.solar.launcher.flow.FlowCoverResolver.Host host =
@@ -27468,6 +27871,7 @@ public class MainActivity extends Activity {
                     "ingest complete", "H-PERF", d);
         } catch (Exception ignored) {}
         // #endregion
+        markArtCacheReadyStamp();
     }
 
     /** Package-visible for unit tests — survives activity recreate after reset. */
@@ -27483,12 +27887,22 @@ public class MainActivity extends Activity {
 
     /** Disk art caches were wiped — schedule rebuild when library rows still resident. */
     private void onAlbumArtCachesCleared(boolean deferUntilRecreate) {
-        if (flowScreenHost != null) flowScreenHost.invalidateCoverCaches();
+        MusicLibraryStore.getInstance(getApplicationContext()).clearAll();
+        synchronized (customLibrary) {
+            customLibrary.clear();
+        }
+        invalidateSongPathIndex();
+        clearArtCacheReadyStamp();
+        libraryScanGen++;
+        if (flowScreenHost != null) {
+            flowScreenHost.invalidateCatalogCache();
+            flowScreenHost.invalidateCoverCaches();
+        }
         if (deferUntilRecreate) {
             markPendingAlbumArtCacheRebuild();
             return;
         }
-        scheduleAlbumArtCacheRebuild(false);
+        startLibraryScan(false);
     }
 
     /**
@@ -27509,8 +27923,8 @@ public class MainActivity extends Activity {
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
-                    setBlockingLoading(true);
-                    setLoadingOverlayText(getString(R.string.library_art_cache_progress, 0, 0));
+                    acquireBlockingOverlay(OVERLAY_ART_CACHE,
+                            getString(R.string.library_art_cache_progress, 0, 0));
                 }
             });
         }
@@ -27523,7 +27937,7 @@ public class MainActivity extends Activity {
                     public void run() {
                         albumArtCacheRebuildRunning = false;
                         if (libraryScanGen != gen) return;
-                        if (showOverlay) setBlockingLoading(false);
+                        if (showOverlay) releaseBlockingOverlay(OVERLAY_ART_CACHE);
                         onAlbumArtCacheRebuildFinished(gen);
                     }
                 });
@@ -27535,11 +27949,25 @@ public class MainActivity extends Activity {
     private void onAlbumArtCacheRebuildFinished(int gen) {
         if (flowScreenHost != null) {
             flowScreenHost.invalidateCatalogCache();
-            int optionsKey = prefs != null && prefs.getBoolean(PREF_FLOW_MULTI_TRACK_ALBUMS, false) ? 1 : 0;
+            int optionsKey = com.solar.launcher.flow.FlowCatalog.catalogOptionsKey(libraryBrowsePrefs,
+                    prefs != null && prefs.getBoolean(PREF_FLOW_MULTI_TRACK_ALBUMS, false));
             flowScreenHost.precookCatalogAfterLibraryScan(gen, optionsKey);
         }
-        refreshLibraryBrowseIfVisible();
-        refreshFlowIfVisible();
+        if (currentScreenState == STATE_BROWSER) {
+            clearArtistOwnAlbumCache();
+            if (currentBrowserMode == BROWSER_ARTISTS) {
+                buildVirtualCategories("ARTIST");
+            } else if (currentBrowserMode == BROWSER_ARTIST_ALBUMS) {
+                buildArtistAlbums();
+            } else if (currentBrowserMode == BROWSER_VIRTUAL_SONGS) {
+                buildVirtualSongs();
+            } else if (currentBrowserMode == BROWSER_ALBUMS) {
+                buildVirtualCategories("ALBUM");
+            } else if (currentBrowserMode == BROWSER_GENRES) {
+                buildVirtualCategories("GENRE");
+            }
+        }
+        // Flow rebind runs from precookCatalogAfterLibraryScan completion — skip duplicate rebuild.
         refreshNowPlayingAlbumArtFromCache();
     }
 
@@ -27586,14 +28014,25 @@ public class MainActivity extends Activity {
         if (libraryScanGen != gen) return;
         libraryScanRunning = false;
         isCustomScanning = false;
-        setBlockingLoading(false);
+        releaseBlockingOverlay(OVERLAY_LIB_SCAN);
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("gen", gen);
+            d.put("userInitiated", userInitiated);
+            d.put("libSize", customLibrary.size());
+            d.put("screen", currentScreenState);
+            Debug898913Log.logAlways("MainActivity.finishLibraryScan", "scan finished", "H1", d);
+        } catch (Exception ignored) {}
+        // #endregion
         requestSoulseekShareRescan();
         if (soulseekActive() && soulseekSharingEnabled) {
             updateSoulseekSharePolicy();
         }
         refreshLibraryBrowseIfVisible();
         if (flowScreenHost != null) {
-            int optionsKey = prefs != null && prefs.getBoolean(PREF_FLOW_MULTI_TRACK_ALBUMS, false) ? 1 : 0;
+            int optionsKey = com.solar.launcher.flow.FlowCatalog.catalogOptionsKey(libraryBrowsePrefs,
+                    prefs != null && prefs.getBoolean(PREF_FLOW_MULTI_TRACK_ALBUMS, false));
             flowScreenHost.precookCatalogAfterLibraryScan(gen, optionsKey);
         }
         if (userInitiated) {
@@ -27623,7 +28062,7 @@ public class MainActivity extends Activity {
             buildVirtualSongs();
         }
         }
-        refreshFlowIfVisible();
+        // Flow rebind runs from precookCatalogAfterLibraryScan completion — skip duplicate rebuild.
     }
 
     private void abortLibraryScanWorker(final int gen) {
@@ -27633,7 +28072,7 @@ public class MainActivity extends Activity {
                 if (activeLibraryScanGen != gen) return;
                 libraryScanRunning = false;
                 isCustomScanning = false;
-                setBlockingLoading(false);
+                releaseBlockingOverlay(OVERLAY_LIB_SCAN);
             }
         });
     }
@@ -27643,8 +28082,8 @@ public class MainActivity extends Activity {
             @Override
             public void run() {
                 if (libraryScanGen != gen || !libraryScanRunning) return;
-                setBlockingLoading(true);
-                setLoadingOverlayText(getString(R.string.library_scan_progress, trackCount));
+                if ((blockingOverlayOwners & OVERLAY_LIB_SCAN) == 0) return;
+                updateBlockingOverlayText(getString(R.string.library_scan_progress, trackCount));
             }
         });
     }
@@ -27802,12 +28241,25 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** True when the visible list is tracks inside one album (not a mixed song list). */
+    private boolean isLibraryAlbumTrackSortContext() {
+        return currentBrowserMode == BROWSER_VIRTUAL_SONGS
+                && ("ALBUM".equals(virtualQueryType) || "ARTIST_ALBUM".equals(virtualQueryType));
+    }
+
     private String librarySortLabel() {
-        return getString(LibraryBrowsePrefs.songSortLabelRes(libraryBrowsePrefs.songSort()));
+        boolean albumTracks = isLibraryAlbumTrackSortContext();
+        int sort = albumTracks ? libraryBrowsePrefs.albumSongSort() : libraryBrowsePrefs.songSort();
+        return getString(LibraryBrowsePrefs.songSortLabelRes(sort, albumTracks));
     }
 
     private void cycleLibrarySort() {
-        libraryBrowsePrefs.cycleSongSort();
+        boolean albumTracks = isLibraryAlbumTrackSortContext();
+        if (albumTracks) {
+            libraryBrowsePrefs.cycleAlbumSongSort();
+        } else {
+            libraryBrowsePrefs.cycleSongSort();
+        }
         Toast.makeText(this, getString(R.string.library_sort_now, librarySortLabel()), Toast.LENGTH_SHORT).show();
         if (currentBrowserMode == BROWSER_VIRTUAL_SONGS) buildVirtualSongs();
     }
@@ -28210,10 +28662,8 @@ public class MainActivity extends Activity {
             categories = new ArrayList<>(ArtistBrowsePolicy.collectArtists(
                     policyTracksFromLibrary(), libraryBrowsePrefs));
         } else if ("ALBUM".equals(type)) {
-            categories = libraryBrowsePrefs.normalizeAlbumCase()
-                    ? new ArrayList<>(albumByKey.values())
-                    : new ArrayList<>(uniqueCategories);
-            java.util.Collections.sort(categories);
+            categories = LibraryAlbumRack.albumTitles(
+                    flowLibraryRows(), libraryBrowsePrefs, policyTracksFromLibrary());
         } else {
             categories = new ArrayList<>(uniqueCategories);
             java.util.Collections.sort(categories);
@@ -29006,6 +29456,10 @@ public class MainActivity extends Activity {
     }
 
     private File focusedMusicTrackForContext() {
+        if (currentScreenState == STATE_FLOW && flowScreenHost != null && flowScreenHost.isFlipped()) {
+            FlowScreenHost.FlowBackRow row = flowScreenHost.getSelectedBackRow();
+            if (row != null && row.track != null && row.track.isFile()) return row.track;
+        }
         if (currentScreenState == STATE_PLAYER && playback.isMusicActive()) {
             java.util.List<File> q = playback.musicPlaylist();
             int i = playback.musicIndex();
@@ -29935,15 +30389,22 @@ public class MainActivity extends Activity {
      * @return true when the transition was started or consumed
      */
     private boolean enterFlowFromNowPlaying(String focusKeyOverride, int returnScreen) {
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("revInProgress", reverseHandoffInProgress);
+            d.put("handoffAnim", FlowPlayerHandoff.isHandoffAnimating());
+            d.put("screen", currentScreenState);
+            d.put("art3d", isFlow3dHandoffEnabled());
+            d.put("musicActive", playback.isMusicActive());
+            d.put("inCatalog", isNowPlayingInFlowAlbumCatalog());
+            Debug898913Log.log("MainActivity.enterFlowFromNowPlaying", "entry", "H-B,H-E", d);
+        } catch (Exception ignored) {}
+        // #endregion
         if (reverseHandoffInProgress || FlowPlayerHandoff.isHandoffAnimating()) {
-            if (handoffBackBlockedAtMs == 0L) {
-                handoffBackBlockedAtMs = System.currentTimeMillis();
-            }
-            if (System.currentTimeMillis() - handoffBackBlockedAtMs < 500L) {
-                return true;
-            }
             reverseHandoffInProgress = false;
             FlowPlayerHandoff.clearHandoffAnimatingFlag();
+            handoffBackBlockedAtMs = 0L;
         } else {
             handoffBackBlockedAtMs = 0L;
         }
@@ -29965,20 +30426,8 @@ public class MainActivity extends Activity {
             Debug1cf0c7Log.log(this, "MainActivity.enterFlowFromNowPlaying", "entry", "H-D", d);
         } catch (Exception ignored) {}
         // #endregion
-        if (isFlow3dHandoffEnabled() && playback.isMusicActive() && flowScreenHost != null
-                && isNowPlayingInFlowAlbumCatalog()) {
-            if (performNpToFlowHandoffFromPlayer(flowBack, focusKeyOverride)) return true;
-        }
+        // Compromise route: crossfade with carousel pre-bound (fixes center pop-in + cold morph wait).
         enterFlowFromNowPlaying2dCrossfade(focusKeyOverride, flowBack);
-        // #region agent log
-        try {
-            org.json.JSONObject d = new org.json.JSONObject();
-            d.put("path", "2d_crossfade");
-            d.put("eligible3d", false);
-            Debug1cf0c7Log.log(this, "MainActivity.enterFlowFromNowPlaying",
-                    "fell through to 2d crossfade", "H-D", d);
-        } catch (Exception ignored) {}
-        // #endregion
         return true;
     }
 
@@ -30045,8 +30494,23 @@ public class MainActivity extends Activity {
             reverseHandoffCatalogPending = true;
             startFlowReverseCatalogPrep(mode, originFinal, coverPinned);
         }
-        flowScreenHost.performNpToFlowHandoffFromNowPlaying(
-                coverPinned, matchKeyFinal, warmState, warmCatalog, fromRect, reverseComplete);
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("cachedSize", cached != null ? cached.size() : -1);
+            d.put("warmStateNull", warmState == null);
+            d.put("matchKey", matchKeyFinal);
+            Debug898913Log.log("MainActivity.beginNpToFlowCoverHandoff", "morph prep state", "H-A", d);
+        } catch (Exception ignored) {}
+        // #endregion
+        if (!flowScreenHost.performNpToFlowHandoffFromNowPlaying(
+                coverPinned, matchKeyFinal, warmState, warmCatalog, fromRect, reverseComplete)) {
+            // #region agent log
+            Debug898913Log.log("MainActivity.beginNpToFlowCoverHandoff",
+                    "morph prep failed — caller should crossfade", "H-D", null);
+            // #endregion
+            return false;
+        }
         return true;
     }
 
@@ -30063,13 +30527,25 @@ public class MainActivity extends Activity {
         String focusKey = focusKeyOverride;
         if (focusKey == null || focusKey.isEmpty()) {
             focusKey = resolveNowPlayingFlowMatchKey();
-        } else {
+        } else if (flowScreenHost != null
+                && flowScreenHost.hasCachedCatalog(FlowMode.ALBUM)) {
             focusKey = alignFlowMatchKeyToSessionCatalog(focusKey, FlowMode.ALBUM);
         }
         if (focusKey != null && focusKey.isEmpty()) focusKey = null;
         flowLaunchRequest = new FlowLaunchRequest(
                 FlowMode.ALBUM, focusKey, sanitizeFlowExitReturnScreen(returnScreen),
                 0, -1, false);
+        boolean carouselReady = flowScreenHost != null
+                && flowScreenHost.prepareNpToFlowCrossfade(focusKey, playerHandoffCoverBitmapFast());
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("focusKey", focusKey != null ? focusKey : "");
+            d.put("carouselReady", carouselReady);
+            Debug898913Log.log("MainActivity.enterFlowFromNowPlaying2dCrossfade",
+                    "crossfade route taken", "H-B,H-C", d);
+        } catch (Exception ignored) {}
+        // #endregion
         // #region agent log
         try {
             org.json.JSONObject d = new org.json.JSONObject();
@@ -30105,25 +30581,29 @@ public class MainActivity extends Activity {
                         } catch (Exception ignored) {}
                         // #endregion
                         skipFlowLayoutFade = true;
+                        npToFlowHandoffLanding = true;
                         changeScreen(STATE_FLOW, true);
-                        markFlowNowPlayingBackReturn();
+                        npToFlowHandoffLanding = false;
+                        if (flowScreenHost != null) {
+                            flowScreenHost.completeNpToFlowCrossfade();
+                            flowScreenHost.finishPlayerReturnAfterHandoff();
+                        }
+                        // NP back-return is armed only in applyScreenChange when leaving STATE_PLAYER.
                     }
                 });
     }
 
     private void returnFromPlayer() {
+        // Cancel in-flight NP↔Flow crossfade — Back must not wait on a stuck animator.
+        com.solar.launcher.ui.ScreenTransition.cancel();
+        if (layoutFlowMode != null) layoutFlowMode.animate().cancel();
+        if (layoutPlayerMode != null) layoutPlayerMode.animate().cancel();
+        if (ivPlayerBgBlur != null) ivPlayerBgBlur.animate().cancel();
         if (reverseHandoffInProgress || FlowPlayerHandoff.isHandoffAnimating()) {
-            if (handoffBackBlockedAtMs == 0L) {
-                handoffBackBlockedAtMs = System.currentTimeMillis();
-            }
-            if (System.currentTimeMillis() - handoffBackBlockedAtMs < 500L) {
-                return;
-            }
             reverseHandoffInProgress = false;
             FlowPlayerHandoff.clearHandoffAnimatingFlag();
-        } else {
-            handoffBackBlockedAtMs = 0L;
         }
+        handoffBackBlockedAtMs = 0L;
         int target = playerReturnScreen;
         final boolean flowEligible = isFlow3dHandoffEnabled() && playback.isMusicActive()
                 && isNowPlayingInFlowAlbumCatalog();
@@ -30161,23 +30641,34 @@ public class MainActivity extends Activity {
             DebugSessionLog.log("MainActivity.returnFromPlayer", "back pressed", "H-A", d);
         } catch (Exception ignored) {}
         // #endregion
-        // NP→Flow: 3D flyer morph when eligible; crossfade only for 2D art / Flow disabled.
+        // NP→Flow: crossfade when eligible; flip-select → play → Back keeps 3D morph only.
         if (flowEligible && flowScreenHost != null && target == STATE_FLOW) {
-            if (pendingReturn) {
+            if (pendingReturn && flowScreenHost.hasFlipReturnSnapshot()) {
                 if (tryFlowFlipReverseHandoff()) {
                     // #region agent log
                     try {
                         org.json.JSONObject d = new org.json.JSONObject();
                         d.put("branch", "MORPH_FLIP");
-                        DebugSessionLog.log("MainActivity.returnFromPlayer", "branch", "H-C", d);
+                        Debug898913Log.log("MainActivity.returnFromPlayer",
+                                "flip reverse morph", "H-BACK", d);
                     } catch (Exception ignored) {}
                     // #endregion
                     return;
                 }
-                // Flip snapshot unusable — fall through to standard NP→Flow morph.
                 flowScreenHost.clearPlayerReturn();
             }
-            enterFlowFromNowPlaying(null, STATE_FLOW);
+            String focusKey = pendingReturn ? flowScreenHost.getPendingReturnCoverKey() : null;
+            // #region agent log
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("branch", "CROSSFADE_BACK");
+                d.put("pendingReturn", pendingReturn);
+                d.put("focusKey", focusKey != null ? focusKey : "");
+                Debug898913Log.log("MainActivity.returnFromPlayer",
+                        "crossfade back to flow", "H-BACK", d);
+            } catch (Exception ignored) {}
+            // #endregion
+            enterFlowFromNowPlaying(focusKey, STATE_FLOW);
             return;
         }
         if (target == STATE_FLOW) {
@@ -30429,7 +30920,7 @@ public class MainActivity extends Activity {
             android.graphics.Bitmap retry = flowScreenHost.getHandoffPinnedCover();
             coverPinned = retry != null ? retry : cover;
         }
-        android.graphics.RectF fromRect = resolveNpHandoffFromScreenRect(null);
+        android.graphics.RectF fromRect = resolveHandoffFromScreenRect(null);
 
         flowPlaybackOrigin = null;
         FlowLaunchRequest prior = flowLaunchRequest;
@@ -30450,6 +30941,9 @@ public class MainActivity extends Activity {
         final Runnable reverseComplete = new Runnable() {
             @Override
             public void run() {
+                // #region agent log
+                Debug898913Log.log("MainActivity.reverseComplete", "morph complete, landing", "H-D,H-E", null);
+                // #endregion
                 reverseHandoffInProgress = false;
                 npToFlowHandoffLanding = true;
                 skipFlowLayoutFade = true;
@@ -30464,8 +30958,6 @@ public class MainActivity extends Activity {
         return beginNpToFlowCoverHandoff(coverPinned, matchKeyFinal, mode, originFinal,
                 fromRect, reverseComplete);
     }
-
-    /** Build/cache catalog while NP→Flow morph runs; bind carousel mid-flight for seamless landing. */
     private void startFlowReverseCatalogPrep(final FlowMode mode,
             final FlowPlaybackOrigin originFinal, final android.graphics.Bitmap coverPinned) {
         new Thread(new Runnable() {
@@ -31824,9 +32316,8 @@ public class MainActivity extends Activity {
                                 && SolarDeveloperAccounts.isVirtualPeer(soulseekMessagePeer);
                         if (onDevThread) {
                             refreshConversationThreadList();
-                        } else {
-                            showSolarDeveloperPmNotification(fromUser, text);
                         }
+                        showSolarDeveloperPmNotification(fromUser, text);
                     }
                 });
                 return;
@@ -35734,8 +36225,7 @@ public class MainActivity extends Activity {
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
-                    setBlockingLoading(true);
-                    setLoadingOverlayText(getString(R.string.library_scanning));
+                    acquireBlockingOverlay(OVERLAY_LIB_SCAN, getString(R.string.library_scanning));
                 }
             });
         }
@@ -35743,34 +36233,32 @@ public class MainActivity extends Activity {
             @Override
             public void run() {
                 final MusicLibraryStore store = MusicLibraryStore.getInstance(getApplicationContext());
+                final int pruned = purgeStaleLibraryPaths(store);
                 final java.util.ArrayList<SongItem> additions = new java.util.ArrayList<SongItem>();
                 collectNewLibraryAudio(rootFolder, store, additions, gen);
                 if (libraryScanGen != gen) {
                     abortLibraryScanWorker(gen);
                     return;
                 }
-                if (additions.isEmpty()) {
+                if (additions.isEmpty() && pruned == 0) {
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
                             libraryScanRunning = false;
-                            if (showOverlay) setBlockingLoading(false);
+                            if (showOverlay) releaseBlockingOverlay(OVERLAY_LIB_SCAN);
                         }
                     });
                     return;
                 }
-                synchronized (customLibrary) {
-                    customLibrary.addAll(additions);
+                if (!additions.isEmpty()) {
+                    synchronized (customLibrary) {
+                        customLibrary.addAll(additions);
+                    }
                 }
                 invalidateSongPathIndex();
                 invalidateShareDurationCache();
                 clearArtistOwnAlbumCache();
                 normalizeLibraryAlbumTitles();
-                buildAlbumArtCacheAfterScan(gen);
-                if (libraryScanGen != gen) {
-                    abortLibraryScanWorker(gen);
-                    return;
-                }
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
@@ -35779,9 +36267,9 @@ public class MainActivity extends Activity {
                             flowScreenHost.invalidateCatalogCache();
                         }
                         refreshLibraryBrowseIfVisible();
-                        refreshFlowIfVisible();
                     }
                 });
+                scheduleAlbumArtIngestAsync(gen);
             }
         }, "LibraryNewFiles").start();
     }
@@ -36450,8 +36938,7 @@ public class MainActivity extends Activity {
             Toast.makeText(this, getString(R.string.podcasts_already_saved), Toast.LENGTH_SHORT).show();
             return;
         }
-        setBlockingLoading(true);
-        setLoadingOverlayText(getString(R.string.podcasts_saving));
+        acquireBlockingOverlay(OVERLAY_PODCAST, getString(R.string.podcasts_saving));
         new Thread(new Runnable() {
             @Override
             public void run() {
@@ -36476,7 +36963,7 @@ public class MainActivity extends Activity {
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
-                            setBlockingLoading(false);
+                            releaseBlockingOverlay(OVERLAY_PODCAST);
                             Toast.makeText(MainActivity.this, getString(R.string.podcasts_saved_to_library),
                                     Toast.LENGTH_LONG).show();
                             requestSoulseekShareRescan();
@@ -36487,7 +36974,7 @@ public class MainActivity extends Activity {
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
-                            setBlockingLoading(false);
+                            releaseBlockingOverlay(OVERLAY_PODCAST);
                             Toast.makeText(MainActivity.this, getString(R.string.podcasts_save_failed),
                                     Toast.LENGTH_LONG).show();
                         }
@@ -38847,8 +39334,12 @@ public class MainActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        if (intent != null && intent.getBooleanExtra("solar_adb_debug_898913", false)) {
+            Debug898913Log.ENABLED = true;
+        }
         scheduleAdbOpenSoulseekMessagesIfRequested();
         scheduleThemeAutoVariantIfRequested();
+        scheduleAdbFlowCarouselIfRequested();
         if (intent != null && intent.getBooleanExtra("solar_adb_goto", false)) {
             final int screen = intent.getIntExtra("solar_adb_screen", STATE_MENU);
             intent.removeExtra("solar_adb_goto");
@@ -38893,6 +39384,7 @@ public class MainActivity extends Activity {
                 && getIntent().getBooleanExtra("solar_adb_open_soulseek_messages", false)) {
             scheduleAdbOpenSoulseekMessagesIfRequested();
         }
+        scheduleAdbFlowCarouselIfRequested();
     }
 
     @Override
@@ -40658,6 +41150,19 @@ public class MainActivity extends Activity {
             }
 
             @Override
+            public void saveLastFlowMatchKey(FlowMode mode, String matchKey) {
+                if (mode == null || mode == FlowMode.UNSPECIFIED) return;
+                if (matchKey == null || matchKey.isEmpty()) return;
+                prefs.edit().putString("flow_last_key_" + mode.name().toLowerCase(java.util.Locale.US), matchKey).apply();
+            }
+
+            @Override
+            public String loadLastFlowMatchKey(FlowMode mode) {
+                if (mode == null || mode == FlowMode.UNSPECIFIED) return null;
+                return prefs.getString("flow_last_key_" + mode.name().toLowerCase(java.util.Locale.US), null);
+            }
+
+            @Override
             public int loadLastFlowIndex(FlowMode mode) {
                 if (mode == null || mode == FlowMode.UNSPECIFIED) return 0;
                 return prefs.getInt("flow_last_index_" + mode.name().toLowerCase(java.util.Locale.US), 0);
@@ -40711,8 +41216,7 @@ public class MainActivity extends Activity {
 
             @Override
             public void showFlowLoading(String text) {
-                setLoadingOverlayText(text);
-                setBlockingLoading(true);
+                acquireBlockingOverlay(OVERLAY_FLOW, text);
             }
 
             @Override
@@ -40841,6 +41345,11 @@ public class MainActivity extends Activity {
             @Override
             public android.graphics.RectF resolveNpHandoffFromScreenRect() {
                 return MainActivity.this.resolveHandoffFromScreenRect(null);
+            }
+
+            @Override
+            public void ensureHandoffLayoutMeasured() {
+                ensureFlowCarouselMeasuredForHandoff();
             }
 
             @Override
@@ -41016,6 +41525,7 @@ public class MainActivity extends Activity {
         } else if (ivAlbumArt != null) {
             ivAlbumArt.setAlpha(1f);
         }
+        revealMenuPreviewAfterHandoff();
         // #region agent log
         try {
             org.json.JSONObject d = new org.json.JSONObject();
@@ -41196,6 +41706,7 @@ public class MainActivity extends Activity {
                             : 0f);
                     Debug1cf0c7Log.log(MainActivity.this,
                             "MainActivity.runFlowHandoffReverse", "frame0 poses", "H-D", d);
+                    Debug898913Log.log("MainActivity.runFlowHandoffReverse", "frame0 poses", "H-B", d);
                 } catch (Exception ignored) {}
                 // #endregion
                 if (!landingMeasured) {
@@ -41408,6 +41919,26 @@ public class MainActivity extends Activity {
                 return com.solar.launcher.theme.ThemeManager.getCustomFont();
             }
         };
+    }
+
+    /** Hot path — on-screen NP art only; no tag read or disk resolve on UI thread. */
+    private android.graphics.Bitmap playerHandoffCoverBitmapFast() {
+        if (nowPlaying3dAlbumArt && !nowPlayingLcdArt && ivAlbumArt3d != null) {
+            android.graphics.Bitmap bmp = ivAlbumArt3d.getCoverBitmap();
+            if (bmp != null && !bmp.isRecycled()) return bmp;
+        }
+        if (ivAlbumArt != null && ivAlbumArt.getDrawable() != null) {
+            android.graphics.drawable.Drawable d = ivAlbumArt.getDrawable();
+            if (d instanceof android.graphics.drawable.BitmapDrawable) {
+                android.graphics.Bitmap bmp = ((android.graphics.drawable.BitmapDrawable) d).getBitmap();
+                if (bmp != null && !bmp.isRecycled()) return bmp;
+            }
+        }
+        if (flowScreenHost != null) {
+            android.graphics.Bitmap pinned = flowScreenHost.getHandoffPinnedCover();
+            if (pinned != null && !pinned.isRecycled()) return pinned;
+        }
+        return null;
     }
 
     private android.graphics.Bitmap playerHandoffCoverBitmap() {
@@ -41690,6 +42221,19 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** Browse-pref change — invalidate session cache and rebind Flow if visible. */
+    private void invalidateFlowCatalogAndRefreshIfVisible() {
+        if (flowScreenHost != null) flowScreenHost.invalidateCatalogCache();
+        refreshFlowIfVisible();
+    }
+
+    /** Album-rack pref changed from Flow context menu or settings. */
+    private void refreshAlbumRackPrefsChanged() {
+        clearArtistOwnAlbumCache();
+        invalidateFlowCatalogAndRefreshIfVisible();
+        refreshLibraryBrowseIfVisible();
+    }
+
     private List<FlowCatalog.SongRow> flowLibraryRows() {
         List<FlowCatalog.SongRow> out = new ArrayList<FlowCatalog.SongRow>();
         synchronized (customLibrary) {
@@ -41804,6 +42348,151 @@ public class MainActivity extends Activity {
             public void run() {
                 openFlow(FlowLaunchRequest.direct(mode, focusKey, currentScreenState,
                         currentBrowserMode, podcastUiMode));
+            }
+        });
+    }
+
+    /** Shared album-rack prefs — Library Albums tab and Flow Albums carousel. */
+    private void addAlbumRackBrowseContextActions() {
+        addContextAction(getString(R.string.lib_context_sort_albums,
+                getString(LibraryBrowsePrefs.albumRackSortLabelRes(libraryBrowsePrefs.albumRackSort()))),
+                new Runnable() {
+            @Override
+            public void run() {
+                libraryBrowsePrefs.cycleAlbumRackSort();
+                Toast.makeText(MainActivity.this, getString(R.string.lib_context_sort_albums,
+                        getString(LibraryBrowsePrefs.albumRackSortLabelRes(
+                                libraryBrowsePrefs.albumRackSort()))),
+                        Toast.LENGTH_SHORT).show();
+                refreshAlbumRackPrefsChanged();
+                refreshContextQueueTierIfOpen();
+            }
+        });
+        addContextAction(getString(R.string.lib_context_norm_album),
+                libraryBrowsePrefs.normalizeAlbumCase() ? "shuffleOn" : "shuffleOff",
+                stateOnOff(libraryBrowsePrefs.normalizeAlbumCase()), new Runnable() {
+            @Override
+            public void run() {
+                libraryBrowsePrefs.setNormalizeAlbumCase(!libraryBrowsePrefs.normalizeAlbumCase());
+                refreshAlbumRackPrefsChanged();
+                refreshContextQueueTierIfOpen();
+            }
+        });
+    }
+
+    /** Hold-Back context menu while in Flow — mirrors library album/artist/track actions. */
+    private void populateFlowContextMenu() {
+        if (flowScreenHost.isFlipped()) {
+            final FlowScreenHost.FlowBackRow row = flowScreenHost.getSelectedBackRow();
+            if (row != null && row.track != null && row.track.isFile()) {
+                final FlowItem albumItem = flowScreenHost.getFocusedItem();
+                if (albumItem != null && albumItem.kind == FlowItem.Kind.ALBUM) {
+                    addContextAction(getString(R.string.library_sort_label,
+                            getString(LibraryBrowsePrefs.songSortLabelRes(
+                                    libraryBrowsePrefs.albumSongSort(), true))), new Runnable() {
+                        @Override
+                        public void run() {
+                            libraryBrowsePrefs.cycleAlbumSongSort();
+                            flowScreenHost.refreshCatalogIfNeeded();
+                            refreshContextQueueTierIfOpen();
+                        }
+                    });
+                }
+            } else if (row != null && row.nestedItem != null) {
+                final FlowItem nested = row.nestedItem;
+                addContextAction(getString(R.string.context_action_add_album_to_playlist), new Runnable() {
+                    @Override
+                    public void run() {
+                        openAddToPlaylistFlow(nested.tracks != null
+                                ? new ArrayList<File>(nested.tracks)
+                                : collectTracksForQuery("ALBUM", nested.title, null));
+                    }
+                });
+                addContextAction(getString(R.string.context_open_in_library), new Runnable() {
+                    @Override
+                    public void run() {
+                        exitFlowScreen();
+                        openLibraryBrowseFromFlowItem(nested);
+                    }
+                });
+            }
+            return;
+        }
+        final FlowItem focused = flowScreenHost.getFocusedItem();
+        if (focused == null) return;
+        final FlowMode mode = flowScreenHost.getActiveFlowMode();
+        if (mode == FlowMode.ALBUM) {
+            addContextAction(getString(R.string.context_action_add_album_to_playlist), new Runnable() {
+                @Override
+                public void run() {
+                    openAddToPlaylistFlow(focused.tracks != null && !focused.tracks.isEmpty()
+                            ? new ArrayList<File>(focused.tracks)
+                            : collectTracksForQuery("ALBUM", focused.title, null));
+                }
+            });
+            addAlbumRackBrowseContextActions();
+            addContextAction(getString(R.string.context_open_in_library), new Runnable() {
+                @Override
+                public void run() {
+                    exitFlowScreen();
+                    openLibraryBrowseFromFlowItem(focused);
+                }
+            });
+        } else if (mode == FlowMode.ARTIST) {
+            addContextAction(getString(R.string.context_action_add_artist_to_playlist), new Runnable() {
+                @Override
+                public void run() {
+                    openAddToPlaylistFlow(collectTracksForQuery("ARTIST", focused.title, null));
+                }
+            });
+            addArtistBrowsePrefContextActions(false);
+        }
+    }
+
+    /** Artist browse prefs — library Artists tab and Flow Artists carousel. */
+    private void addArtistBrowsePrefContextActions(final boolean rebuildArtistListOnly) {
+        addContextAction(getString(R.string.lib_context_sort_artists,
+                getString(LibraryBrowsePrefs.artistSortLabelRes(libraryBrowsePrefs.artistSort()))),
+                new Runnable() {
+            @Override
+            public void run() {
+                libraryBrowsePrefs.cycleArtistSort();
+                clearArtistOwnAlbumCache();
+                Toast.makeText(MainActivity.this, getString(R.string.lib_context_sort_artists,
+                        getString(LibraryBrowsePrefs.artistSortLabelRes(libraryBrowsePrefs.artistSort()))),
+                        Toast.LENGTH_SHORT).show();
+                if (rebuildArtistListOnly && currentBrowserMode == BROWSER_ARTISTS) {
+                    buildVirtualCategories("ARTIST");
+                } else if (flowScreenHost != null) {
+                    flowScreenHost.refreshCatalogIfNeeded();
+                }
+            }
+        });
+        addContextAction(getString(R.string.lib_context_filter_artists,
+                getString(LibraryBrowsePrefs.artistFilterLabelRes(libraryBrowsePrefs.artistFilter()))),
+                new Runnable() {
+            @Override
+            public void run() {
+                libraryBrowsePrefs.cycleArtistFilter();
+                clearArtistOwnAlbumCache();
+                Toast.makeText(MainActivity.this, getString(R.string.lib_context_filter_artists,
+                        getString(LibraryBrowsePrefs.artistFilterLabelRes(libraryBrowsePrefs.artistFilter()))),
+                        Toast.LENGTH_SHORT).show();
+                refreshLibraryBrowseIfVisible();
+            }
+        });
+        addContextAction(getString(R.string.lib_context_guest_browse,
+                getString(LibraryBrowsePrefs.guestBrowseModeLabelRes(libraryBrowsePrefs.guestBrowseMode()))),
+                new Runnable() {
+            @Override
+            public void run() {
+                libraryBrowsePrefs.cycleGuestBrowseMode();
+                clearArtistOwnAlbumCache();
+                Toast.makeText(MainActivity.this, getString(R.string.lib_context_guest_browse,
+                        getString(LibraryBrowsePrefs.guestBrowseModeLabelRes(
+                                libraryBrowsePrefs.guestBrowseMode()))),
+                        Toast.LENGTH_SHORT).show();
+                refreshLibraryBrowseIfVisible();
             }
         });
     }

@@ -100,13 +100,16 @@ public final class FlowAlbumArt3d {
         if (square.width() <= 0f) return;
 
         canvas.save();
+        float pivotX = CoverFlowLayout.pivotXForCoverFlow(rotationYDeg,
+                square.left, square.right);
+        float pivotY = square.centerY();
         camera.save();
         camera.rotateY(rotationYDeg);
         matrix.reset();
         camera.getMatrix(matrix);
         camera.restore();
-        matrix.preTranslate(-square.centerX(), -square.centerY());
-        matrix.postTranslate(square.centerX(), square.centerY());
+        matrix.preTranslate(-pivotX, -pivotY);
+        matrix.postTranslate(pivotX, pivotY);
         canvas.concat(matrix);
 
         int oldAlpha = paint.getAlpha();

@@ -284,6 +284,35 @@ public class HomeMenuConfigTest {
     }
 
     @Test
+    public void radioHiddenUntilExperimentEnabled() {
+        List<HomeMenuConfig.Entry> hidden = HomeMenuConfig.loadVisibleForDisplay(prefs, true, true);
+        for (HomeMenuConfig.Entry e : hidden) {
+            if (HomeMenuConfig.ID_RADIO.equals(e.id) || HomeMenuConfig.ID_FM.equals(e.id)) {
+                throw new AssertionError("radio visible while experiment off");
+            }
+        }
+        prefs.edit().putBoolean(com.solar.launcher.radio.RadioExperiment.PREF_RADIO_EXPERIMENT, true)
+                .commit();
+        boolean hasRadio = false;
+        for (HomeMenuConfig.Entry e : HomeMenuConfig.loadVisibleForDisplay(prefs, true, true)) {
+            if (HomeMenuConfig.ID_RADIO.equals(e.id)) hasRadio = true;
+        }
+        if (!hasRadio) throw new AssertionError("radio missing when experiment on");
+        boolean editorHasRadio = false;
+        for (HomeMenuConfig.Entry e : HomeMenuConfig.loadEditorCatalogEntries(prefs)) {
+            if (HomeMenuConfig.ID_RADIO.equals(e.id)) editorHasRadio = true;
+        }
+        if (!editorHasRadio) throw new AssertionError("editor missing radio when experiment on");
+        prefs.edit().putBoolean(com.solar.launcher.radio.RadioExperiment.PREF_RADIO_EXPERIMENT, false)
+                .commit();
+        for (HomeMenuConfig.Entry e : HomeMenuConfig.loadEditorCatalogEntries(prefs)) {
+            if (HomeMenuConfig.ID_RADIO.equals(e.id)) {
+                throw new AssertionError("editor shows radio while experiment off");
+            }
+        }
+    }
+
+    @Test
     public void toggleThemesOnHome() {
         HomeMenuConfig.setVisible(prefs, HomeMenuConfig.ID_THEMES, true);
         if (!HomeMenuConfig.isVisible(prefs, HomeMenuConfig.ID_THEMES)) {

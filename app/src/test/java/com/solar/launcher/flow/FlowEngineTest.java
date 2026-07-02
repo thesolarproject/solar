@@ -54,17 +54,36 @@ public class FlowEngineTest {
     }
 
     @Test
-    public void sideSlotRotationNearSeventyDegrees() {
+    public void sideSlotRotationNearClassipodTilt() {
         FlowEngine engine = new FlowEngine();
         engine.setViewport(480f, 360f);
-        engine.setItemCount(5);
+        engine.setItemCount(7);
         engine.setFocusIndex(2);
         FlowEngine.SlotTransform left = engine.slotTransform(1, 480f, 360f, 0f);
         FlowEngine.SlotTransform right = engine.slotTransform(3, 480f, 360f, 0f);
-        assertTrue(Math.abs(left.rotationYDeg + 70f) < 10f);
-        assertTrue(Math.abs(right.rotationYDeg - 70f) < 10f);
+        assertTrue(Math.abs(left.rotationYDeg - 50f) < 10f);
+        assertTrue(Math.abs(right.rotationYDeg + 50f) < 10f);
         assertTrue(left.width > 0f);
         assertEquals(left.width, left.height, left.width * 0.05f);
+    }
+
+    @Test
+    public void nearestNeighborsTuckCloserThanOuterRack() {
+        CoverFlowLayout.Metrics m = CoverFlowLayout.metricsForViewport(480f, 360f);
+        float rank1 = CoverFlowLayout.cxForSideRank(1, m);
+        float rank2 = CoverFlowLayout.cxForSideRank(2, m);
+        float rank4 = CoverFlowLayout.cxForSideRank(4, m);
+        assertTrue("rank1 fans out from center", rank1 > m.displaySize * 0.65f);
+        assertTrue("outer rack fans outward", rank4 > rank2 && rank2 > rank1);
+        FlowEngine engine = new FlowEngine();
+        engine.setViewportMetrics(m, 480f, 360f);
+        engine.setItemCount(7);
+        engine.setFocusIndex(3);
+        FlowEngine.SlotTransform center = engine.slotTransform(3, 480f, 360f, 0f);
+        FlowEngine.SlotTransform neighbor = engine.slotTransform(4, 480f, 360f, 0f);
+        float gap = neighbor.centerX - center.centerX - center.width * 0.5f;
+        assertTrue("neighbor peeks before center right edge ends",
+                gap < m.displaySize * 0.35f);
     }
 
     @Test
@@ -106,6 +125,13 @@ public class FlowEngineTest {
     }
 
     @Test
+    public void coverFlowPivotOnInnerEdgeForSideTilt() {
+        assertEquals(190.91f, CoverFlowLayout.pivotXForCoverFlow(45f, 100f, 200f), 0.5f);
+        assertEquals(109.09f, CoverFlowLayout.pivotXForCoverFlow(-45f, 100f, 200f), 0.5f);
+        assertEquals(150f, CoverFlowLayout.pivotXForCoverFlow(0f, 100f, 200f), 0.01f);
+    }
+
+    @Test
     public void centernessAtCenterIsOne() {
         CoverFlowLayout.Metrics m = CoverFlowLayout.metricsForViewport(480f, 360f);
         CoverFlowLayout.SlidePose center = new CoverFlowLayout.SlidePose();
@@ -113,8 +139,9 @@ public class FlowEngineTest {
         center.angle = 0;
         assertEquals(1f, CoverFlowLayout.centernessFromPose(center, m), 0.01f);
         CoverFlowLayout.SlidePose side = new CoverFlowLayout.SlidePose();
-        side.cx = -m.offsetX;
-        side.angle = CoverFlowLayout.ITILT;
+        side.cx = -CoverFlowLayout.cxForSideRank(1, m);
+        side.angle = CoverFlowLayout.SIDE_TILT;
+        side.angleDeg = CoverFlowLayout.angleToDegrees(CoverFlowLayout.SIDE_TILT);
         assertTrue(CoverFlowLayout.centernessFromPose(side, m) < 0.2f);
     }
 
@@ -208,6 +235,30 @@ public class FlowEngineTest {
     }
 
     @Test
+    public void rackLayeringInnerNeighborAboveOuterAtIdle() {
+        FlowEngine engine = new FlowEngine();
+        engine.setViewport(480f, 360f);
+        engine.setItemCount(20);
+        engine.setFocusIndex(10);
+        float rank1Depth = engine.slotTransform(11, 480f, 360f, 0f).depthOrder;
+        float rank2Depth = engine.slotTransform(12, 480f, 360f, 0f).depthOrder;
+        float centerDepth = engine.slotTransform(10, 480f, 360f, 0f).depthOrder;
+        assertTrue("rank1 should paint above rank2 (higher depthOrder)", rank1Depth > rank2Depth);
+        assertTrue("center should paint above rank1", centerDepth > rank1Depth);
+    }
+
+    @Test
+    public void leftRackOutermostPaintsBehindInnerNeighbor() {
+        FlowEngine engine = new FlowEngine();
+        engine.setViewport(480f, 360f);
+        engine.setItemCount(20);
+        engine.setFocusIndex(10);
+        float rank3Left = engine.slotTransform(7, 480f, 360f, 0f).depthOrder;
+        float rank4Left = engine.slotTransform(6, 480f, 360f, 0f).depthOrder;
+        assertTrue("left rank3 should paint above leftmost rank4", rank3Left > rank4Left);
+    }
+
+    @Test
     public void depthOrderMatchesSlotTransform() {
         FlowEngine engine = new FlowEngine();
         engine.setViewport(480f, 360f);
@@ -220,6 +271,273 @@ public class FlowEngineTest {
             float depth = CoverFlowLayout.depthOrderFromPose(pose, m);
             assertEquals(t.depthOrder, depth, 0.001f);
         }
+    }
+
+    @Test
+    public void continuousPoseMidScrollShowsBothNeighbors() {
+        FlowEngine engine = new FlowEngine();
+        engine.setViewport(480f, 360f);
+        engine.setItemCount(10);
+        engine.setFocusIndex(3);
+        engine.scrollBy(1);
+        assertTrue(engine.isAnimating());
+        float visual = 3f;
+        for (long t = 16; t <= 400; t += 16) {
+            engine.tick(t);
+            visual = engine.getVisualOffset();
+            if (visual > 3.05f && visual < 3.95f) break;
+        }
+        assertTrue("mid scroll between 3 and 4", visual > 3.05f && visual < 3.95f);
+        CoverFlowLayout.Metrics m = CoverFlowLayout.metricsForViewport(480f, 360f);
+        CoverFlowLayout.SlidePose outgoing =
+                CoverFlowLayout.poseFromRelative(3 - visual, m);
+        CoverFlowLayout.SlidePose incoming =
+                CoverFlowLayout.poseFromRelative(4 - visual, m);
+        assertTrue(outgoing.alpha > 0);
+        assertTrue(incoming.alpha > 0);
+        assertTrue(Math.abs(outgoing.angleDeg) > 0.5f);
+        assertTrue(Math.abs(incoming.angleDeg) > 0.5f);
+        FlowEngine.SlotTransform t3 = engine.slotTransform(3, 480f, 360f, 0f);
+        FlowEngine.SlotTransform t4 = engine.slotTransform(4, 480f, 360f, 0f);
+        assertTrue(t3.alpha > 0.01f);
+        assertTrue(t4.alpha > 0.01f);
+    }
+
+    @Test
+    public void poseFromRelativeMirrorsLeftAndRight() {
+        CoverFlowLayout.Metrics m = CoverFlowLayout.metricsForViewport(480f, 360f);
+        for (float rel : new float[] {0.3f, 0.5f}) {
+            CoverFlowLayout.SlidePose right = CoverFlowLayout.poseFromRelative(rel, m);
+            CoverFlowLayout.SlidePose left = CoverFlowLayout.poseFromRelative(-rel, m);
+            assertEquals(Math.abs(right.angleDeg), Math.abs(left.angleDeg), 0.5f);
+            assertEquals(Math.abs(right.cx), Math.abs(left.cx), 0.5f);
+        }
+    }
+
+    @Test
+    public void fastWheelQueuesEveryAlbum() {
+        FlowEngine engine = new FlowEngine();
+        engine.setViewport(480f, 360f);
+        engine.setItemCount(10);
+        engine.setFocusIndex(3);
+        engine.scrollBy(1);
+        assertTrue(engine.isAnimating());
+        assertEquals(4, engine.getTargetIndex());
+        engine.scrollBy(1);
+        assertEquals(5, engine.getTargetIndex());
+        long start = 0L;
+        for (long t = start + 16; t <= start + FlowEngine.SCROLL_MS + 32; t += 16) engine.tick(t);
+        assertFalse(engine.isAnimating());
+        assertEquals(5, engine.getFocusIndex());
+    }
+
+    @Test
+    public void scrollCompletesNearClassipodDuration() {
+        FlowEngine engine = new FlowEngine();
+        engine.setViewport(480f, 360f);
+        engine.setItemCount(10);
+        engine.setFocusIndex(3);
+        long start = 1000L;
+        engine.scrollBy(1);
+        engine.tick(start);
+        assertTrue(engine.isAnimating());
+        engine.tick(start + FlowEngine.SCROLL_MS - 1);
+        assertTrue(engine.isAnimating());
+        engine.tick(start + FlowEngine.SCROLL_MS);
+        assertFalse(engine.isAnimating());
+        assertEquals(4, engine.getFocusIndex());
+    }
+
+    @Test
+    public void pivotHingeOnSideCovers() {
+        assertEquals(100.91f, CoverFlowLayout.pivotXForCoverFlow(45f, 10f, 110f), 0.5f);
+        assertEquals(19.09f, CoverFlowLayout.pivotXForCoverFlow(-45f, 10f, 110f), 0.5f);
+        assertEquals(60f, CoverFlowLayout.pivotXForCoverFlow(0f, 10f, 110f), 0.01f);
+        assertEquals(110f, CoverFlowLayout.pivotXForCoverFlow(58f, 10f, 110f), 0.01f);
+        assertEquals(10f, CoverFlowLayout.pivotXForCoverFlow(-58f, 10f, 110f), 0.01f);
+    }
+
+    @Test
+    public void neighborSlotsVisibleAtIdleFocus() {
+        FlowEngine engine = new FlowEngine();
+        engine.setViewport(480f, 360f);
+        engine.setItemCount(10);
+        int focus = 5;
+        engine.setFocusIndex(focus);
+        FlowEngine.SlotTransform left = engine.slotTransform(focus - 1, 480f, 360f, 0f);
+        FlowEngine.SlotTransform center = engine.slotTransform(focus, 480f, 360f, 0f);
+        FlowEngine.SlotTransform right = engine.slotTransform(focus + 1, 480f, 360f, 0f);
+        assertTrue("left neighbor visible", left.alpha > 0f);
+        assertTrue("center visible", center.alpha > 0f);
+        assertTrue("right neighbor visible", right.alpha > 0f);
+        float vo = engine.getVisualOffset();
+        assertEquals(-1f, (focus - 1) - vo, 0.01f);
+        assertEquals(0f, focus - vo, 0.01f);
+        assertEquals(1f, (focus + 1) - vo, 0.01f);
+    }
+
+    @Test
+    public void fiveSlotAlphabetMappingAtFocusTwo() {
+        FlowEngine engine = new FlowEngine();
+        engine.setViewport(480f, 360f);
+        engine.setItemCount(26);
+        engine.setFocusIndex(2);
+        float vo = engine.getVisualOffset();
+        assertEquals(2f, vo, 0.01f);
+        for (int d = -2; d <= 2; d++) {
+            int idx = 2 + d;
+            FlowEngine.SlotTransform t = engine.slotTransform(idx, 480f, 360f, 0f);
+            assertEquals("rel at idx " + idx, (float) d, idx - vo, 0.05f);
+            assertTrue("slot visible idx " + idx, t.alpha > 0.05f);
+        }
+        assertEquals(2, engine.getVisualCenterIndex());
+    }
+
+    @Test
+    public void threeAlbumRackNeighborsVisibleAtEachFocus() {
+        FlowEngine engine = new FlowEngine();
+        engine.setViewport(480f, 360f);
+        engine.setViewportMetrics(CoverFlowLayout.metricsForViewport(480f, 360f), 480f, 360f);
+        engine.setItemCount(3);
+        for (int focus = 0; focus < 3; focus++) {
+            engine.setFocusIndex(focus);
+            if (focus > 0) {
+                FlowEngine.SlotTransform left = engine.slotTransform(focus - 1, 480f, 360f, 0f);
+                assertTrue("left visible at focus " + focus, left.alpha > 0.05f);
+            }
+            FlowEngine.SlotTransform center = engine.slotTransform(focus, 480f, 360f, 0f);
+            assertTrue("center visible at focus " + focus, center.alpha > 0.05f);
+            if (focus < 2) {
+                FlowEngine.SlotTransform right = engine.slotTransform(focus + 1, 480f, 360f, 0f);
+                assertTrue("right visible at focus " + focus, right.alpha > 0.05f);
+            }
+        }
+    }
+
+    @Test
+    public void wheelLeftFromFocusOneLandsOnZero() {
+        FlowEngine engine = new FlowEngine();
+        engine.setViewport(480f, 360f);
+        engine.setItemCount(3);
+        engine.setFocusIndex(1);
+        engine.scrollByReturningMoved(-1);
+        for (long t = 16; t <= 800; t += 16) engine.tick(t);
+        assertEquals(0, engine.getFocusIndex());
+    }
+
+    @Test
+    public void unifiedMetricsUseIpodLayoutConstants() {
+        CoverFlowLayout.Metrics m = CoverFlowLayout.metricsForViewport(480f, 360f);
+        assertEquals(CoverFlowLayout.NEIGHBOR_CX_FRAC, m.offsetX / m.displaySize, 0.01f);
+        assertEquals(CoverFlowLayout.OUTER_SPACING_FRAC, m.outerSpacingFrac, 0.01f);
+        assertEquals(CoverFlowLayout.SIDE_SCALE, m.sideScale, 0.01f);
+        assertEquals(CoverFlowLayout.SIDE_TILT, m.sideTilt);
+    }
+
+    /** Tilted side covers must extend past center bbox — otherwise center paint hides them. */
+    @Test
+    public void threeAlbumSmallRackNeighborPeeksPastCenterEdge() {
+        FlowEngine engine = new FlowEngine();
+        CoverFlowLayout.Metrics m = CoverFlowLayout.metricsForViewport(480f, 360f);
+        engine.setViewportMetrics(m, 480f, 360f);
+        engine.setItemCount(3);
+        engine.setFocusIndex(0);
+        FlowEngine.SlotTransform center = engine.slotTransform(0, 480f, 360f, 0f);
+        FlowEngine.SlotTransform right = engine.slotTransform(1, 480f, 360f, 0f);
+        float centerRight = center.centerX + center.width * 0.5f;
+        float hinge = right.centerX - right.width * 0.5f;
+        double rad = Math.toRadians(right.rotationYDeg);
+        float rightEdge = hinge + (float) (right.width * Math.cos(rad));
+        assertTrue("right neighbor face peeks past center",
+                rightEdge > centerRight + m.displaySize * 0.12f);
+        engine.setFocusIndex(1);
+        FlowEngine.SlotTransform left = engine.slotTransform(0, 480f, 360f, 0f);
+        center = engine.slotTransform(1, 480f, 360f, 0f);
+        float centerLeft = center.centerX - center.width * 0.5f;
+        float rightHinge = left.centerX + left.width * 0.5f;
+        rad = Math.toRadians(left.rotationYDeg);
+        float leftEdge = rightHinge - (float) (left.width * Math.cos(rad));
+        assertTrue("left neighbor face peeks past center",
+                leftEdge < centerLeft - m.displaySize * 0.12f);
+    }
+
+    /** Small rack at middle index — both neighbors show meaningful face, not a 2px sliver. */
+    @Test
+    public void threeAlbumSmallRackBothNeighborsVisibleAtCenter() {
+        FlowEngine engine = new FlowEngine();
+        CoverFlowLayout.Metrics m = CoverFlowLayout.metricsForViewport(480f, 360f);
+        engine.setViewportMetrics(m, 480f, 360f);
+        engine.setItemCount(3);
+        engine.setFocusIndex(1);
+        FlowEngine.SlotTransform center = engine.slotTransform(1, 480f, 360f, 0f);
+        FlowEngine.SlotTransform left = engine.slotTransform(0, 480f, 360f, 0f);
+        FlowEngine.SlotTransform right = engine.slotTransform(2, 480f, 360f, 0f);
+        float centerLeft = center.centerX - center.width * 0.5f;
+        float centerRight = center.centerX + center.width * 0.5f;
+        float leftEdge = left.centerX + left.width * 0.5f
+                - (float) (left.width * Math.cos(Math.toRadians(left.rotationYDeg)));
+        float rightHinge = right.centerX - right.width * 0.5f;
+        float rightEdge = rightHinge
+                + (float) (right.width * Math.cos(Math.toRadians(right.rotationYDeg)));
+        assertTrue(leftEdge < centerLeft - m.displaySize * 0.10f);
+        assertTrue(rightEdge > centerRight + m.displaySize * 0.10f);
+    }
+
+    /** Large library — idle shows center + ±2 neighbors (5 covers) with same layout as tiny racks. */
+    @Test
+    public void largeLibraryFiveCoversVisibleAtIdle() {
+        FlowEngine engine = new FlowEngine();
+        CoverFlowLayout.Metrics m = CoverFlowLayout.metricsForViewport(480f, 360f);
+        engine.setViewportMetrics(m, 480f, 360f);
+        engine.setItemCount(20);
+        int focus = 10;
+        engine.setFocusIndex(focus);
+        for (int d = -2; d <= 2; d++) {
+            FlowEngine.SlotTransform t = engine.slotTransform(focus + d, 480f, 360f, 0f);
+            assertTrue("slot visible at offset " + d, t.alpha > 0.05f);
+        }
+        FlowEngine.SlotTransform center = engine.slotTransform(focus, 480f, 360f, 0f);
+        FlowEngine.SlotTransform right2 = engine.slotTransform(focus + 2, 480f, 360f, 0f);
+        FlowEngine.SlotTransform left2 = engine.slotTransform(focus - 2, 480f, 360f, 0f);
+        float centerRight = center.centerX + center.width * 0.5f;
+        float centerLeft = center.centerX - center.width * 0.5f;
+        float rightHinge = right2.centerX - right2.width * 0.5f;
+        float rightEdge = rightHinge
+                + (float) (right2.width * Math.cos(Math.toRadians(right2.rotationYDeg)));
+        float leftHinge = left2.centerX + left2.width * 0.5f;
+        float leftEdge = leftHinge
+                - (float) (left2.width * Math.cos(Math.toRadians(left2.rotationYDeg)));
+        assertTrue("outer right peeks past center", rightEdge > centerRight + m.displaySize * 0.08f);
+        assertTrue("outer left peeks past center", leftEdge < centerLeft - m.displaySize * 0.08f);
+    }
+
+    /** Outermost covers drift off-screen and fade — no margin clamp pop-in. */
+    @Test
+    public void outboundEgressDriftsAndFades() {
+        CoverFlowLayout.Metrics m = CoverFlowLayout.metricsForViewport(480f, 360f);
+        assertTrue(CoverFlowLayout.cxForSideRank(4, m) > CoverFlowLayout.cxForSideRank(3, m));
+        CoverFlowLayout.SlidePose rack2 = CoverFlowLayout.poseFromRelative(2f, m);
+        CoverFlowLayout.SlidePose egress = CoverFlowLayout.poseFromRelative(2.75f, m);
+        assertTrue("egress pushes past idle rank-2 cx", egress.cx > rack2.cx + m.displaySize * 0.1f);
+        assertTrue("egress fades into shadow", egress.alpha < rack2.alpha * 0.75f);
+        FlowEngine engine = new FlowEngine();
+        engine.setViewportMetrics(m, 480f, 360f);
+        engine.setItemCount(20);
+        engine.setFocusIndex(10);
+        engine.scrollBy(1);
+        float midAlpha = 1f;
+        float midCx = 0f;
+        for (long t = 16; t <= 200; t += 16) {
+            engine.tick(t);
+            FlowEngine.SlotTransform leaving = engine.slotTransform(8, 480f, 360f, 0f);
+            float rel = 8 - engine.getVisualOffset();
+            if (rel < -1.6f && rel > -2.8f) {
+                midCx = leaving.centerX;
+                midAlpha = leaving.alpha;
+            }
+        }
+        assertTrue("leaving outer cover moves left during scroll", midCx < m.viewW * 0.5f);
+        assertTrue("leaving outer cover dims during scroll", midAlpha < 0.92f);
     }
 
     @Test

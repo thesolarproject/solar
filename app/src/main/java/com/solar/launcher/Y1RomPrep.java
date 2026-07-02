@@ -51,6 +51,7 @@ public final class Y1RomPrep {
                             "/system/etc/solar/Y1-Rockbox.kl") ? 1 : 0;
                     RockboxCoexistence.ensureOnSolarStart(context);
                     RockboxDisable.ensureOnce(context);
+                    LauncherSwitch.assertRockboxDisabledWhileSolarHome(context);
                     runSu("chmod 755 /data/data/switch-to-stock.sh /data/data/switch-to-rockbox.sh "
                             + "/system/etc/solar/switch-to-stock.sh /system/etc/solar/switch-to-rockbox.sh "
                             + "/system/etc/solar/sync-rockbox-libs.sh /system/etc/solar/sync-y1-keymap.sh "

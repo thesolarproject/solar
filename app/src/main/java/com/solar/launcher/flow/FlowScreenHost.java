@@ -68,6 +68,8 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
         Bitmap playerHandoffCoverBitmap();
         /** NP album slot screen rect — measured before slot is hidden. */
         RectF resolveNpHandoffFromScreenRect();
+        /** Force Flow + carousel measure before reverse morph frame 0. */
+        void ensureHandoffLayoutMeasured();
         void playPodcastWithHandoff(OpenRssClient.Podcast show, List<OpenRssClient.Episode> episodes,
                 int index, Bitmap cover, RectF fromRect, float fromRotY);
         void playPodcastWithCrossfade(OpenRssClient.Podcast show, List<OpenRssClient.Episode> episodes,
@@ -77,6 +79,8 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
         void fetchDeezerPlaylistTracks(long playlistId, PlaylistTracksCallback callback);
         void saveLastFlowIndex(FlowMode mode, int index);
         int loadLastFlowIndex(FlowMode mode);
+        void saveLastFlowMatchKey(FlowMode mode, String matchKey);
+        String loadLastFlowMatchKey(FlowMode mode);
         boolean isDebugFlowTheme();
         boolean isDebugFlowNoReflections();
         boolean isFlowOkOpensLibrary();
@@ -240,6 +244,11 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
         return returnAfterPlayer != null;
     }
 
+    /** True when Back from NP should restore a flipped album face (flip-select → play → Back). */
+    public boolean hasFlipReturnSnapshot() {
+        return returnAfterPlayer != null && returnAfterPlayer.flipSnapshot != null;
+    }
+
     public void clearPlayerReturn() {
         returnAfterPlayer = null;
     }
@@ -255,19 +264,50 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
      * ponytail: ALBUM mode only; other modes build on first open.
      */
     public void precookCatalogAfterLibraryScan(final int libGen, final int optionsKey) {
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("libGen", libGen);
+            d.put("optionsKey", optionsKey);
+            com.solar.launcher.Debug898913Log.log("FlowScreenHost.precookCatalogAfterLibraryScan",
+                    "precook queued", "H2", d);
+        } catch (Exception ignored) {}
+        // #endregion
         FLOW_WORKER.execute(new Runnable() {
             @Override
             public void run() {
+                final long t0 = System.currentTimeMillis();
                 final List<FlowItem> built = buildCatalog(FlowMode.ALBUM, libGen, optionsKey);
                 catalogSessionCache.put(FlowMode.ALBUM, libGen, optionsKey, built);
-                int center = actions.loadLastFlowIndex(FlowMode.ALBUM);
-                if (center < 0 || center >= built.size()) center = 0;
+                // Worker-safe focus — matchKey before stale numeric index.
+                int center = new FlowEngine().findIndexForKey(built,
+                        actions.loadLastFlowMatchKey(FlowMode.ALBUM));
+                if (center < 0) {
+                    int last = actions.loadLastFlowIndex(FlowMode.ALBUM);
+                    center = last >= 0 && last < built.size() ? last : 0;
+                }
                 warmCatalogCoversSync(built, center, 2);
                 final int bakeCenter = center;
+                final long buildMs = System.currentTimeMillis() - t0;
+                // #region agent log
+                try {
+                    org.json.JSONObject d = new org.json.JSONObject();
+                    d.put("libGen", libGen);
+                    d.put("itemCount", built != null ? built.size() : -1);
+                    d.put("buildMs", buildMs);
+                    com.solar.launcher.Debug898913Log.log("FlowScreenHost.precookCatalogAfterLibraryScan",
+                            "precook built", "H2", d);
+                } catch (Exception ignored) {}
+                // #endregion
                 actions.runOnUi(new Runnable() {
                     @Override
                     public void run() {
                         if (flowView != null) flowView.scheduleBakesAround(bakeCenter, 2);
+                        // Single rebind after scan — avoids duplicate FLOW_WORKER rebuild from MainActivity.
+                        if (uiMode == UI_CAROUSEL && activeMode == FlowMode.ALBUM) {
+                            rebindCarouselFromPrefs(FlowMode.ALBUM,
+                                    focusedItem != null ? focusedItem.matchKey : null, false);
+                        }
                     }
                 });
             }
@@ -278,7 +318,7 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
     public void ensureSessionCatalog(FlowMode mode, List<FlowItem> items) {
         if (mode == null || items == null || items.isEmpty()) return;
         int libGen = actions.libraryScanGeneration();
-        int optionsKey = actions.flowMultiTrackAlbumsOnly() ? 1 : 0;
+        int optionsKey = catalogOptionsKey();
         catalogSessionCache.put(mode, libGen, optionsKey, items);
     }
 
@@ -286,7 +326,7 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
     public List<FlowItem> buildAndCacheCatalog(FlowMode mode) {
         if (mode == null || mode == FlowMode.UNSPECIFIED) mode = FlowMode.ALBUM;
         int libGen = actions.libraryScanGeneration();
-        int optionsKey = actions.flowMultiTrackAlbumsOnly() ? 1 : 0;
+        int optionsKey = catalogOptionsKey();
         List<FlowItem> built = buildCatalog(mode, libGen, optionsKey);
         catalogSessionCache.put(mode, libGen, optionsKey, built);
         return built;
@@ -373,6 +413,16 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
         if (flowView != null) flowView.scheduleBakesAround(center, radius);
     }
 
+    @Override
+    public void onCarouselScrollStarted() {
+        // NP handoff pin can desync neighbor slots — catalog art only once user scrolls.
+        if (handoffPinnedCover != null || reverseHandoffActive) {
+            reverseHandoffActive = false;
+            releaseHandoffPinBitmap();
+            if (flowView != null) flowView.clearHandoffPin();
+        }
+    }
+
     public static final class FlowBackRow {
         public final String title;
         public final String subtitle;
@@ -449,7 +499,17 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
         launchRequest = req;
         returnAfterPlayer = null;
         coverGen++;
+        coverGovernor.cancelAll();
         flowView.resetFlip();
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("focusKey", req.focusKey != null ? req.focusKey : "");
+            d.put("enteredFromSection", req.enteredFromSection);
+            com.solar.launcher.Debug898913Log.log("FlowScreenHost.open", "open", "H-FLOW", d);
+        } catch (Exception ignored) {}
+        // #endregion
+        flowView.resetHandoffRevealForDisplay();
         // #region agent log
         try {
             org.json.JSONObject d = new org.json.JSONObject();
@@ -577,8 +637,7 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
             int idx = flowView.engine().findIndexForKey(cached, coverKey);
             if (idx >= 0) {
                 catalog = cached;
-                flowView.setItems(cached);
-                flowView.engine().setFocusIndex(idx);
+                flowView.setItemsAndFocus(cached, idx);
                 focusedItem = cached.get(idx);
                 bound = true;
             }
@@ -588,8 +647,7 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
             FlowItem shell = FlowItem.album(key, "", key,
                     java.util.Collections.<java.io.File>emptyList(), "");
             catalog = java.util.Collections.singletonList(shell);
-            flowView.setItems(catalog);
-            flowView.engine().setFocusIndex(0);
+            flowView.setItemsAndFocus(catalog, 0);
             focusedItem = shell;
         }
         if (handoffCover != null && !handoffCover.isRecycled()) {
@@ -797,18 +855,17 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
         } else {
             catalog = catalogForReturn(saved);
         }
-        flowView.setItems(catalog);
         int index = saved.carouselIndex;
         if (saved.carouselMatchKey != null && !saved.carouselMatchKey.isEmpty()) {
             int found = flowView.engine().findIndexForKey(catalog, saved.carouselMatchKey);
             if (found >= 0) index = found;
         }
         if (index < 0 || index >= catalog.size()) index = 0;
-        flowView.engine().setFocusIndex(index);
+        flowView.setItemsAndFocus(catalog, index);
         focusedItem = flowView.itemAt(index);
         flowView.restoreBackFace(null);
         syncCarouselToNowPlayingIfActive();
-        warmCatalogCoversAsync(catalog, flowView.engine().getFocusIndex(), 2);
+        warmCatalogCoversAsync(catalog, carouselWarmCenter(), 3);
         flowView.invalidate();
         if (requestFocus) flowView.requestFocus();
         // #region agent log
@@ -870,15 +927,134 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
     public List<FlowItem> peekSessionCatalog(FlowMode mode) {
         if (mode == null || mode == FlowMode.UNSPECIFIED) mode = FlowMode.ALBUM;
         int libGen = actions.libraryScanGeneration();
-        int optionsKey = actions.flowMultiTrackAlbumsOnly() ? 1 : 0;
+        int optionsKey = catalogOptionsKey();
         return catalogSessionCache.peek(mode, libGen, optionsKey);
+    }
+
+    /** Stale session catalog — only when libGen/options still match last rack build. */
+    public List<FlowItem> peekStaleSessionCatalog(FlowMode mode) {
+        if (mode == null || mode == FlowMode.UNSPECIFIED) mode = FlowMode.ALBUM;
+        return catalogSessionCache.peekStale(mode, actions.libraryScanGeneration(), catalogOptionsKey());
+    }
+
+    /**
+     * NP→Flow crossfade prep — restore carousel pose, warm center art, pin NP cover for seamless fade.
+     * @return true when carousel items are bound and ready to draw under the crossfade
+     */
+    public boolean prepareNpToFlowCrossfade(String focusKey, Bitmap npCover) {
+        if (flowView == null) return false;
+        flowView.resetHandoffRevealForDisplay();
+        uiMode = UI_CAROUSEL;
+        activeMode = FlowMode.ALBUM;
+        pickerScroll.setVisibility(View.GONE);
+        flowView.setVisibility(View.VISIBLE);
+
+        String effectiveKey = focusKey;
+        boolean bound = false;
+        // Back from NP after Flow→NP — restore saved carousel index/pose before crossfade.
+        if (returnAfterPlayer != null) {
+            if (returnAfterPlayer.carouselMatchKey != null
+                    && !returnAfterPlayer.carouselMatchKey.isEmpty()) {
+                effectiveKey = returnAfterPlayer.carouselMatchKey;
+            }
+            if (applyReturnStateIfResident(returnAfterPlayer, false)) {
+                bound = true;
+            } else {
+                // ponytail: session/stale cache only — never FlowCatalog.build on UI thread.
+                List<FlowItem> items = peekSessionCatalog(FlowMode.ALBUM);
+                if (items == null || items.isEmpty()) {
+                    items = peekStaleSessionCatalog(FlowMode.ALBUM);
+                }
+                if (items != null && !items.isEmpty()) {
+                    carouselLoadGen++;
+                    bindCarouselCatalog(items, FlowMode.ALBUM, effectiveKey, carouselLoadGen);
+                    bound = true;
+                }
+            }
+        }
+        if (!bound) {
+            List<FlowItem> items = peekSessionCatalog(FlowMode.ALBUM);
+            if (items == null || items.isEmpty()) {
+                items = peekStaleSessionCatalog(FlowMode.ALBUM);
+            }
+            if (items != null && !items.isEmpty()) {
+                carouselLoadGen++;
+                bindCarouselCatalog(items, FlowMode.ALBUM, effectiveKey, carouselLoadGen);
+                bound = true;
+            } else if (!catalog.isEmpty() && activeMode == FlowMode.ALBUM) {
+                if (!syncCarouselToNowPlayingIfActive()
+                        && effectiveKey != null && !effectiveKey.isEmpty()) {
+                    int found = flowView.engine().findIndexForKey(catalog, effectiveKey);
+                    if (found >= 0) {
+                        flowView.engine().setFocusIndex(found);
+                        focusedItem = flowView.itemAt(found);
+                    }
+                }
+                bound = true;
+            }
+        }
+        if (!bound) {
+            return false;
+        }
+        int center = carouselWarmCenter();
+        if (catalog != null && !catalog.isEmpty()) {
+            warmCatalogCoversAsync(catalog, center, 3);
+        }
+        // NP cover visible on player — seed center slot so crossfade never flashes grey placeholder.
+        if (npCover != null && !npCover.isRecycled()) {
+            FlowItem item = flowView.itemAt(center);
+            String pinKey = item != null && item.coverKey != null && !item.coverKey.isEmpty()
+                    ? item.coverKey : effectiveKey;
+            Bitmap pinned = pinHandoffCover(npCover, pinKey);
+            if (pinned != null && item != null) {
+                if (item.matchKey != null && !item.matchKey.isEmpty()
+                        && !item.matchKey.equals(pinKey)) {
+                    coverCache.put(item.matchKey, pinned);
+                }
+            }
+        }
+        // changeScreen must not rebuild carousel — already bound for crossfade.
+        flowReturnPrepared = true;
+        flowView.invalidate();
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("focusKey", effectiveKey != null ? effectiveKey : "");
+            d.put("catalogSize", catalog != null ? catalog.size() : 0);
+            d.put("hadReturn", returnAfterPlayer != null);
+            d.put("pinned", npCover != null);
+            d.put("centerReady", flowView.centerCoverReadyForRevealDebug());
+            com.solar.launcher.Debug898913Log.log("FlowScreenHost.prepareNpToFlowCrossfade",
+                    "carousel pre-bound for crossfade", "H-C,H-BACK", d);
+        } catch (Exception ignored) {}
+        // #endregion
+        return catalog != null && !catalog.isEmpty();
+    }
+
+    /**
+     * Crossfade landed — keep NP pin until cache serves center; no reflection fade choreography.
+     */
+    public void completeNpToFlowCrossfade() {
+        if (flowView == null) return;
+        flowView.resetHandoffRevealForDisplay();
+        final int center = carouselWarmCenter();
+        flowView.scheduleBakesAround(center, 2);
+        flowView.postOnAnimation(new Runnable() {
+            @Override
+            public void run() {
+                if (flowView != null && flowView.centerCoverReadyForRevealDebug()) {
+                    endReverseHandoff();
+                }
+                if (flowView != null) flowView.invalidate();
+            }
+        });
     }
 
     /** True when carousel can bind without a background catalog build. */
     public boolean hasCachedCatalog(FlowMode mode) {
         List<FlowItem> cached = peekSessionCatalog(mode);
         if (cached != null && !cached.isEmpty()) return true;
-        return catalogSessionCache.peekStale(mode) != null;
+        return catalogSessionCache.peekStale(mode, actions.libraryScanGeneration(), catalogOptionsKey()) != null;
     }
 
     /** True when resident carousel can resume without cold {@link #open}. */
@@ -902,6 +1078,7 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
             uiMode = UI_CAROUSEL;
             pickerScroll.setVisibility(View.GONE);
             flowView.setVisibility(View.VISIBLE);
+            flowView.resetHandoffRevealForDisplay();
             if (!syncCarouselToNowPlayingIfActive()) {
                 if (req.focusKey != null && !req.focusKey.isEmpty()) {
                     int found = flowView.engine().findIndexForKey(catalog, req.focusKey);
@@ -991,10 +1168,10 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
     private List<FlowItem> catalogForReturn(FlowReturnState saved) {
         FlowMode mode = saved.mode != null ? saved.mode : FlowMode.ALBUM;
         int libGen = actions.libraryScanGeneration();
-        int optionsKey = actions.flowMultiTrackAlbumsOnly() ? 1 : 0;
+        int optionsKey = catalogOptionsKey();
         List<FlowItem> cached = catalogSessionCache.peek(mode, libGen, optionsKey);
         if (cached != null) return cached;
-        boolean multiTrack = optionsKey != 0;
+        boolean multiTrack = actions.flowMultiTrackAlbumsOnly();
         List<FlowItem> built;
         if (mode == FlowMode.ALBUM) {
             built = FlowCatalog.buildAlbums(actions.libraryRows(), actions.libraryBrowsePrefs(),
@@ -1019,6 +1196,17 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
 
     public boolean isFlipped() {
         return flowView != null && flowView.isFlipped();
+    }
+
+    /** Active carousel section — Albums, Artists, etc. */
+    public FlowMode getActiveFlowMode() {
+        return activeMode;
+    }
+
+    /** Focused flip-back row when album/artist face is showing. */
+    public FlowBackRow getSelectedBackRow() {
+        if (flowView == null || !flowView.isFlipped()) return null;
+        return flowView.flipController().selectedRow();
     }
 
     public boolean isHandoffOrFlipAnimating() {
@@ -1218,11 +1406,35 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
     /**
      * Reverse 3D morph from Now Playing — mirror of {@link #performNowPlayingHandoffFromCarousel()}.
      * Prep carousel (warm or cold shell), measure landing rect, launch flyer morph immediately.
+     * @return false when prep cannot start (caller should fall back to crossfade)
      */
-    public void performNpToFlowHandoffFromNowPlaying(Bitmap cover, String matchKey,
+    public boolean performNpToFlowHandoffFromNowPlaying(Bitmap cover, String matchKey,
             FlowReturnState warmState, List<FlowItem> warmCatalog, RectF fromRect,
             Runnable onComplete) {
-        if (flowView == null || cover == null || cover.isRecycled()) return;
+        if (flowView == null || cover == null || cover.isRecycled()) {
+            // #region agent log
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("flowViewNull", flowView == null);
+                d.put("coverNull", cover == null);
+                d.put("coverRecycled", cover != null && cover.isRecycled());
+                com.solar.launcher.Debug898913Log.log(
+                        "FlowScreenHost.performNpToFlowHandoffFromNowPlaying",
+                        "ABORT — morph cannot start", "H-D", d);
+            } catch (Exception ignored) {}
+            // #endregion
+            return false;
+        }
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("warm", warmState != null);
+            d.put("matchKey", matchKey != null ? matchKey : "");
+            d.put("fromRectW", fromRect != null ? fromRect.width() : -1f);
+            com.solar.launcher.Debug898913Log.log(
+                    "FlowScreenHost.performNpToFlowHandoffFromNowPlaying", "morph prep start", "H-D", d);
+        } catch (Exception ignored) {}
+        // #endregion
         syncCarouselToNowPlayingIfActive();
         if (warmState != null) {
             prepareReturnForResolvedState(warmState, warmCatalog, cover);
@@ -1230,12 +1442,14 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
             prepareImmediateReverseHandoffShell(cover, matchKey);
         }
         ensureCarouselLayoutForHandoff();
+        actions.ensureHandoffLayoutMeasured();
         float toRotY = getHandoffStartRotationY();
         RectF npRect = fromRect;
         if (npRect == null || npRect.width() <= 0f) {
             npRect = actions.resolveNpHandoffFromScreenRect();
         }
         actions.launchReverseHandoff(cover, npRect, toRotY, onComplete);
+        return true;
     }
 
     /** Center cover for handoff — disk/memory hit, or generated ♪ placeholder for art-less albums. */
@@ -1281,10 +1495,43 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
     }
 
     public void refreshCatalogIfNeeded() {
-        if (uiMode == UI_CAROUSEL && activeMode != FlowMode.UNSPECIFIED) {
-            String key = focusedItem != null ? focusedItem.matchKey : null;
-            showCarousel(activeMode, key);
+        if (uiMode != UI_CAROUSEL || activeMode == FlowMode.UNSPECIFIED) return;
+        // Silent rebind — caller invalidates cache; never flash full-screen loader over a live carousel.
+        rebindCarouselFromPrefs(activeMode,
+                focusedItem != null ? focusedItem.matchKey : null, false);
+    }
+
+    /**
+     * Rebuild carousel after browse-pref / library changes.
+     * @param forceLoadingOverlay true only for first open with no resident catalog
+     */
+    private void rebindCarouselFromPrefs(final FlowMode mode, final String focusKey,
+            boolean forceLoadingOverlay) {
+        final int libGen = actions.libraryScanGeneration();
+        final int optionsKey = catalogOptionsKey();
+        final List<FlowItem> cached = catalogSessionCache.peek(mode, libGen, optionsKey);
+        carouselLoadGen++;
+        coverGen++;
+        coverGovernor.cancelAll();
+        final int loadGen = carouselLoadGen;
+        if (cached != null && !cached.isEmpty()) {
+            bindCarouselWithWorkerWarm(cached, mode, focusKey, loadGen, 0L);
+            return;
         }
+        final List<FlowItem> stale = catalogSessionCache.peekStale(mode, libGen, optionsKey);
+        if (stale != null && !stale.isEmpty()) {
+            bindCarouselWithWorkerWarm(stale, mode, focusKey, loadGen, 0L);
+            catalogBuildGen++;
+            scheduleCatalogRebuild(mode, focusKey, libGen, optionsKey, loadGen,
+                    catalogBuildGen, 0L);
+            return;
+        }
+        catalogBuildGen++;
+        final int buildGen = catalogBuildGen;
+        if (forceLoadingOverlay || catalog.isEmpty()) {
+            showCarouselLoading();
+        }
+        scheduleCatalogRebuild(mode, focusKey, libGen, optionsKey, loadGen, buildGen, 0L);
     }
 
     private void showPicker() {
@@ -1335,28 +1582,28 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
         activeMode = mode;
         syncReflectionPref();
         flowView.resetFlip();
+        flowView.resetHandoffRevealForDisplay();
         pickerScroll.setVisibility(View.GONE);
         flowView.setVisibility(View.VISIBLE);
         carouselLoadGen++;
         final int loadGen = carouselLoadGen;
         coverGen++;
+        coverGovernor.cancelAll();
         catalogBuildGen++;
         final int buildGen = catalogBuildGen;
         final long showCarouselStartMs = DebugSessionLog.ENABLED ? System.currentTimeMillis() : 0L;
 
         final int libGen = actions.libraryScanGeneration();
-        final int optionsKey = actions.flowMultiTrackAlbumsOnly() ? 1 : 0;
+        final int optionsKey = catalogOptionsKey();
         final List<FlowItem> cached = catalogSessionCache.peek(mode, libGen, optionsKey);
         if (cached != null && !cached.isEmpty()) {
-            bindCarouselCatalog(cached, mode, focusKey, loadGen);
-            logShowCarouselTiming(showCarouselStartMs, true, cached.size());
+            bindCarouselWithWorkerWarm(cached, mode, focusKey, loadGen, showCarouselStartMs);
             return;
         }
 
-        final List<FlowItem> stale = catalogSessionCache.peekStale(mode);
+        final List<FlowItem> stale = catalogSessionCache.peekStale(mode, libGen, optionsKey);
         if (stale != null && !stale.isEmpty()) {
-            bindCarouselCatalog(stale, mode, focusKey, loadGen);
-            logShowCarouselTiming(showCarouselStartMs, true, stale.size());
+            bindCarouselWithWorkerWarm(stale, mode, focusKey, loadGen, showCarouselStartMs);
             scheduleCatalogRebuild(mode, focusKey, libGen, optionsKey, loadGen, buildGen, showCarouselStartMs);
             return;
         }
@@ -1366,24 +1613,138 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
         scheduleCatalogRebuild(mode, focusKey, libGen, optionsKey, loadGen, buildGen, showCarouselStartMs);
     }
 
-    private void scheduleCatalogRebuild(final FlowMode mode, final String focusKey,
-            final int libGen, final int optionsKey, final int loadGen, final int buildGen,
-            final long showCarouselStartMs) {
-        new Thread(new Runnable() {
+    /** Small racks: bind immediately, then disk-warm on worker (never block first paint). */
+    private void bindCarouselWithWorkerWarm(final List<FlowItem> items, final FlowMode mode,
+            final String focusKey, final int loadGen, final long showCarouselStartMs) {
+        if (items == null || items.isEmpty()) return;
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("size", items.size());
+            d.put("loadGen", loadGen);
+            d.put("flowViewNull", flowView == null);
+            com.solar.launcher.Debug898913Log.log("FlowScreenHost.bindCarouselWithWorkerWarm",
+                    "warm bind", "H3", d);
+        } catch (Exception ignored) {}
+        // #endregion
+        bindCarouselCatalog(items, mode, focusKey, loadGen);
+        logShowCarouselTiming(showCarouselStartMs, true, items.size());
+    }
+
+    /** Bind first, warm covers on worker — never block the first scrollable frame on decode. */
+    private void schedulePostBindCoverWarm(final List<FlowItem> items, final int warmFocus,
+            final int loadGen) {
+        if (items == null || items.isEmpty() || flowView == null) return;
+        final int warmRadius = warmRadiusForCatalog(items.size());
+        FLOW_WORKER.execute(new Runnable() {
             @Override
             public void run() {
-                final List<FlowItem> built = buildCatalog(mode, libGen, optionsKey);
-                catalogSessionCache.put(mode, libGen, optionsKey, built);
+                try {
+                    warmCatalogCoversSync(items, warmFocus, warmRadius);
+                } catch (Throwable ignored) {
+                    // Fail-open — carousel already bound; governor fills misses on scroll.
+                }
                 actions.runOnUi(new Runnable() {
                     @Override
                     public void run() {
-                        if (buildGen != catalogBuildGen || loadGen != carouselLoadGen) return;
-                        bindCarouselCatalog(built, mode, focusKey, loadGen);
-                        logShowCarouselTiming(showCarouselStartMs, false, built.size());
+                        if (loadGen != carouselLoadGen || flowView == null) return;
+                        flowView.prefetchAround(warmFocus);
+                        flowView.scheduleBakesAround(warmFocus, 2);
+                        flowView.invalidate();
                     }
                 });
             }
-        }, "FlowCatalog").start();
+        });
+    }
+
+    private void scheduleCatalogRebuild(final FlowMode mode, final String focusKey,
+            final int libGen, final int optionsKey, final int loadGen, final int buildGen,
+            final long showCarouselStartMs) {
+        FLOW_WORKER.execute(new Runnable() {
+            @Override
+            public void run() {
+                // #region agent log
+                try {
+                    org.json.JSONObject d = new org.json.JSONObject();
+                    d.put("mode", mode != null ? mode.name() : "null");
+                    d.put("buildGen", buildGen);
+                    d.put("catalogBuildGen", catalogBuildGen);
+                    d.put("loadGen", loadGen);
+                    com.solar.launcher.Debug898913Log.log("FlowScreenHost.scheduleCatalogRebuild",
+                            "rebuild worker start", "H2", d);
+                } catch (Exception ignored) {}
+                // #endregion
+                if (buildGen != catalogBuildGen) {
+                    return;
+                }
+                List<FlowItem> built = null;
+                Throwable failure = null;
+                try {
+                    built = buildCatalog(mode, libGen, optionsKey);
+                    if (buildGen == catalogBuildGen) {
+                        catalogSessionCache.put(mode, libGen, optionsKey, built);
+                    }
+                } catch (Throwable t) {
+                    failure = t;
+                }
+                final List<FlowItem> result = built;
+                final Throwable err = failure;
+                actions.runOnUi(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (err != null) {
+                            // #region agent log
+                            try {
+                                org.json.JSONObject d = new org.json.JSONObject();
+                                d.put("mode", mode != null ? mode.name() : "null");
+                                d.put("error", err.getClass().getName());
+                                d.put("message", err.getMessage() != null ? err.getMessage() : "");
+                                com.solar.launcher.Debug898913Log.log(
+                                        "FlowScreenHost.scheduleCatalogRebuild",
+                                        "catalog build failed", "H-LOAD", d);
+                            } catch (Exception ignored) {}
+                            // #endregion
+                            hideCarouselLoading();
+                            return;
+                        }
+                        if (buildGen != catalogBuildGen || loadGen != carouselLoadGen) {
+                            // #region agent log
+                            try {
+                                org.json.JSONObject d = new org.json.JSONObject();
+                                d.put("loadGen", loadGen);
+                                d.put("carouselLoadGen", carouselLoadGen);
+                                d.put("buildGen", buildGen);
+                                d.put("catalogBuildGen", catalogBuildGen);
+                                d.put("flowLoadingVisible", flowLoadingVisible);
+                                com.solar.launcher.Debug898913Log.log(
+                                        "FlowScreenHost.scheduleCatalogRebuild",
+                                        "stale rebuild discarded", "H-LOAD", d);
+                            } catch (Exception ignored) {}
+                            // #endregion
+                            recoverOrphanedCarouselLoader(mode, focusKey, libGen, optionsKey);
+                            return;
+                        }
+                        bindCarouselCatalog(result, mode, focusKey, loadGen);
+                        logShowCarouselTiming(showCarouselStartMs, false,
+                                result != null ? result.size() : 0);
+                    }
+                });
+            }
+        });
+    }
+
+    /** Stale async build — bind peeked cache or dismiss loader so Flow never hangs. */
+    private void recoverOrphanedCarouselLoader(FlowMode mode, String focusKey,
+            int libGen, int optionsKey) {
+        List<FlowItem> cached = catalogSessionCache.peek(mode, libGen, optionsKey);
+        if (cached == null || cached.isEmpty()) {
+            cached = catalogSessionCache.peekStale(mode, libGen, optionsKey);
+        }
+        if (cached != null && !cached.isEmpty()) {
+            bindCarouselCatalog(cached, mode, focusKey, carouselLoadGen);
+        } else {
+            hideCarouselLoading();
+        }
     }
 
     private void logShowCarouselTiming(long startMs, boolean cacheHit, int catalogSize) {
@@ -1402,7 +1763,7 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
         final long buildStartMs = DebugSessionLog.ENABLED ? System.currentTimeMillis() : 0L;
         // #endregion
         try {
-            boolean multiTrack = optionsKey != 0;
+            boolean multiTrack = actions.flowMultiTrackAlbumsOnly();
             List<FlowItem> built;
             if (mode == FlowMode.ALBUM) {
                 built = FlowCatalog.buildAlbums(actions.libraryRows(), actions.libraryBrowsePrefs(),
@@ -1440,30 +1801,132 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
         }
     }
 
+    /** Cache key for session catalog — includes library filter/sort prefs. */
+    private int catalogOptionsKey() {
+        return FlowCatalog.catalogOptionsKey(actions.libraryBrowsePrefs(),
+                actions.flowMultiTrackAlbumsOnly());
+    }
+
+    /**
+     * Resolve carousel index after catalog (re)bind — matchKey beats stale numeric index.
+     */
+    /** Bind-time check: side slots must be catalog[N±1] for wheel predictability. */
+    private void logNeighborInvariant(int index) {
+        if (catalog == null || catalog.isEmpty()) return;
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("focusIndex", index);
+            d.put("centerTitle", index >= 0 && index < catalog.size()
+                    ? catalog.get(index).title : "");
+            if (index > 1) d.put("slotMinus2", catalog.get(index - 2).title);
+            if (index > 0) d.put("slotMinus1", catalog.get(index - 1).title);
+            if (index + 1 < catalog.size()) d.put("slotPlus1", catalog.get(index + 1).title);
+            if (index + 2 < catalog.size()) d.put("slotPlus2", catalog.get(index + 2).title);
+            if (index > 0) d.put("leftTitle", catalog.get(index - 1).title);
+            if (index + 1 < catalog.size()) d.put("rightTitle", catalog.get(index + 1).title);
+            if (index + 2 < catalog.size()) d.put("right2Title", catalog.get(index + 2).title);
+            if (index > 1) d.put("left2Title", catalog.get(index - 2).title);
+            if (flowView != null && flowView.getWidth() > 0) {
+                float vw = flowView.getWidth();
+                float vh = flowView.getHeight();
+                FlowEngine eng = flowView.engine();
+                org.json.JSONArray slots = new org.json.JSONArray();
+                for (int dIdx = -2; dIdx <= 2; dIdx++) {
+                    int idx = index + dIdx;
+                    if (idx < 0 || idx >= catalog.size()) continue;
+                    FlowEngine.SlotTransform t = eng.slotTransform(idx, vw, vh, 0f);
+                    org.json.JSONObject slot = new org.json.JSONObject();
+                    slot.put("d", dIdx);
+                    slot.put("idx", idx);
+                    slot.put("title", catalog.get(idx).title);
+                    slot.put("rel", idx - eng.getVisualOffset());
+                    slot.put("alpha", t.alpha);
+                    slot.put("cx", t.centerX);
+                    slots.put(slot);
+                }
+                d.put("bindSlots", slots);
+            }
+            com.solar.launcher.Debug898913Log.log("FlowScreenHost.bindCarouselCatalog",
+                    "neighbor invariant", "H-CATALOG", d);
+        } catch (Exception ignored) {}
+    }
+
+    private int resolveCarouselFocusIndex(List<FlowItem> items, FlowMode mode, String focusKey) {
+        boolean fromSection = launchRequest != null && launchRequest.enteredFromSection;
+        String resident = focusedItem != null ? focusedItem.matchKey : null;
+        return FlowCarouselFocus.resolveIndex(items, mode, focusKey, fromSection, resident,
+                actions.loadLastFlowMatchKey(mode), actions.loadLastFlowIndex(mode),
+                flowView.engine());
+    }
+
+    /** Worker-thread focus resolve — same policy as bind, no live engine required. */
+    private int resolveFocusIndexOnList(List<FlowItem> items, FlowMode mode, String focusKey) {
+        boolean fromSection = launchRequest != null && launchRequest.enteredFromSection;
+        String resident = focusedItem != null ? focusedItem.matchKey : null;
+        return FlowCarouselFocus.resolveIndex(items, mode, focusKey, fromSection, resident,
+                actions.loadLastFlowMatchKey(mode), actions.loadLastFlowIndex(mode),
+                new FlowEngine());
+    }
+
+    /** Pre-bind warm radius — tiny racks need every neighbor drawable on frame 0. */
+    private static int warmRadiusForCatalog(int catalogSize) {
+        return catalogSize <= 5 ? catalogSize : 3;
+    }
+
     private void bindCarouselCatalog(List<FlowItem> built, FlowMode mode, String focusKey, int loadGen) {
-        if (loadGen != carouselLoadGen) return;
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("flowViewNull", flowView == null);
+            d.put("catalogSize", built != null ? built.size() : -1);
+            d.put("loadGen", loadGen);
+            d.put("carouselLoadGen", carouselLoadGen);
+            com.solar.launcher.Debug898913Log.log("FlowScreenHost.bindCarouselCatalog",
+                    "bind entry", "H1,H3", d);
+        } catch (Exception ignored) {}
+        // #endregion
+        if (flowView == null) {
+            // #region agent log
+            com.solar.launcher.Debug898913Log.log("FlowScreenHost.bindCarouselCatalog",
+                    "abort flowView null", "H1", null);
+            // #endregion
+            hideCarouselLoading();
+            return;
+        }
+        if (loadGen != carouselLoadGen) {
+            // #region agent log
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("loadGen", loadGen);
+                d.put("carouselLoadGen", carouselLoadGen);
+                d.put("flowLoadingVisible", flowLoadingVisible);
+                com.solar.launcher.Debug898913Log.log("FlowScreenHost.bindCarouselCatalog",
+                        "stale bind skipped", "H-LOAD", d);
+            } catch (Exception ignored) {}
+            // #endregion
+            // Orphan loader when a newer rebind superseded this bind.
+            if (flowLoadingVisible) hideCarouselLoading();
+            return;
+        }
         syncReflectionPref();
+        coverGen++;
+        coverGovernor.cancelAll();
+        coverCache.clear();
+        flowView.resetHandoffRevealForDisplay();
         catalog = built;
         incrementalThumbCursor = 0;
-        flowView.setItems(catalog);
-        int index = 0;
-        boolean syncedNp = syncCarouselToNowPlayingIfActive();
-        if (!syncedNp) {
-            if (focusKey != null && !focusKey.isEmpty()) {
-                int found = flowView.engine().findIndexForKey(catalog, focusKey);
-                if (found >= 0) index = found;
-            } else {
-                index = actions.loadLastFlowIndex(mode);
-                if (index >= catalog.size()) index = 0;
-            }
-            flowView.engine().setFocusIndex(index);
-            focusedItem = flowView.itemAt(index);
-        } else {
+        int index = resolveCarouselFocusIndex(catalog, mode, focusKey);
+        flowView.setItemsAndFocus(catalog, index);
+        focusedItem = flowView.itemAt(index);
+        if (syncCarouselToNowPlayingIfActive()) {
             index = flowView.engine().getFocusIndex();
+            focusedItem = flowView.itemAt(index);
         }
         flowView.prefetchAround(index);
         flowView.invalidate();
+        logNeighborInvariant(index);
         hideCarouselLoading();
+        ensureFlowBlockingOverlayDismissed();
         flowView.requestFocus();
         // #region agent log
         try {
@@ -1471,7 +1934,7 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
             d.put("mode", mode.name());
             d.put("focusKey", focusKey != null ? focusKey : "");
             d.put("focusIndex", index);
-            d.put("syncedNp", syncedNp);
+            d.put("syncedNp", actions.isMusicPlaybackActive());
             d.put("centerTitle", focusedItem != null ? focusedItem.title : "");
             d.put("flowViewAlpha", flowView.getAlpha());
             DebugB8b871Log.log(actions.activity(), "FlowScreenHost.bindCarouselCatalog",
@@ -1486,15 +1949,7 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
                     "FlowScreenHost.bindCarouselCatalog", "bound", "H-A-H-B", d);
         } catch (Exception ignored) {}
         // #endregion
-        final int warmIndex = index;
-        flowView.postOnAnimation(new Runnable() {
-            @Override
-            public void run() {
-                if (loadGen != carouselLoadGen) return;
-                warmCatalogCoversAsync(catalog, warmIndex, 2);
-                flowView.scheduleBakesAround(warmIndex, 2);
-            }
-        });
+        schedulePostBindCoverWarm(catalog, index, loadGen);
         // #region agent log
         try {
             org.json.JSONObject d = new org.json.JSONObject();
@@ -1513,6 +1968,8 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
         try {
             org.json.JSONObject d = new org.json.JSONObject();
             d.put("asyncBuild", true);
+            com.solar.launcher.Debug898913Log.log("FlowScreenHost.showCarouselLoading",
+                    "catalog loading shown", "H-LOAD", d);
             com.solar.launcher.Debug1cf0c7Log.log(actions.activity(),
                     "FlowScreenHost.showCarouselLoading", "catalog loading", "H-B", d);
         } catch (Exception ignored) {}
@@ -1522,6 +1979,20 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
 
     private void hideCarouselLoading() {
         if (!flowLoadingVisible) return;
+        flowLoadingVisible = false;
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("catalogSize", catalog != null ? catalog.size() : 0);
+            com.solar.launcher.Debug898913Log.log("FlowScreenHost.hideCarouselLoading",
+                    "catalog loading hidden", "H-LOAD", d);
+        } catch (Exception ignored) {}
+        // #endregion
+        actions.hideFlowLoading();
+    }
+
+    /** Dismiss Flow blocking overlay even when flowLoadingVisible flag desynced. */
+    private void ensureFlowBlockingOverlayDismissed() {
         flowLoadingVisible = false;
         actions.hideFlowLoading();
     }
@@ -1795,6 +2266,7 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
     @Override
     public void prefetchCarouselCovers(int visualCenter, int radius) {
         if (catalog == null || catalog.isEmpty()) return;
+        warmCatalogCoversAsync(catalog, visualCenter, radius);
         int n = catalog.size();
         for (int d = -radius; d <= radius; d++) {
             int idx = visualCenter + d;
@@ -1833,7 +2305,8 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
             incrementalThumbCursor = idx + 1;
             android.graphics.Bitmap disk = AlbumArtCache.get(artDir, item.coverKey);
             if (disk == null) {
-                disk = FlowCoverResolver.resolve(item, this, thumbPx);
+                disk = FlowCoverResolver.resolveFromTracks(
+                        item.tracks, this, thumbPx, item.coverKey, artDir, flowDir);
             }
             if (disk != null) {
                 FlowThumbCache.put(flowDir, item.coverKey, disk, thumbPx);
@@ -1847,8 +2320,15 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
     @Override
     public void warmCarouselCovers(int center, int radius) {
         if (catalog == null || catalog.isEmpty() || flowView == null) return;
-        if (flowView.engine().isCarouselScrolling()) return;
         warmCatalogCoversAsync(catalog, center, radius);
+    }
+
+    /** On-screen carousel center for warm/prefetch — visual index mid-scroll. */
+    private int carouselWarmCenter() {
+        if (flowView == null) return 0;
+        FlowEngine engine = flowView.engine();
+        return engine.isCarouselScrolling()
+                ? engine.getVisualCenterIndex() : engine.getFocusIndex();
     }
 
     private void warmCatalogCoversAsync(final List<FlowItem> items, final int center, final int radius) {
@@ -1876,21 +2356,13 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
         int thumb = coverCache.thumbSizePx(480f, 360f);
         int n = items.size();
         int warmed = 0;
-        for (int d = -radius; d <= radius; d++) {
-            int idx = center + d;
-            if (idx < 0 || idx >= n) continue;
-            if (reverseHandoffActive && d == 0 && handoffPinnedCover != null) continue;
-            FlowItem item = items.get(idx);
-            if (item == null || item.coverKey == null || item.coverKey.isEmpty()) continue;
-            if (coverCache.get(item.coverKey) != null) continue;
-            Bitmap disk = FlowCoverResolver.resolveDiskCached(item, this, thumb);
-            if (disk == null) {
-                // Art-less albums get a cached ♪ placeholder — same key as Flow catalog.
-                disk = FlowCoverResolver.resolve(item, this, thumb);
-            }
-            if (disk != null) {
-                coverCache.put(item.coverKey, disk);
-                warmed++;
+        // Center slot first — focused cover should land before side neighbors.
+        for (int ring = 0; ring <= radius; ring++) {
+            if (ring == 0) {
+                warmed += warmCatalogCoverAt(items, center, center, thumb, n);
+            } else {
+                warmed += warmCatalogCoverAt(items, center, center + ring, thumb, n);
+                warmed += warmCatalogCoverAt(items, center, center - ring, thumb, n);
             }
         }
         // #region agent log
@@ -1908,6 +2380,26 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
             }
         }
         // #endregion
+    }
+
+    private int warmCatalogCoverAt(List<FlowItem> items, int center, int idx, int thumb, int n) {
+        if (idx < 0 || idx >= n) return 0;
+        if (idx == center && reverseHandoffActive && handoffPinnedCover != null) return 0;
+        FlowItem item = items.get(idx);
+        if (item == null || item.coverKey == null || item.coverKey.isEmpty()) return 0;
+        if (coverCache.get(item.coverKey) != null) return 0;
+        Bitmap disk = FlowCoverResolver.resolveDiskCached(item, this, thumb);
+        if (disk == null) {
+            // Decode on worker — placeholders stay in memory only.
+            disk = FlowCoverResolver.resolveFromTracks(
+                    item.tracks, this, thumb, item.coverKey,
+                    actions.getAlbumArtCacheDir(), actions.getFlowThumbCacheDir());
+        }
+        if (disk != null) {
+            coverCache.put(item.coverKey, disk);
+            return 1;
+        }
+        return 0;
     }
 
     @Override
@@ -1938,6 +2430,10 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
         focusedItem = flowView.itemAt(index);
         if (activeMode != FlowMode.UNSPECIFIED) {
             actions.saveLastFlowIndex(activeMode, index);
+            if (focusedItem != null && focusedItem.matchKey != null
+                    && !focusedItem.matchKey.isEmpty()) {
+                actions.saveLastFlowMatchKey(activeMode, focusedItem.matchKey);
+            }
         }
     }
 
@@ -1969,5 +2465,39 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
     @Override
     public Typeface labelFont() {
         return ThemeManager.getCustomFont();
+    }
+
+    /** adb harness — carousel focus after automated wheel input. */
+    public int adbCarouselFocusIndex() {
+        return flowView != null ? flowView.engine().getFocusIndex() : -1;
+    }
+
+    public int adbCarouselItemCount() {
+        return catalog != null ? catalog.size() : 0;
+    }
+
+    public boolean adbCarouselScrollWheel(int delta) {
+        return flowView != null && flowView.scrollWheel(delta);
+    }
+
+    /**
+     * Fan-out probe: {focus, count, centerCx, rightCx, rightRotY, rightWidth}.
+     */
+    public float[] adbCarouselGeometry() {
+        if (flowView == null || catalog == null || catalog.isEmpty()) return null;
+        int focus = flowView.engine().getFocusIndex();
+        float w = flowView.getWidth() > 0 ? flowView.getWidth() : 480f;
+        float h = flowView.getHeight() > 0 ? flowView.getHeight() : 360f;
+        FlowEngine.SlotTransform center = flowView.engine().slotTransform(focus, w, h, 0f);
+        float rightCx = center.centerX;
+        float rightRotY = 0f;
+        float rightW = 0f;
+        if (focus + 1 < catalog.size()) {
+            FlowEngine.SlotTransform right = flowView.engine().slotTransform(focus + 1, w, h, 0f);
+            rightCx = right.centerX;
+            rightRotY = right.rotationYDeg;
+            rightW = right.width;
+        }
+        return new float[] { focus, catalog.size(), center.centerX, rightCx, rightRotY, rightW };
     }
 }

@@ -128,9 +128,11 @@ public final class ScreenTransitionCoordinator {
             }
         };
 
-        // Let outgoing frame paint after heavy build before first anim frame.
-        if (inView != null) {
-            inView.postOnAnimation(startAnim);
+        // Start on the outgoing root — it is already on screen so Back feels immediate.
+        if (outView != null) {
+            outView.post(startAnim);
+        } else if (inView != null) {
+            inView.post(startAnim);
         } else {
             startAnim.run();
         }
