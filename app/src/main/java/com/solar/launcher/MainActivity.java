@@ -1279,7 +1279,9 @@ public class MainActivity extends Activity {
     private boolean isShuffleMode = false;
     private int repeatMode = 0; // 0: OFF, 1: ONE (Repeat One), 2: ALL (Repeat Folder/All)
     private float playbackSpeed = 1.0f;
-    private boolean isSoundEffectEnabled = true;
+    private boolean isSoundEffectEnabled = false;
+    private int wheelSensitivityLevel = WheelSensitivity.LEVEL_LOW;
+    private final WheelSensitivity wheelSensitivity = new WheelSensitivity();
     /** Reset screen checkbox state — not persisted until Continue runs. */
     private boolean resetPickRockbox;
     private boolean resetPickSolar;
@@ -2252,6 +2254,11 @@ public class MainActivity extends Activity {
 
         startInactivityMonitor();
 
+        if (BuildConfig.MUSIC_ROOT != null && !BuildConfig.MUSIC_ROOT.isEmpty()) {
+            rootFolder = new File(BuildConfig.MUSIC_ROOT);
+            currentFolder = rootFolder;
+        }
+
         audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
         // 🚀 [시스템 공식 등록] 화면이 꺼져도 버튼 신호를 받을 수 있도록 수신기를 장착합니다!
         ComponentName componentName = new ComponentName(getPackageName(), MediaBtnReceiver.class.getName());
@@ -2337,8 +2344,12 @@ public class MainActivity extends Activity {
         } catch (Exception e) {}
 
         try {
-            isSoundEffectEnabled = prefs.getBoolean("sound", true);
+            isSoundEffectEnabled = prefs.getBoolean("sound", false);
             applySoundSetting();
+        } catch (Exception e) {}
+
+        try {
+            wheelSensitivityLevel = prefs.getInt("wheel_sensitivity", WheelSensitivity.LEVEL_LOW);
         } catch (Exception e) {}
 
         try { isVibrationEnabled = prefs.getBoolean("vibrate", true); } catch (Exception e) {}
@@ -4851,6 +4862,13 @@ public class MainActivity extends Activity {
         return Y1InputKeys.wheelMenuDelta(keyCode);
     }
 
+    /** Accelerated delta for list/menu wheel scrolling only. Volume/brightness/keyboard/scrub/Flow stay 1:1. */
+    private int wheelScrollDelta(int keyCode) {
+        int sign = Y1InputKeys.isWheelUp(keyCode) ? -1 : (Y1InputKeys.isWheelDown(keyCode) ? 1 : 0);
+        if (sign == 0) return 0;
+        return sign * wheelSensitivity.deltaForEvent(wheelSensitivityLevel);
+    }
+
     private void restoreHomeScreenEditorFocus(final int targetFocusIndex) {
         containerSettingsItems.postDelayed(new Runnable() {
             @Override
@@ -5294,8 +5312,10 @@ public class MainActivity extends Activity {
         if (listThemes == null || themeBrowserRows.isEmpty() || delta == 0) return false;
         int pos = themeBrowserListPosition();
         if (pos < 0) pos = themeBrowserFocus;
-        int next = pos + (delta < 0 ? -1 : 1);
-        if (next < 0 || next >= themeBrowserRows.size()) return false;
+        int next = pos + delta;
+        if (next < 0) next = 0;
+        if (next >= themeBrowserRows.size()) next = themeBrowserRows.size() - 1;
+        if (next == pos) return false;
         themeBrowserFocus = next;
         scrollThemesToListPos(next);
         ThemeBrowser.Row row = themeBrowserRows.get(next);
@@ -5304,7 +5324,47 @@ public class MainActivity extends Activity {
     }
 
     private void dispatchThemeListKey(int keyCode) {
-        moveThemeListFocus(Y1InputKeys.isWheelUp(keyCode) ? -1 : 1);
+        moveThemeListFocus(wheelScrollDelta(keyCode));
+    }
+
+    /**
+     * Move browser list focus one or more rows. Re-evaluates current focus each step so
+     * acceleration works with dynamic/recycled row containers.
+     */
+    private boolean stepBrowserListFocus(boolean up, int steps) {
+        boolean any = false;
+        for (int s = 0; s < steps; s++) {
+            View c = getCurrentFocus();
+            if (c == null) return any;
+            android.view.ViewGroup parent = (android.view.ViewGroup) c.getParent();
+            boolean moved = false;
+            if (parent instanceof LinearLayout) {
+                int index = parent.indexOfChild(c);
+                int start = up ? index - 1 : index + 1;
+                int end = up ? -1 : parent.getChildCount();
+                int inc = up ? -1 : 1;
+                for (int i = start; i != end; i += inc) {
+                    View n = parent.getChildAt(i);
+                    if (n != null && n.getVisibility() == View.VISIBLE && n.isFocusable()
+                            && n.isEnabled()) {
+                        if (n.requestFocus()) {
+                            scrollBrowserRowIntoView(n, parent);
+                            moved = true;
+                            break;
+                        }
+                    }
+                }
+            } else {
+                View n = c.focusSearch(up ? View.FOCUS_UP : View.FOCUS_DOWN);
+                if (n != null) {
+                    n.requestFocus();
+                    moved = true;
+                }
+            }
+            if (!moved) return any;
+            any = true;
+        }
+        return any;
     }
 
     private void clearThemeGalleryPreview() {
@@ -6924,13 +6984,13 @@ public class MainActivity extends Activity {
         if (!Y1InputKeys.isWheelKey(keyCode)) return false;
         if (isThemeListActive()) return false;
         if (isConversationThreadActive()) {
-            if (moveConversationListFocus(Y1InputKeys.isWheelUp(keyCode) ? -1 : 1)) {
+            if (moveConversationListFocus(wheelScrollDelta(keyCode))) {
                 clickFeedback();
             }
             return true;
         }
         if (!isReachBrowseListActive()) return false;
-        int delta = Y1InputKeys.isWheelUp(keyCode) ? -1 : 1;
+        int delta = wheelScrollDelta(keyCode);
         boolean moved = moveReachBrowseListFocus(delta) || ensureReachBrowseListFocus();
         if (moved) clickFeedback();
         // #region agent log
@@ -13163,6 +13223,7 @@ public class MainActivity extends Activity {
         if (RowKeys.EQ.equals(rowKey)) return eqIconKey();
         if (RowKeys.BUTTON_SOUND.equals(rowKey)) return isSoundEffectEnabled ? "keyToneOn" : "keyToneOff";
         if (RowKeys.BUTTON_VIBRATE.equals(rowKey)) return isVibrationEnabled ? "keyVibrationOn" : "keyVibrationOff";
+        if (RowKeys.WHEEL_SENSITIVITY.equals(rowKey)) return wheelSensitivityIconKey();
         if (RowKeys.SCREEN_TIMEOUT.equals(rowKey)) return screenTimeoutIconKey();
         if (RowKeys.POWER_SAVING_SHUTDOWN.equals(rowKey)) {
             return InactivityShutdownConfig.iconKeyForMinutes(inactivityShutdownMinutes());
@@ -13174,6 +13235,26 @@ public class MainActivity extends Activity {
         if (RowKeys.DATETIME.equals(rowKey)) return "dateTime";
         if (RowKeys.SWITCH_ROCKBOX.equals(rowKey)) return "launcher";
         return null;
+    }
+
+    private String wheelSensitivityIconKey() {
+        switch (wheelSensitivityLevel) {
+            case WheelSensitivity.LEVEL_HIGH: return "wheelFast";
+            case WheelSensitivity.LEVEL_MEDIUM: return "wheelMedium";
+            case WheelSensitivity.LEVEL_LOW: return "wheelSlow";
+            default: return "wheelOff";
+        }
+    }
+
+    private String wheelSensitivityStateText() {
+        int res;
+        switch (wheelSensitivityLevel) {
+            case WheelSensitivity.LEVEL_HIGH: res = R.string.settings_wheel_sensitivity_high; break;
+            case WheelSensitivity.LEVEL_MEDIUM: res = R.string.settings_wheel_sensitivity_medium; break;
+            case WheelSensitivity.LEVEL_LOW: res = R.string.settings_wheel_sensitivity_low; break;
+            default: res = R.string.settings_wheel_sensitivity_off; break;
+        }
+        return getString(res);
     }
 
     /** EQ row label — safe before preset list async load finishes. */
@@ -13194,6 +13275,7 @@ public class MainActivity extends Activity {
         if (RowKeys.EQ.equals(rowKey)) return eqPresetStateText();
         if (RowKeys.BUTTON_SOUND.equals(rowKey)) return stateOnOff(isSoundEffectEnabled);
         if (RowKeys.BUTTON_VIBRATE.equals(rowKey)) return stateOnOff(isVibrationEnabled);
+        if (RowKeys.WHEEL_SENSITIVITY.equals(rowKey)) return wheelSensitivityStateText();
         if (RowKeys.SCREEN_OFF_CTRL.equals(rowKey)) return stateOnOff(isScreenOffControlEnabled);
         if (RowKeys.DEBUG_JJ_THEMES.equals(rowKey)) return stateOnOff(ActiveThemeEngine.isJjMode());
         if (RowKeys.DEBUG_SHOW_ERROR_TOASTS.equals(rowKey)) {
@@ -21629,6 +21711,23 @@ public class MainActivity extends Activity {
             }
         });
         containerSettingsItems.addView(btnVibrate);
+
+        final LinearLayout btnWheelSensitivity = createSettingsRow(RowKeys.WHEEL_SENSITIVITY,
+                R.string.settings_wheel_sensitivity, false);
+        btnWheelSensitivity.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                wheelSensitivityLevel = (wheelSensitivityLevel + 1) % 4;
+                wheelSensitivity.reset();
+                try {
+                    prefs.edit().putInt("wheel_sensitivity", wheelSensitivityLevel).commit();
+                } catch (Exception e) {
+                }
+                refreshSettingsPreview(RowKeys.WHEEL_SENSITIVITY);
+            }
+        });
+        containerSettingsItems.addView(btnWheelSensitivity);
 
         final LinearLayout btnScreenOffCtrl = createSettingsRow(RowKeys.SCREEN_OFF_CTRL,
                 R.string.settings_screen_off_control, false);
@@ -39041,15 +39140,13 @@ public class MainActivity extends Activity {
                     if (delta != 0 && handlePlaylistMoveWheel(delta)) return true;
                 }
 
-                if (Y1InputKeys.isWheelUp(keyCode)) {
-                    listVirtualSongs.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP));
-                    listVirtualSongs.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_UP));
-                    clickFeedback();
-                    return true;
-                }
-                if (Y1InputKeys.isWheelDown(keyCode)) {
-                    listVirtualSongs.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN));
-                    listVirtualSongs.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_DOWN));
+                int virtualDelta = wheelScrollDelta(keyCode);
+                if (virtualDelta != 0) {
+                    int key = virtualDelta < 0 ? KeyEvent.KEYCODE_DPAD_UP : KeyEvent.KEYCODE_DPAD_DOWN;
+                    for (int i = 0; i < Math.abs(virtualDelta); i++) {
+                        listVirtualSongs.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, key));
+                        listVirtualSongs.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, key));
+                    }
                     clickFeedback();
                     return true;
                 }
@@ -39083,14 +39180,14 @@ public class MainActivity extends Activity {
                         if (row != null && row.isFocusable() && row.requestFocus()) break;
                     }
                 }
-                if (moveSettingsListFocus(Y1InputKeys.isWheelUp(keyCode) ? -1 : 1)) {
+                if (moveSettingsListFocus(wheelScrollDelta(keyCode))) {
                     clickFeedback();
                 }
                 return true;
             }
             if (currentScreenState == STATE_MENU && Y1InputKeys.isWheelKey(keyCode)) {
                 if (!isFocusValidForCurrentScreen()) requestFirstHomeMenuFocus();
-                if (moveHomeMenuFocus(Y1InputKeys.isWheelUp(keyCode) ? -1 : 1)) clickFeedback();
+                if (moveHomeMenuFocus(wheelScrollDelta(keyCode))) clickFeedback();
                 return true;
             }
             if ((currentScreenState == STATE_BROWSER || currentScreenState == STATE_PODCASTS
@@ -39109,54 +39206,13 @@ public class MainActivity extends Activity {
                 ensureBrowserListFocus();
                 c = getCurrentFocus();
             }
-            if (c != null) {
-                if (Y1InputKeys.isWheelUp(keyCode)) { // wheel up
-                    // 🚀 [점프 완벽 차단] 좌표 검색(focusSearch)을 버리고 리스트 순서(Index)를 직접 조작합니다!
-                    android.view.ViewGroup parent = (android.view.ViewGroup) c.getParent();
-                    if (parent instanceof LinearLayout) {
-                        int index = parent.indexOfChild(c);
-                        // 무조건 바로 위(-1)의 곡으로만 이동
-                        for (int i = index - 1; i >= 0; i--) {
-                            View n = parent.getChildAt(i);
-                            if (n != null && n.getVisibility() == View.VISIBLE && n.isFocusable()
-                                    && n.isEnabled()) {
-                                if (n.requestFocus()) {
-                                    scrollBrowserRowIntoView(n, parent);
-                                    break;
-                                }
-                                continue;
-                            }
-                        }
-                    } else {
-                        View n = c.focusSearch(View.FOCUS_UP);
-                        if (n != null) n.requestFocus();
-                    }
+            int browserDelta = wheelScrollDelta(keyCode);
+            if (c != null && browserDelta != 0) {
+                // 🚀 [점프 완벽 차단] 좌표 검색(focusSearch)을 버리고 리스트 순서(Index)를 직접 조작합니다!
+                if (stepBrowserListFocus(browserDelta < 0, Math.abs(browserDelta))) {
                     clickFeedback();
-                    return true;
                 }
-                if (Y1InputKeys.isWheelDown(keyCode)) { // wheel down
-                    android.view.ViewGroup parent = (android.view.ViewGroup) c.getParent();
-                    if (parent instanceof LinearLayout) {
-                        int index = parent.indexOfChild(c);
-                        // 무조건 바로 아래(+1)의 곡으로만 이동
-                        for (int i = index + 1; i < parent.getChildCount(); i++) {
-                            View n = parent.getChildAt(i);
-                            if (n != null && n.getVisibility() == View.VISIBLE && n.isFocusable()
-                                    && n.isEnabled()) {
-                                if (n.requestFocus()) {
-                                    scrollBrowserRowIntoView(n, parent);
-                                    break;
-                                }
-                                continue;
-                            }
-                        }
-                    } else {
-                        View n = c.focusSearch(View.FOCUS_DOWN);
-                        if (n != null) n.requestFocus();
-                    }
-                    clickFeedback();
-                    return true;
-                }
+                return true;
             }
             return super.onKeyDown(keyCode, event);
         }

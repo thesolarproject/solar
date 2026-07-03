@@ -47,14 +47,20 @@ android {
             keyAlias "platform"
             keyPassword "android"
         }
+        debugKeystore {
+            storeFile file("${rootProject.projectDir}/.gradle/debug.keystore")
+            storePassword "android"
+            keyAlias "androiddebugkey"
+            keyPassword "android"
+        }
     }
 
     defaultConfig {
         applicationId "com.solar.launcher"
         minSdk 17
         targetSdk 35
-        versionCode 3419485
-        versionName "20260702-1525"
+        versionCode 3420290
+        versionName "20260703-0450"
         buildConfigField "boolean", "FEATURE_OTA_UPDATE", "true"
         buildConfigField "String", "OTA_UPDATES_URL", "\"https://thesolarproject.github.io/solar-update/updates.xml\""
         def podcastIndexKey = project.findProperty("PODCAST_INDEX_API_KEY") ?: ""
@@ -72,12 +78,25 @@ android {
 
     buildTypes {
         debug {
-            signingConfig signingConfigs.platform
+            signingConfig signingConfigs.debugKeystore
         }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             signingConfig signingConfigs.platform
+        }
+    }
+
+    flavorDimensions = ["mode"]
+    productFlavors {
+        prod {
+            dimension "mode"
+            buildConfigField "String", "MUSIC_ROOT", "\"\""
+        }
+        perftest {
+            dimension "mode"
+            applicationIdSuffix ".perftest"
+            buildConfigField "String", "MUSIC_ROOT", "\"/storage/sdcard1/Music\""
         }
     }
     buildFeatures {
@@ -95,9 +114,11 @@ android {
 }
 
 afterEvaluate {
-    tasks.named("preReleaseBuild").configure { dependsOn("syncReleaseVersion") }
-    // adb / local debug APKs get the same UTC build-start stamp as release.
-    tasks.named("preDebugBuild").configure { dependsOn("syncReleaseVersion") }
+    // With product flavors task names are preMainReleaseBuild / prePerftestDebugBuild etc.
+    tasks.matching { it.name.startsWith("pre") && it.name.endsWith("ReleaseBuild") }
+        .configureEach { dependsOn("syncReleaseVersion") }
+    tasks.matching { it.name.startsWith("pre") && it.name.endsWith("DebugBuild") }
+        .configureEach { dependsOn("syncReleaseVersion") }
 }
 
 dependencies {

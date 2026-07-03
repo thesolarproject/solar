@@ -10,6 +10,7 @@ public final class RowKeys {
     public static final String PLAYBACK = "settings.playback";
     public static final String BUTTON_SOUND = "settings.button_sound";
     public static final String BUTTON_VIBRATE = "settings.button_vibrate";
+    public static final String WHEEL_SENSITIVITY = "settings.wheel_sensitivity";
     public static final String SCREEN_OFF_CTRL = "settings.screen_off_control";
     public static final String APP_THEME = "settings.app_theme";
     public static final String GET_THEMES = "settings.get_themes";
@@ -161,6 +162,7 @@ public final class RowKeys {
         if (PLAYBACK.equals(rowKey)) return R.string.settings_playback;
         if (BUTTON_SOUND.equals(rowKey)) return R.string.settings_button_sound;
         if (BUTTON_VIBRATE.equals(rowKey)) return R.string.settings_button_vibrate;
+        if (WHEEL_SENSITIVITY.equals(rowKey)) return R.string.settings_wheel_sensitivity;
         if (SCREEN_OFF_CTRL.equals(rowKey)) return R.string.settings_screen_off_control;
         if (APP_THEME.equals(rowKey)) return R.string.settings_app_theme;
         if (GET_THEMES.equals(rowKey) || THEMES.equals(rowKey)) return R.string.settings_themes;

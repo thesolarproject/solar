@@ -254,8 +254,13 @@
     <string name="settings_sub_playback">Settings: Playback</string>
     <string name="settings_repeat_mode">Repeat Mode</string>
     <string name="settings_equalizer">Equalizer</string>
-    <string name="settings_button_sound">Button Sound</string>
+    <string name="settings_button_sound">Click sounds</string>
     <string name="settings_button_vibrate">Button Vibrate</string>
+    <string name="settings_wheel_sensitivity">Wheel sensitivity</string>
+    <string name="settings_wheel_sensitivity_off">Off</string>
+    <string name="settings_wheel_sensitivity_low">Low</string>
+    <string name="settings_wheel_sensitivity_medium">Medium</string>
+    <string name="settings_wheel_sensitivity_high">High</string>
     <string name="settings_screen_off_control">Screen-Off Control</string>
     <string name="settings_app_theme">Theme</string>
     <string name="settings_themes">Themes</string>

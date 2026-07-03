@@ -191,8 +191,13 @@
     <string name="settings_sub_playback">설정: 재생</string>
     <string name="settings_repeat_mode">반복 모드</string>
     <string name="settings_equalizer">이퀄라이저</string>
-    <string name="settings_button_sound">버튼 소리</string>
+    <string name="settings_button_sound">클릭 소리</string>
     <string name="settings_button_vibrate">버튼 진동</string>
+    <string name="settings_wheel_sensitivity">휠 감도</string>
+    <string name="settings_wheel_sensitivity_off">끔</string>
+    <string name="settings_wheel_sensitivity_low">낮음</string>
+    <string name="settings_wheel_sensitivity_medium">중간</string>
+    <string name="settings_wheel_sensitivity_high">높음</string>
     <string name="settings_screen_off_control">화면 꺼짐 제어</string>
     <string name="settings_app_theme">테마</string>
     <string name="settings_themes">테마</string>
