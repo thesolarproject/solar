@@ -1811,15 +1811,42 @@ public class MainActivity extends Activity {
                 BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
                 if (device == null) return;
                 int bondState = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR);
+                int bondReason = intent.getIntExtra("android.bluetooth.device.extra.REASON", -1);
+                android.util.Log.d("SolarBT", "BOND_STATE_CHANGED addr=" + device.getAddress()
+                        + " state=" + bondState + " reason=" + bondReason);
                 if (bondState == BluetoothDevice.BOND_BONDED) {
                     prefs.edit().putString(PREF_LAST_BT_AUDIO, device.getAddress()).apply();
                     connectBluetoothAudio(device, true);
+                }
+                // Stale link key: Android clears a cached bond when the remote rejects our
+                // key (AUTH_FAILED=1, no BOND_BONDING transition). This happens when the
+                // remote was factory-reset or forgot Y1. We detect it as BOND_NONE/AUTH_FAILED
+                // on btConnectingAddress while pairingDeviceAddress is null (i.e., we were
+                // doing an A2DP reconnect to an already-bonded device, not a fresh createBond).
+                // Re-initiate createBond automatically so the user doesn't have to tap again.
+                if (bondState == BluetoothDevice.BOND_NONE
+                        && bondReason == 1 /* AUTH_FAILED */
+                        && pairingDeviceAddress == null
+                        && btConnectingAddress != null
+                        && btConnectingAddress.equals(device.getAddress())) {
+                    android.util.Log.d("SolarBT", "stale link key on " + device.getAddress() + " — retrying bond");
+                    endBtConnect();
+                    pairingDeviceAddress = device.getAddress();
+                    beginBtConnect(device);
+                    if (!createBluetoothBond(device)) {
+                        pairingDeviceAddress = null;
+                        endBtConnect();
+                    }
                 }
                 if (currentScreenState == STATE_BLUETOOTH) {
                     if (bondState == BluetoothDevice.BOND_BONDED) {
                         Toast.makeText(MainActivity.this, getString(R.string.toast_paired, device.getName()), Toast.LENGTH_SHORT).show();
                         pairingDeviceAddress = null;
-                        startBluetoothScan();
+                        // Don't restart discovery while A2DP connection is in-flight —
+                        // concurrent inquiry starves A2DP slot time on MT6572.
+                        if (pendingA2dpDevice == null && connectedA2dpAddress == null) {
+                            startBluetoothScan();
+                        }
                     } else if (bondState == BluetoothDevice.BOND_NONE
                             && pairingDeviceAddress != null
                             && pairingDeviceAddress.equals(device.getAddress())) {
@@ -1832,7 +1859,12 @@ public class MainActivity extends Activity {
                 BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
                 if (device != null) {
                     int variant = intent.getIntExtra(BluetoothDevice.EXTRA_PAIRING_VARIANT, BluetoothDevice.ERROR);
-                    if (handleBluetoothPairingRequest(device, variant)) {
+                    android.util.Log.d("SolarBT", "PAIRING_REQUEST addr=" + device.getAddress()
+                            + " variant=" + variant);
+                    boolean handled = handleBluetoothPairingRequest(device, variant);
+                    android.util.Log.d("SolarBT", "PAIRING_REQUEST handled=" + handled
+                            + " (aborting broadcast=" + handled + ")");
+                    if (handled) {
                         abortBroadcast();
                     }
                 }
@@ -11915,17 +11947,30 @@ public class MainActivity extends Activity {
                 return;
             }
             BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
-            if (adapter != null && adapter.isDiscovering()) {
-                adapter.cancelDiscovery();
-            }
+            boolean wasDiscovering = adapter != null && adapter.isDiscovering();
+            if (wasDiscovering) adapter.cancelDiscovery();
+            android.util.Log.d("SolarBT", "pairBluetoothDevice: bondState="
+                    + device.getBondState() + " wasDiscovering=" + wasDiscovering
+                    + " addr=" + device.getAddress());
             pairingDeviceAddress = device.getAddress();
             beginBtConnect(device);
             Toast.makeText(this, getString(R.string.toast_pairing, device.getName()), Toast.LENGTH_SHORT).show();
-            if (!createBluetoothBond(device)) {
-                pairingDeviceAddress = null;
-                endBtConnect();
-                Toast.makeText(this, getString(R.string.toast_pairing_failed), Toast.LENGTH_SHORT).show();
-            }
+            // MT6572 BlueAngel: calling createBond() while inquiry is still active at the
+            // controller level causes immediate AUTH_FAILED before BOND_BONDING is sent.
+            // cancelDiscovery() is asynchronous — give the controller 500ms to stop inquiry
+            // before paging the target device.
+            final BluetoothDevice deviceToBond = device;
+            progressHandler.postDelayed(new Runnable() {
+                @Override public void run() {
+                    if (pairingDeviceAddress == null) return; // user navigated away
+                    if (!createBluetoothBond(deviceToBond)) {
+                        pairingDeviceAddress = null;
+                        endBtConnect();
+                        Toast.makeText(MainActivity.this,
+                                getString(R.string.toast_pairing_failed), Toast.LENGTH_SHORT).show();
+                    }
+                }
+            }, wasDiscovering ? 500L : 0L);
         } catch (Exception e) {
             pairingDeviceAddress = null;
             endBtConnect();
@@ -11937,8 +11982,11 @@ public class MainActivity extends Activity {
         try {
             Method createBond = device.getClass().getMethod("createBond");
             Object result = createBond.invoke(device);
-            return !(result instanceof Boolean) || (Boolean) result;
+            boolean ok = !(result instanceof Boolean) || (Boolean) result;
+            android.util.Log.d("SolarBT", "createBond(" + device.getAddress() + ") = " + result + " ok=" + ok);
+            return ok;
         } catch (Exception e) {
+            android.util.Log.w("SolarBT", "createBond(" + device.getAddress() + ") threw: " + e);
             return false;
         }
     }
@@ -11947,14 +11995,26 @@ public class MainActivity extends Activity {
         try {
             if (variant == BluetoothDevice.PAIRING_VARIANT_PIN) {
                 byte[] pin = bluetoothPinBytes("0000");
-                device.getClass().getMethod("setPin", byte[].class).invoke(device, pin);
-            } else if (variant == BluetoothDevice.PAIRING_VARIANT_PASSKEY_CONFIRMATION) {
-                try {
-                    device.getClass().getMethod("setPairingConfirmation", boolean.class).invoke(device, true);
-                } catch (NoSuchMethodException ignored) {}
+                boolean ok = (Boolean) device.getClass()
+                        .getMethod("setPin", byte[].class).invoke(device, pin);
+                android.util.Log.d("SolarBT", "setPin(0000) ok=" + ok);
+            } else if (variant == BluetoothDevice.PAIRING_VARIANT_PASSKEY_CONFIRMATION
+                    || variant == 3 /* PAIRING_VARIANT_CONSENT */) {
+                // CONSENT (3): Just Works — auto-confirm, no passkey displayed.
+                // PASSKEY_CONFIRMATION (2): Numeric Comparison — auto-confirm (passkeys are
+                // DH-derived and always match; no user interaction required for Y1 as source).
+                boolean ok = (Boolean) device.getClass()
+                        .getMethod("setPairingConfirmation", boolean.class).invoke(device, true);
+                android.util.Log.d("SolarBT", "setPairingConfirmation(true) ok=" + ok);
+            } else {
+                // PASSKEY (1), DISPLAY_PASSKEY (4), DISPLAY_PIN (5), OOB_CONSENT (6):
+                // require UI or OOB data — let the system dialog handle these.
+                android.util.Log.d("SolarBT", "PAIRING_REQUEST variant=" + variant + " not handled, deferring to system");
+                return false;
             }
             return true;
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            android.util.Log.w("SolarBT", "PAIRING_REQUEST handling failed: " + e);
             return false;
         }
     }
