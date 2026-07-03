@@ -162,7 +162,8 @@ case "$TYPE" in
 esac
 
 # Resolve OUTPUT to absolute path now, before any cd into WORK_DIR changes meaning of relative paths.
-OUTPUT="$(cd "$(dirname "$OUTPUT")" 2>/dev/null && pwd)/$(basename "$OUTPUT")"
+# realpath -m resolves without requiring the parent to exist; fall back to pwd+basename if unavailable.
+OUTPUT="$(realpath -m "$OUTPUT" 2>/dev/null || echo "$(pwd)/$(basename "$OUTPUT")")"
 
 require_cmd curl
 require_cmd unzip

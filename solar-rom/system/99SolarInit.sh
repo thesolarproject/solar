@@ -49,7 +49,8 @@ fi
 mkdir -p /data/data/com.innioasis.y1/files
 chmod 711 /data/data/com.innioasis.y1 /data/data/com.innioasis.y1/files
 [ -f /data/data/com.innioasis.y1/files/y1-track-info ] || \
-    dd if=/dev/zero of=/data/data/com.innioasis.y1/files/y1-track-info bs=1 count=2213 2>/dev/null
+    dd if=/dev/zero of=/data/data/com.innioasis.y1/files/y1-track-info bs=1 count=2213 2>/dev/null || \
+    log -p w -t SolarInit "y1-track-info: dd failed (disk full?)"
 chmod 666 /data/data/com.innioasis.y1/files/y1-track-info
 
 if [ ! -f /system/lib/libconscrypt_jni.so ]; then
