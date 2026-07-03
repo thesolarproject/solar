@@ -43,6 +43,15 @@ if [ -f /system/etc/solar/disable-rockbox-for-solar.sh ]; then
     sh /system/etc/solar/disable-rockbox-for-solar.sh
 fi
 
+# AVRCP shared rendezvous file — written by Solar, read by Y1Bridge + MtkBt trampoline.
+# Path is hardcoded in _trampolines.py (libextavrcp_jni.so binary patch) so it cannot
+# move to com.solar.launcher's data dir without re-patching the native binary.
+mkdir -p /data/data/com.innioasis.y1/files
+chmod 711 /data/data/com.innioasis.y1 /data/data/com.innioasis.y1/files
+[ -f /data/data/com.innioasis.y1/files/y1-track-info ] || \
+    dd if=/dev/zero of=/data/data/com.innioasis.y1/files/y1-track-info bs=1 count=2213 2>/dev/null
+chmod 666 /data/data/com.innioasis.y1/files/y1-track-info
+
 if [ ! -f /system/lib/libconscrypt_jni.so ]; then
     log -p w -t SolarInit "missing /system/lib/libconscrypt_jni.so — OkHttp/Reach TLS needs clean_install or Solar ROM"
 fi
