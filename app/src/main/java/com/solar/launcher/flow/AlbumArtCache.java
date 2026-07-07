@@ -17,6 +17,14 @@ public final class AlbumArtCache {
 
     public static final int THUMB_PX = 240;
     public static final int JPEG_QUALITY = 85;
+    private static final ThreadLocal<BitmapFactory.Options> DECODE_OPTIONS =
+            new ThreadLocal<BitmapFactory.Options>() {
+                @Override protected BitmapFactory.Options initialValue() {
+                    BitmapFactory.Options options = new BitmapFactory.Options();
+                    options.inPreferredConfig = Bitmap.Config.RGB_565;
+                    return options;
+                }
+            };
 
     private AlbumArtCache() {}
 
@@ -52,11 +60,13 @@ public final class AlbumArtCache {
     }
 
     public static Bitmap get(File dir, String albumMatchKey) {
+        if (ArtworkThreads.isMainThread()) return null;
         File f = fileForKey(dir, albumMatchKey);
         if (f == null || !f.isFile()) return null;
         try {
-            BitmapFactory.Options opts = new BitmapFactory.Options();
-            opts.inPreferredConfig = Bitmap.Config.RGB_565;
+            BitmapFactory.Options opts = DECODE_OPTIONS.get();
+            opts.inBitmap = null;
+            opts.inSampleSize = 1;
             return BitmapFactory.decodeFile(f.getAbsolutePath(), opts);
         } catch (Exception ignored) {
             return null;

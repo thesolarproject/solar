@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <item type="id" name="tag_soulseek_recent_query" />
+    <item type="id" name="tag_library_row_holder" />
+    <item type="id" name="tag_adapter_row_binding" />
+    <item type="id" name="tag_artwork_request" />
+    <item type="id" name="tag_artwork_bitmap_lease" />
 </resources>

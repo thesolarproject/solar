@@ -23,6 +23,7 @@ public final class ArtistImageCache {
     }
 
     public static Bitmap get(File coversRoot, String artistMatchKey) {
+        if (ArtworkThreads.isMainThread()) return null;
         File f = fileForKey(coversRoot, artistMatchKey);
         if (f == null || !f.isFile()) return null;
         try {

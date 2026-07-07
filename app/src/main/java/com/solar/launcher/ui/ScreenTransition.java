@@ -6,6 +6,7 @@ import android.provider.Settings;
 import android.view.Choreographer;
 import android.view.View;
 import android.view.animation.DecelerateInterpolator;
+import android.view.animation.Interpolator;
 
 /**
  * iPod Classic-style root screen animations — push/pop, vertical player slide, crossfade.
@@ -27,6 +28,33 @@ public final class ScreenTransition {
     private static final float VERTICAL_INCOMING_START_ALPHA = 1f;
 
     private static final DecelerateInterpolator EASE = new DecelerateInterpolator(1.6f);
+    private static final Interpolator PUSH_EASE = new MechanicalInterpolator(new float[] {
+            0f,.00289750f,.01102137f,.02358921f,.03990526f,.05935196f,.08138216f,.10551216f,
+            .13131531f,.15841626f,.18648573f,.21523577f,.24441547f,.27380706f,.30322241f,.33249987f,
+            .36150135f,.39010978f,.41822676f,.44577042f,.47267357f,.49888195f,.52435271f,.54905304f,
+            .57295888f,.59605388f,.61832835f,.63977839f,.66040508f,.68021378f,.69921351f,.71741636f,
+            .73483698f,.75149219f,.76740054f,.78258196f,.79705751f,.81084904f,.82397902f,.83647027f,
+            .84834586f,.85962889f,.87034239f,.88050920f,.89015187f,.89929259f,.90795311f,.91615470f,
+            .92391807f,.93126339f,.93821022f,.94477748f,.95098349f,.95684590f,.96238173f,.96760735f,
+            .97253847f,.97719018f,.98157694f,.98571259f,.98961036f,.99328290f,.99674228f,1f});
+    private static final Interpolator PLAYER_EASE = new MechanicalInterpolator(new float[] {
+            0f,.00204130f,.00783758f,.01693070f,.02890396f,.04337882f,.06001181f,.07849167f,
+            .09853675f,.11989254f,.14232946f,.16564076f,.18964062f,.21416238f,.23905689f,.26419106f,
+            .28944640f,.31471781f,.33991234f,.36494818f,.38975358f,.41426600f,.43843123f,.46220264f,
+            .48554041f,.50841097f,.53078630f,.55264345f,.57396401f,.59473364f,.61494166f,.63458064f,
+            .65364610f,.67213612f,.69005108f,.70739340f,.72416728f,.74037846f,.75603407f,.77114239f,
+            .78571270f,.79975517f,.81328066f,.82630063f,.83882705f,.85087224f,.86244885f,.87356973f,
+            .88424788f,.89449637f,.90432832f,.91375680f,.92279483f,.93145530f,.93975098f,.94769446f,
+            .95529812f,.96257414f,.96953447f,.97619077f,.98255447f,.98863672f,.99444837f,1f});
+    private static final Interpolator MODAL_EASE = new MechanicalInterpolator(new float[] {
+            0f,.00433240f,.01627593f,.03441200f,.05751693f,.08453828f,.11457381f,.14685288f,
+            .18072002f,.21562029f,.25108650f,.28672781f,.32221973f,.35729525f,.39173715f,.42537107f,
+            .45805958f,.48969688f,.52020421f,.54952577f,.57762525f,.60448269f,.63009187f,.65445794f,
+            .67759542f,.69952644f,.72027926f,.73988695f,.75838631f,.77581689f,.79222021f,.80763906f,
+            .82211693f,.83569756f,.84842447f,.86034070f,.87148850f,.88190917f,.89164280f,.90072822f,
+            .90920289f,.91710278f,.92446240f,.93131470f,.93769112f,.94362158f,.94913448f,.95425675f,
+            .95901385f,.96342987f,.96752752f,.97132819f,.97485204f,.97811798f,.98114380f,.98394617f,
+            .98654071f,.98894207f,.99116393f,.99321908f,.99511947f,.99687627f,.99849988f,1f});
 
     private static volatile boolean animating;
     private static volatile boolean modalAnimating;
@@ -63,6 +91,10 @@ public final class ScreenTransition {
         return OUTGOING_END_ALPHA;
     }
 
+    static float pushInterpolation(float t) { return PUSH_EASE.getInterpolation(t); }
+    static float playerInterpolation(float t) { return PLAYER_EASE.getInterpolation(t); }
+    static float modalInterpolation(float t) { return MODAL_EASE.getInterpolation(t); }
+
     public static void cancel() {
         animating = false;
     }
@@ -79,9 +111,8 @@ public final class ScreenTransition {
             finish(outView, null, onComplete);
             return;
         }
-        final float sign = forward ? 1f : -1f;
-        final float inStart = sign * distancePx;
-        final float outEnd = -sign * distancePx;
+        final float inStart = forward ? distancePx : -0.35f * distancePx;
+        final float outEnd = forward ? -0.35f * distancePx : distancePx;
 
         inView.setVisibility(View.VISIBLE);
         inView.setAlpha(1f);
@@ -112,11 +143,12 @@ public final class ScreenTransition {
                 if (onComplete != null) onComplete.run();
             }
         };
-        inView.animate().translationX(0f).setDuration(PUSH_MS).setInterpolator(EASE)
+        inView.animate().translationX(0f).setStartDelay(0).setDuration(PUSH_MS).setInterpolator(PUSH_EASE)
                 .setListener(endListener(done)).start();
         if (outView != null) {
             outView.animate().translationX(outEnd).alpha(OUTGOING_END_ALPHA)
-                    .setDuration(PUSH_MS).setInterpolator(EASE).start();
+                    .setStartDelay(forward ? 20 : 0)
+                    .setDuration(forward ? PUSH_MS - 20 : PUSH_MS).setInterpolator(PUSH_EASE).start();
         }
         animateBackdropPushPop(outBackdrop, inBackdrop, forward, distancePx, false);
     }
@@ -165,12 +197,12 @@ public final class ScreenTransition {
                 if (onComplete != null) onComplete.run();
             }
         };
-        inView.animate().translationY(0f).setDuration(PLAYER_MS).setInterpolator(EASE)
+        inView.animate().translationY(0f).setStartDelay(0).setDuration(PLAYER_MS).setInterpolator(PLAYER_EASE)
                 .setListener(endListener(done)).start();
         if (outView != null) {
             // Translate only — fading the player/menu to transparent exposes the window (black).
-            outView.animate().translationY(outEnd)
-                    .setDuration(PLAYER_MS).setInterpolator(EASE).start();
+            outView.animate().translationY(outEnd).setStartDelay(0)
+                    .setDuration(PLAYER_MS).setInterpolator(PLAYER_EASE).start();
         }
         animateBackdropPushPop(outBackdrop, inBackdrop, entering, distancePx, true);
     }
@@ -287,8 +319,8 @@ public final class ScreenTransition {
                     }
                 };
                 if (panel != null) {
-                    panel.animate().scaleX(1f).scaleY(1f).alpha(1f)
-                            .setDuration(MODAL_MS).setInterpolator(EASE)
+                    panel.animate().scaleX(1f).scaleY(1f).alpha(1f).setStartDelay(0)
+                            .setDuration(MODAL_MS).setInterpolator(MODAL_EASE)
                             .setListener(endListener(done)).start();
                 } else {
                     done.run();
@@ -326,8 +358,8 @@ public final class ScreenTransition {
         boolean panelStarted = false;
         if (panel != null) {
             panelStarted = true;
-            panel.animate().scaleX(MODAL_PANEL_START_SCALE).scaleY(MODAL_PANEL_START_SCALE).alpha(0f)
-                    .setDuration(MODAL_MS).setInterpolator(EASE)
+            panel.animate().scaleX(MODAL_PANEL_START_SCALE).scaleY(MODAL_PANEL_START_SCALE).alpha(0f).setStartDelay(0)
+                    .setDuration(MODAL_MS).setInterpolator(MODAL_EASE)
                     .setListener(endListener(done)).start();
         }
         if (scrim != null) {
@@ -434,25 +466,26 @@ public final class ScreenTransition {
             final float outEnd = forward ? -distancePx * 0.15f : distancePx;
             if (inBackdrop != null) {
                 inBackdrop.setTranslationY(inStart);
-                inBackdrop.animate().translationY(0f)
-                        .setDuration(duration).setInterpolator(EASE).start();
+                inBackdrop.animate().translationY(0f).setStartDelay(0)
+                        .setDuration(duration).setInterpolator(PLAYER_EASE).start();
             }
             if (outBackdrop != null) {
                 // Wallpaper layers slide in lockstep — never fade to black between themes.
-                outBackdrop.animate().translationY(outEnd)
-                        .setDuration(duration).setInterpolator(EASE).start();
+                outBackdrop.animate().translationY(outEnd).setStartDelay(0)
+                        .setDuration(duration).setInterpolator(PLAYER_EASE).start();
             }
         } else {
             final float inStart = sign * distancePx;
             final float outEnd = -sign * distancePx;
             if (inBackdrop != null) {
                 inBackdrop.setTranslationX(inStart);
-                inBackdrop.animate().translationX(0f)
-                        .setDuration(duration).setInterpolator(EASE).start();
+                inBackdrop.animate().translationX(0f).setStartDelay(0)
+                        .setDuration(duration).setInterpolator(PUSH_EASE).start();
             }
             if (outBackdrop != null) {
                 outBackdrop.animate().translationX(outEnd)
-                        .setDuration(duration).setInterpolator(EASE).start();
+                        .setStartDelay(forward ? 20 : 0)
+                        .setDuration(forward ? duration - 20 : duration).setInterpolator(PUSH_EASE).start();
             }
         }
     }

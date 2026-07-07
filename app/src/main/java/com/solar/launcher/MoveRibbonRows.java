@@ -24,6 +24,29 @@ final class MoveRibbonRows {
 
     private MoveRibbonRows() {}
 
+    static final class LibraryRowHolder {
+        final TextView title;
+        final TextView sub;
+        final TextView grip;
+        final ImageView playback;
+        final ImageView confirm;
+        final View drop;
+        int lastTitleColor = Integer.MIN_VALUE;
+        int lastSubColor = Integer.MIN_VALUE;
+        int styleGeneration = Integer.MIN_VALUE;
+        int backgroundGeneration = Integer.MIN_VALUE;
+
+        LibraryRowHolder(TextView title, TextView sub, TextView grip, ImageView playback,
+                ImageView confirm, View drop) {
+            this.title = title;
+            this.sub = sub;
+            this.grip = grip;
+            this.playback = playback;
+            this.confirm = confirm;
+            this.drop = drop;
+        }
+    }
+
     static FrameLayout createMenuMoveRow(Activity activity, int rowHeightPx, int rowWidthPx) {
         float density = activity.getResources().getDisplayMetrics().density;
         int textPadLeft = (int) activity.getResources().getDimension(R.dimen.y1_menu_text_pad_left);
@@ -162,6 +185,15 @@ final class MoveRibbonRows {
         rightSlot.addView(confirm, new FrameLayout.LayoutParams(ppSz, ppSz, Gravity.CENTER));
 
         row.addView(rightSlot);
+        View drop = new View(activity);
+        drop.setTag(TAG_DROP);
+        drop.setVisibility(View.GONE);
+        FrameLayout.LayoutParams dropLp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, Math.max(1, (int) density));
+        dropLp.gravity = Gravity.BOTTOM;
+        row.addView(drop, dropLp);
+        row.setTag(R.id.tag_library_row_holder,
+                new LibraryRowHolder(title, sub, grip, pp, confirm, drop));
         LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, rowHeightPx + 2);
         rowLp.setMargins(0, 1, 0, 1);
@@ -199,13 +231,18 @@ final class MoveRibbonRows {
             android.graphics.drawable.Drawable bgSelected,
             android.graphics.drawable.Drawable bgNormal) {
         if (row == null) return;
-        android.graphics.drawable.Drawable bg = highlighted ? bgSelected : bgNormal;
-        if (bg != null) {
-            row.setBackground(bg);
-        } else if (highlighted) {
-            row.setBackgroundColor(ThemeManager.getRowSelectionFillColor());
-        } else {
-            row.setBackgroundColor(ThemeManager.getListButtonNormalBg());
+        LibraryRowHolder holder = (LibraryRowHolder) row.getTag(R.id.tag_library_row_holder);
+        int generation = ThemeManager.getStyleGeneration();
+        if (!(row.getBackground() instanceof android.graphics.drawable.StateListDrawable)
+                || holder != null && holder.backgroundGeneration != generation) {
+            android.graphics.drawable.StateListDrawable states = new android.graphics.drawable.StateListDrawable();
+            android.graphics.drawable.Drawable sel = bgSelected != null ? bgSelected : new android.graphics.drawable.ColorDrawable(ThemeManager.getRowSelectionFillColor());
+            android.graphics.drawable.Drawable norm = bgNormal != null ? bgNormal : new android.graphics.drawable.ColorDrawable(ThemeManager.getListButtonNormalBg());
+            states.addState(new int[] { android.R.attr.state_focused }, sel);
+            states.addState(new int[] { android.R.attr.state_pressed }, sel);
+            states.addState(new int[] {}, norm);
+            row.setBackground(states);
+            if (holder != null) holder.backgroundGeneration = generation;
         }
         bindLibraryMoveRowContent(row, titleText, subText, moving, highlighted, nowPlaying, playing);
     }
@@ -214,14 +251,13 @@ final class MoveRibbonRows {
             boolean moving, boolean highlighted, boolean nowPlaying, boolean playing,
             int rowWidthPx, int rowHeightPx) {
         if (row == null) return;
-        android.graphics.drawable.Drawable bg = ThemeManager.getItemRowBackgroundScaled(
-                activity.getResources(), highlighted, rowWidthPx, rowHeightPx);
-        if (bg != null) {
-            row.setBackground(bg);
-        } else if (highlighted) {
-            row.setBackgroundColor(ThemeManager.getRowSelectionFillColor());
-        } else {
-            row.setBackgroundColor(ThemeManager.getListButtonNormalBg());
+        LibraryRowHolder holder = (LibraryRowHolder) row.getTag(R.id.tag_library_row_holder);
+        int generation = ThemeManager.getStyleGeneration();
+        if (!(row.getBackground() instanceof android.graphics.drawable.StateListDrawable)
+                || holder != null && holder.backgroundGeneration != generation) {
+            row.setBackground(ThemeManager.createLibraryRowStateBackground(
+                    activity.getResources(), rowWidthPx, rowHeightPx));
+            if (holder != null) holder.backgroundGeneration = generation;
         }
         bindLibraryMoveRowContent(row, titleText, subText, moving, highlighted, nowPlaying, playing);
     }
@@ -229,24 +265,37 @@ final class MoveRibbonRows {
     private static void bindLibraryMoveRowContent(FrameLayout row, String titleText, String subText,
             boolean moving, boolean highlighted, boolean nowPlaying, boolean playing) {
         if (row == null) return;
-        TextView title = (TextView) row.findViewWithTag(TAG_TITLE);
+        LibraryRowHolder holder = (LibraryRowHolder) row.getTag(R.id.tag_library_row_holder);
+        int generation = ThemeManager.getStyleGeneration();
+        if (holder != null && holder.styleGeneration != generation) {
+            holder.lastTitleColor = Integer.MIN_VALUE;
+            holder.lastSubColor = Integer.MIN_VALUE;
+            holder.styleGeneration = generation;
+        }
+        TextView title = holder != null ? holder.title : (TextView) row.findViewWithTag(TAG_TITLE);
         if (title != null) {
             title.setText(titleText != null ? titleText : "");
-            ThemeManager.applyThemedTextStyle(title, highlighted
-                    ? ThemeManager.getItemTextColorSelected()
-                    : ThemeManager.getItemTextColorNormal());
+            int titleColor = highlighted ? ThemeManager.getItemTextColorSelected()
+                    : ThemeManager.getItemTextColorNormal();
+            if (holder == null || holder.lastTitleColor != titleColor) {
+                ThemeManager.applyThemedTextStyle(title, titleColor);
+                if (holder != null) holder.lastTitleColor = titleColor;
+            }
             title.setSelected(highlighted);
         }
-        TextView sub = (TextView) row.findViewWithTag(TAG_SUB);
+        TextView sub = holder != null ? holder.sub : (TextView) row.findViewWithTag(TAG_SUB);
         if (sub != null) {
             sub.setText(subText != null ? subText : "");
             sub.setSelected(highlighted && subText != null && !subText.isEmpty());
-            ThemeManager.applyThemedTextStyle(sub, highlighted
-                    ? ThemeManager.getItemTextColorSelected()
-                    : ThemeManager.getSubtitleTextColor());
+            int subColor = highlighted ? ThemeManager.getItemTextColorSelected()
+                    : ThemeManager.getSubtitleTextColor();
+            if (holder == null || holder.lastSubColor != subColor) {
+                ThemeManager.applyThemedTextStyle(sub, subColor);
+                if (holder != null) holder.lastSubColor = subColor;
+            }
         }
-        TextView grip = (TextView) row.findViewWithTag(TAG_GRIP);
-        ImageView pp = (ImageView) row.findViewWithTag(TAG_PP);
+        TextView grip = holder != null ? holder.grip : (TextView) row.findViewWithTag(TAG_GRIP);
+        ImageView pp = holder != null ? holder.playback : (ImageView) row.findViewWithTag(TAG_PP);
         if (grip != null) {
             grip.setVisibility(moving ? View.VISIBLE : View.GONE);
             if (moving) {
@@ -264,24 +313,31 @@ final class MoveRibbonRows {
                 pp.setVisibility(View.GONE);
             }
         }
-        ensureDropLine(row, moving, ThemeManager.getItemTextColorSelected());
+        if (holder != null) {
+            holder.drop.setBackgroundColor(ThemeManager.getItemTextColorSelected());
+            holder.drop.setVisibility(moving ? View.VISIBLE : View.GONE);
+        } else {
+            ensureDropLine(row, moving, ThemeManager.getItemTextColorSelected());
+        }
     }
 
     static void bindEmptySlot(View row) {
         if (row == null) return;
         row.setVisibility(View.INVISIBLE);
         row.setAlpha(0.35f);
-        TextView title = (TextView) row.findViewWithTag(TAG_TITLE);
+        LibraryRowHolder holder = row instanceof FrameLayout
+                ? (LibraryRowHolder) row.getTag(R.id.tag_library_row_holder) : null;
+        TextView title = holder != null ? holder.title : (TextView) row.findViewWithTag(TAG_TITLE);
         if (title != null) title.setText("");
-        TextView sub = (TextView) row.findViewWithTag(TAG_SUB);
+        TextView sub = holder != null ? holder.sub : (TextView) row.findViewWithTag(TAG_SUB);
         if (sub != null) sub.setText("");
-        TextView grip = (TextView) row.findViewWithTag(TAG_GRIP);
+        TextView grip = holder != null ? holder.grip : (TextView) row.findViewWithTag(TAG_GRIP);
         if (grip != null) grip.setVisibility(View.GONE);
-        ImageView pp = (ImageView) row.findViewWithTag(TAG_PP);
+        ImageView pp = holder != null ? holder.playback : (ImageView) row.findViewWithTag(TAG_PP);
         if (pp != null) pp.setVisibility(View.GONE);
-        ImageView confirm = (ImageView) row.findViewWithTag(TAG_CONFIRM);
+        ImageView confirm = holder != null ? holder.confirm : (ImageView) row.findViewWithTag(TAG_CONFIRM);
         if (confirm != null) confirm.setVisibility(View.GONE);
-        View drop = row.findViewWithTag(TAG_DROP);
+        View drop = holder != null ? holder.drop : row.findViewWithTag(TAG_DROP);
         if (drop != null) drop.setVisibility(View.GONE);
     }
 

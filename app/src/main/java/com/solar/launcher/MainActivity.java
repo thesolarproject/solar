@@ -153,13 +153,59 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Random;
 import java.util.Set;
-import android.renderscript.Allocation;
-import android.renderscript.Element;
-import android.renderscript.RenderScript;
-import android.renderscript.ScriptIntrinsicBlur;
 
 public class MainActivity extends Activity {
     private static final String OTA_UPDATES_URL = BuildConfig.OTA_UPDATES_URL;
+
+    public static final java.util.concurrent.ExecutorService IO_EXECUTOR = java.util.concurrent.Executors.newSingleThreadExecutor();
+    private static final android.view.animation.DecelerateInterpolator DECELERATE = new android.view.animation.DecelerateInterpolator();
+    private SimpleDateFormat statusClockFormat;
+    private SimpleDateFormat widgetTimeFormat;
+    private final SimpleDateFormat widgetDateFormat = new SimpleDateFormat("EEE, MMM dd", Locale.US);
+    private boolean cachedClockIs24Hour;
+    private int cachedBatteryLevel;
+    private boolean cachedBatteryCharging;
+    private boolean batteryReceiverRegistered;
+    private final BroadcastReceiver batteryReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            int level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+            int scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
+            int status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
+            if (level >= 0 && scale > 0) cachedBatteryLevel = (int) ((level / (float) scale) * 100);
+            cachedBatteryCharging = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL;
+        }
+    };
+    private final WheelPhysics wheelPhysics = new WheelPhysics();
+    private final WheelPhysics.Result wheelResult = new WheelPhysics.Result();
+    private WheelSectionIndex wheelSectionIndex = WheelSectionIndex.EMPTY;
+    private android.widget.ListAdapter wheelIndexedAdapter;
+    private int wheelIndexGeneration;
+    private int pendingWheelFocusPosition = ListView.INVALID_POSITION;
+    private boolean pendingWheelFocusRetried;
+    private Vibrator cachedVibrator;
+    private long lastWheelHapticNanos;
+    private long suppressOverlayHapticUntilNanos;
+    private final android.database.DataSetObserver wheelDataObserver = new android.database.DataSetObserver() {
+        @Override public void onChanged() { scheduleWheelSectionIndex(); }
+        @Override public void onInvalidated() { scheduleWheelSectionIndex(); }
+    };
+    private final Runnable wheelFocusTask = new Runnable() {
+        @Override public void run() {
+            if (listVirtualSongs == null || pendingWheelFocusPosition == ListView.INVALID_POSITION) return;
+            int childIndex = pendingWheelFocusPosition - listVirtualSongs.getFirstVisiblePosition();
+            View child = listVirtualSongs.getChildAt(childIndex);
+            if (child != null) {
+                child.requestFocus();
+            } else if (!pendingWheelFocusRetried) {
+                pendingWheelFocusRetried = true;
+                listVirtualSongs.postOnAnimation(this);
+            }
+        }
+    };
+    private int lastProgressSecond = -1;
+    private int lastDurationMs = -1;
+    private String lastDurationText = "";
     // 💡 [추가] 퀵 스크롤 (알파벳 인덱스) 관련 변수들
     private TextView tvFastScrollLetter;
     private Handler fastScrollHandler = new Handler();
@@ -306,6 +352,8 @@ public class MainActivity extends Activity {
             trackNumber = tr;
         }
     }
+    private static final SongItem EMPTY_SONG =
+            new SongItem(new File(""), "", "", "", "");
     // 💡 [초고속 엔진] 수천 곡을 버티기 위한 재활용 리스트뷰와 기존 스크롤뷰
     private android.widget.ListView listVirtualSongs;
     private View settingsScrollView;
@@ -1554,14 +1602,28 @@ public class MainActivity extends Activity {
                         int progress = (int) (((float) current / duration) * 100);
                         if (progress > 100) progress = 100;
                         playerProgress.setProgress(progress);
-                        tvPlayerTimeCurrent.setText(formatTime(current));
+
+                        int curSec = current / 1000;
+                        if (curSec != lastProgressSecond) {
+                            lastProgressSecond = curSec;
+                            if (playback.isPodcastActive() && playbackSpeed != 1.0f) {
+                                setTextIfChanged(tvPlayerTimeCurrent, formatTime((int) (current / playbackSpeed)));
+                            } else {
+                                setTextIfChanged(tvPlayerTimeCurrent, formatTime(current));
+                            }
+                        }
+
                         String totalStr = formatTime(duration);
                         if (playback.isPodcastActive() && playbackSpeed != 1.0f) {
                             totalStr = formatTime((int) (duration / playbackSpeed))
                                     + " (" + String.format(java.util.Locale.US, "%.2f", playbackSpeed) + "x)";
-                            tvPlayerTimeCurrent.setText(formatTime((int) (current / playbackSpeed)));
                         }
-                        tvPlayerTimeTotal.setText(totalStr);
+
+                        if (duration != lastDurationMs || !totalStr.equals(lastDurationText)) {
+                            lastDurationMs = duration;
+                            lastDurationText = totalStr;
+                            setTextIfChanged(tvPlayerTimeTotal, totalStr);
+                        }
                     }
                     if (avrcpTrackInfoWriter != null) {
                         avrcpTrackInfoWriter.tickPlayingPosition(current);
@@ -1600,8 +1662,15 @@ public class MainActivity extends Activity {
                         if (displayDur > 0) {
                             int progress = Math.min(100, current * 100 / displayDur);
                             playerProgress.setProgress(progress);
-                            tvPlayerTimeCurrent.setText(formatTime(current));
-                            tvPlayerTimeTotal.setText(formatTime(displayDur));
+                            int curSec = current / 1000;
+                            if (curSec != lastProgressSecond) {
+                                lastProgressSecond = curSec;
+                                setTextIfChanged(tvPlayerTimeCurrent, formatTime(current));
+                            }
+                            if (displayDur != lastDurationMs) {
+                                lastDurationMs = displayDur;
+                                setTextIfChanged(tvPlayerTimeTotal, formatTime(displayDur));
+                            }
                         }
                         int edgeMs = reachGrowingDecodeEdgeMs();
                         if (edgeMs > 0 && current >= edgeMs - REACH_GROWING_EXTEND_MS) {
@@ -2080,6 +2149,11 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        try {
+            cachedVibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+        } catch (Exception ignored) {
+            cachedVibrator = null;
+        }
         final long onCreateStartMs = android.os.SystemClock.uptimeMillis();
         // Debug session logs off by default — enable via adb --ez solar_adb_debug_898913 true
         DebugSessionLog.ENABLED = false;
@@ -3327,15 +3401,148 @@ public class MainActivity extends Activity {
         if (tvFastScrollLetter != null) tvFastScrollLetter.setVisibility(View.GONE);
     }
 
-    private void showFastScrollLetter(String rawText) {
-        hideFastScrollLetter();
+    private void setTextIfChanged(android.widget.TextView view, CharSequence text) {
+        if (view != null && !android.text.TextUtils.equals(view.getText(), text)) {
+            view.setText(text);
+        }
+    }
+
+    private String getFirstLetter(String text) {
+        return WheelSectionIndex.normalize(text);
+    }
+
+    private void ensureWheelSectionIndex() {
+        android.widget.ListAdapter adapter = listVirtualSongs != null ? listVirtualSongs.getAdapter() : null;
+        if (adapter == wheelIndexedAdapter) return;
+        if (wheelIndexedAdapter != null) {
+            try { wheelIndexedAdapter.unregisterDataSetObserver(wheelDataObserver); } catch (Exception ignored) {}
+        }
+        wheelIndexedAdapter = adapter;
+        wheelSectionIndex = WheelSectionIndex.EMPTY;
+        if (adapter != null) {
+            try { adapter.registerDataSetObserver(wheelDataObserver); } catch (Exception ignored) {}
+        }
+        scheduleWheelSectionIndex();
+    }
+
+    private void scheduleWheelSectionIndex() {
+        final android.widget.ListAdapter adapter = wheelIndexedAdapter;
+        final int generation = ++wheelIndexGeneration;
+        if (adapter == null) {
+            wheelSectionIndex = WheelSectionIndex.EMPTY;
+            return;
+        }
+        final int count = adapter.getCount();
+        final String[] labels = new String[count];
+        boolean useBrowseLabels = currentScrollIndexList != null && currentScrollIndexList.size() == count;
+        for (int i = 0; i < count; i++) {
+            if (useBrowseLabels) {
+                labels[i] = currentScrollIndexList.get(i);
+                continue;
+            }
+            Object item = adapter.getItem(i);
+            labels[i] = item instanceof SongItem ? ((SongItem) item).title
+                    : item != null ? item.toString() : "";
+        }
+        IO_EXECUTOR.execute(new Runnable() {
+            @Override public void run() {
+                final WheelSectionIndex built = WheelSectionIndex.build(labels);
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        if (generation == wheelIndexGeneration && adapter == wheelIndexedAdapter
+                                && adapter.getCount() == built.itemCount()) {
+                            wheelSectionIndex = built;
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    private int currentWheelPosition() {
+        int position = listVirtualSongs.getSelectedItemPosition();
+        if (position != ListView.INVALID_POSITION) return position;
+        View focused = getCurrentFocus();
+        if (focused != null) {
+            position = listVirtualSongs.getPositionForView(focused);
+            if (position != ListView.INVALID_POSITION) return position;
+        }
+        return listVirtualSongs.getFirstVisiblePosition();
+    }
+
+    private boolean moveWheelSelection(int targetPosition) {
+        android.widget.ListAdapter adapter = listVirtualSongs.getAdapter();
+        if (adapter == null || adapter.getCount() == 0) return false;
+        int target = Math.max(0, Math.min(adapter.getCount() - 1, targetPosition));
+        int current = currentWheelPosition();
+        if (target == current) return false;
+        View selected = listVirtualSongs.getSelectedView();
+        if (selected == null) selected = getCurrentFocus();
+        int anchor = selected != null ? selected.getTop() : 0;
+        String oldLetter = wheelSectionIndex.letterAtPosition(current);
+        String newLetter = wheelSectionIndex.letterAtPosition(target);
+        listVirtualSongs.setSelectionFromTop(target, anchor);
+        pendingWheelFocusPosition = target;
+        pendingWheelFocusRetried = false;
+        listVirtualSongs.removeCallbacks(wheelFocusTask);
+        listVirtualSongs.postOnAnimation(wheelFocusTask);
+        boolean changed = !android.text.TextUtils.equals(oldLetter, newLetter);
+        if (changed) showFastScrollLetter(newLetter);
+        else {
+            suppressOverlayHapticUntilNanos = android.os.SystemClock.elapsedRealtimeNanos() + 100_000_000L;
+            wheelDetentFeedback(false);
+        }
+        return true;
+    }
+
+    private boolean showFastScrollLetter(String rawText) {
+        if (tvFastScrollLetter == null || (currentScreenState != STATE_BROWSER && currentScreenState != STATE_PODCASTS && currentScreenState != STATE_SOULSEEK && currentScreenState != STATE_DEEZER && !MediaSuiteHost.isMediaListBrowseState(currentScreenState)))
+            return false;
+
+        String clean = rawText.replace("📁 ", "").replace("👤 ", "")
+                .replace("💿 ", "").replace("🎵 ", "")
+                .replace("📦 [INSTALL] ", "").trim();
+
+        if (clean.isEmpty()) return false;
+        String firstChar = getFirstLetter(clean);
+
+        if (tvFastScrollLetter.getVisibility() == View.VISIBLE
+                && android.text.TextUtils.equals(tvFastScrollLetter.getText(), firstChar)) {
+            fastScrollHandler.removeCallbacks(hideFastScrollTask);
+            fastScrollHandler.postDelayed(hideFastScrollTask, 800);
+            return false;
+        }
+
+        tvFastScrollLetter.setText(firstChar);
+        int bgColor = ThemeManager.getListButtonFocusedBg();
+        tvFastScrollLetter.setBackgroundColor((bgColor & 0xFFFFFF) | 0xDD000000);
+        tvFastScrollLetter.setTextColor(ThemeManager.getListButtonFocusedTextColor());
+        tvFastScrollLetter.setVisibility(View.VISIBLE);
+
+        if (android.os.SystemClock.elapsedRealtimeNanos() >= suppressOverlayHapticUntilNanos) {
+            wheelDetentFeedback(true);
+        }
+
+        fastScrollHandler.removeCallbacks(hideFastScrollTask);
+        fastScrollHandler.postDelayed(hideFastScrollTask, 800);
+        return true;
     }
 
     private void refreshBatteryStatus() {
-        try {
-            Intent intent = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
-            if (intent != null) updateBatteryUi(intent);
-        } catch (Exception ignored) {}
+        if (tvStatusBattery == null) return;
+        int idx = ThemeManager.batteryLevelIndex(cachedBatteryLevel);
+        Bitmap themedBattery = ThemeManager.getBatteryIcon(idx, cachedBatteryCharging);
+        tvStatusBattery.setText(cachedBatteryLevel + "%");
+        if (themedBattery != null && ivStatusBatteryThemed != null) {
+            int batH = y1BatteryIconHeightPx > 0 ? y1BatteryIconHeightPx
+                    : (int) (20 * getResources().getDisplayMetrics().density);
+            int bw = (int) (themedBattery.getWidth() * (batH / (float) themedBattery.getHeight()));
+            if (bw < 1) bw = 1;
+            Bitmap scaled = Bitmap.createScaledBitmap(themedBattery, bw, batH, true);
+            ivStatusBatteryThemed.setImageBitmap(scaled);
+            ivStatusBatteryThemed.setVisibility(View.VISIBLE);
+            tvStatusBattery.setVisibility(View.VISIBLE);
+        }
     }
 
     private void updateBatteryUi(Intent intent) {
@@ -3625,7 +3832,7 @@ public class MainActivity extends Activity {
         layout.setPadding(hPad, 0, hPad, 0);
         final int rowKind = Y1_ROW_MENU;
         int rowW = y1ActiveRowWidthPx();
-        layout.setBackground(getY1RowBackground(false, rowW, rowKind));
+        layout.setBackground(getY1RowStateBackground(rowW, rowKind));
 
         TextView tvLeft = new TextView(this);
         tvLeft.setTag(TAG_REARRANGE_LABEL);
@@ -3679,8 +3886,6 @@ public class MainActivity extends Activity {
         layout.setOnFocusChangeListener(new View.OnFocusChangeListener() {
             @Override
             public void onFocusChange(View v, boolean hasFocus) {
-                int w = y1ActiveRowWidthPx();
-                layout.setBackground(getY1RowBackground(hasFocus, w, rowKind));
                 ThemeManager.applyThemedTextStyle(tvLeft, hasFocus
                         ? y1RowTextColorSelected(rowKind) : y1RowTextColorNormal(rowKind));
                 tvLeft.setSelected(hasFocus);
@@ -6268,15 +6473,32 @@ public class MainActivity extends Activity {
         if (ivPlayerBgBlur == null) return;
         String mode = getBackgroundMode();
         if (playerAlbumBlurEnabled && hasAlbumArtForBlur()) {
-            BitmapFactory.Options optsBg = new BitmapFactory.Options();
-            optsBg.inSampleSize = 4;
-            Bitmap sourceBg = BitmapFactory.decodeByteArray(
-                    lastAlbumArtBytes, 0, lastAlbumArtBytes.length, optsBg);
-            if (sourceBg != null) {
-                Bitmap blurredBg = applyGaussianBlur(sourceBg);
-                ivPlayerBgBlur.setImageBitmap(blurredBg);
-                if (sourceBg != blurredBg) sourceBg.recycle();
-            }
+            final byte[] artBytes = lastAlbumArtBytes;
+            IO_EXECUTOR.submit(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        BitmapFactory.Options optsBg = new BitmapFactory.Options();
+                        optsBg.inSampleSize = 4;
+                        final Bitmap sourceBg = BitmapFactory.decodeByteArray(artBytes, 0, artBytes.length, optsBg);
+                        if (sourceBg != null) {
+                            final Bitmap blurredBg = preparePlayerBackdrop(sourceBg);
+                            runOnUiThread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    if (ivPlayerBgBlur != null) {
+                                        ivPlayerBgBlur.animate().cancel();
+                                        ivPlayerBgBlur.setAlpha(0f);
+                                        ivPlayerBgBlur.setImageBitmap(blurredBg);
+                                        ivPlayerBgBlur.animate().alpha(1f).setDuration(150).start();
+                                    }
+                                    if (sourceBg != blurredBg) sourceBg.recycle();
+                                }
+                            });
+                        }
+                    } catch (Exception ignored) {}
+                }
+            });
         } else {
             Bitmap bg = BG_MODE_CUSTOM.equals(mode)
                     ? loadCustomBackgroundBitmap()
@@ -6486,6 +6708,16 @@ public class MainActivity extends Activity {
         }
         if (selected) return createButtonBackground(ThemeManager.getRowSelectionFillColor());
         return new android.graphics.drawable.ColorDrawable(ThemeManager.getListButtonNormalBg());
+    }
+
+    private android.graphics.drawable.StateListDrawable getY1RowStateBackground(int widthPx, int rowKind) {
+        android.graphics.drawable.StateListDrawable states = new android.graphics.drawable.StateListDrawable();
+        android.graphics.drawable.Drawable sel = getY1RowBackground(true, widthPx, rowKind);
+        android.graphics.drawable.Drawable norm = getY1RowBackground(false, widthPx, rowKind);
+        states.addState(new int[] { android.R.attr.state_focused }, sel);
+        states.addState(new int[] { android.R.attr.state_pressed }, sel);
+        states.addState(new int[] {}, norm);
+        return states;
     }
 
     private android.graphics.drawable.Drawable getY1RowBackground(boolean focused, int widthPx) {
@@ -7975,10 +8207,14 @@ public class MainActivity extends Activity {
             return;
         }
         if (!statusBarShowsTitle && currentScreenState == STATE_MENU) {
-            java.text.SimpleDateFormat sdf = new java.text.SimpleDateFormat("h:mm a", java.util.Locale.US);
-            tvStatusClock.setText(sdf.format(new java.util.Date()));
+            boolean is24 = android.text.format.DateFormat.is24HourFormat(this);
+            if (statusClockFormat == null || cachedClockIs24Hour != is24) {
+                cachedClockIs24Hour = is24;
+                statusClockFormat = new SimpleDateFormat(is24 ? "HH:mm" : "h:mm a", Locale.US);
+            }
+            setTextIfChanged(tvStatusClock, statusClockFormat.format(new java.util.Date()));
         } else {
-            tvStatusClock.setText(getStatusBarContextTitle());
+            setTextIfChanged(tvStatusClock, getStatusBarContextTitle());
         }
         if (!statusBarFlowHandoffCrossfade) {
             tvStatusClock.setAlpha(1f);
@@ -8366,6 +8602,23 @@ public class MainActivity extends Activity {
         changeScreen(state, false);
     }
 
+    private void cancelAllTransitions() {
+        com.solar.launcher.ui.ScreenTransition.cancel();
+        View[] layers = {
+            layoutMainMenu, layoutBrowserMode, layoutPlayerMode, layoutSettingsMode,
+            layoutFlowMode, layoutBluetoothMode, layoutWifiMode, layoutWifiKeyboard,
+            layoutBrightnessMode, layoutStorageMode, layoutWebServerMode,
+            findViewById(R.id.layout_video_mode), findViewById(R.id.layout_photo_viewer)
+        };
+        for (View layer : layers) {
+            if (layer == null) continue;
+            layer.animate().cancel();
+            layer.setTranslationX(0f);
+            layer.setTranslationY(0f);
+            layer.setAlpha(1f);
+        }
+    }
+
     private void changeScreen(int state, boolean isBack) {
         if (otaSystemReplaceInProgress) return;
         if (usbMassStorageLocked && state != STATE_USB_STORAGE) {
@@ -8378,14 +8631,7 @@ public class MainActivity extends Activity {
                 && !com.solar.launcher.radio.RadioExperiment.isEnabled(prefs)) {
             return;
         }
-        if (ScreenTransition.isAnimating() || ListDrillTransition.isAnimating()
-                || FlowPlayerHandoff.isHandoffAnimating()) {
-            if (isBack) {
-                ScreenTransition.cancel();
-            } else {
-                return;
-            }
-        }
+        cancelAllTransitions();
         dismissThemedContextMenu();
         hideFastScrollLetter();
         if (currentScreenState == STATE_SOULSEEK && state != STATE_SOULSEEK && shouldConfirmReachDownloadLeave(state)) {
@@ -9349,13 +9595,22 @@ public class MainActivity extends Activity {
         if (now - lastClickTime < 30) return;
         lastClickTime = now;
 
+        vibrateCached(20);
+    }
+
+    private void wheelDetentFeedback(boolean section) {
+        long now = android.os.SystemClock.elapsedRealtimeNanos();
+        long throttle = section ? 35_000_000L : 30_000_000L;
+        if (now - lastWheelHapticNanos < throttle) return;
+        lastWheelHapticNanos = now;
+        vibrateCached(section ? 25 : 10);
+    }
+
+    private void vibrateCached(long durationMs) {
+        if (!isVibrationEnabled || cachedVibrator == null) return;
         try {
-            if (isVibrationEnabled) {
-                Vibrator v = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
-                if (v != null)
-                    v.vibrate(20); // 🚀 진동 길이도 30 -> 20으로 줄여서 모터가 더 빨리 쉬게 만듭니다.
-            }
-        } catch (Exception e) {
+            cachedVibrator.vibrate(durationMs);
+        } catch (Exception ignored) {
         }
     }
 
@@ -12495,7 +12750,7 @@ public class MainActivity extends Activity {
         int hPad = (int) (10 * getResources().getDisplayMetrics().density);
         layout.setPadding(hPad, 0, hPad, 0);
         int rowW = y1ActiveRowWidthPx();
-        layout.setBackground(getY1RowBackground(false, rowW, Y1_ROW_MENU));
+        layout.setBackground(getY1RowStateBackground(rowW, Y1_ROW_MENU));
 
         TextView tvLeft = new TextView(this);
         tvLeft.setFocusable(false);
@@ -12563,8 +12818,6 @@ public class MainActivity extends Activity {
         layout.setOnFocusChangeListener(new View.OnFocusChangeListener() {
             @Override
             public void onFocusChange(View v, boolean hasFocus) {
-                int rowW = y1ActiveRowWidthPx();
-                layout.setBackground(getY1RowBackground(hasFocus, rowW, Y1_ROW_MENU));
                 applyY1ListRowStyle(layout, hasFocus, tvLeft,
                         (isFullWidthMenus && !submenu && !toggleRow) ? tvRight : null,
                         submenu ? rowArrow : null, Y1_ROW_MENU);
@@ -13124,7 +13377,7 @@ public class MainActivity extends Activity {
         try {
             if (ivPlayerBgBlur != null) {
                 if (playerAlbumBlurEnabled) {
-                    android.graphics.Bitmap blurredBg = applyGaussianBlur(bmpCenter);
+                    android.graphics.Bitmap blurredBg = preparePlayerBackdrop(bmpCenter);
                     ivPlayerBgBlur.setImageBitmap(blurredBg);
                 } else {
                     ivPlayerBgBlur.setImageResource(0);
@@ -17600,10 +17853,10 @@ public class MainActivity extends Activity {
 
     private SongItem songItemAtPlaylistIndex(int index) {
         if (index < 0 || index >= virtualSongList.size()) {
-            File empty = new File("");
-            return new SongItem(empty, "", "", "", "");
+            return EMPTY_SONG;
         }
-        return findSongItem(virtualSongList.get(index));
+        SongItem item = findSongItem(virtualSongList.get(index));
+        return item != null ? item : EMPTY_SONG;
     }
 
     private String songSubtitleLine(SongItem song) {
@@ -25678,25 +25931,36 @@ public class MainActivity extends Activity {
             PerfDebug.convGetViewCalls++;
             // #endregion
             FrameLayout row;
+            ConversationRowBinding binding;
             if (convertView instanceof FrameLayout) {
                 row = (FrameLayout) convertView;
+                binding = (ConversationRowBinding) row.getTag(R.id.tag_adapter_row_binding);
             } else {
                 row = ReachMessageRow.create(MainActivity.this, conversationRowHeightPx());
+                binding = new ConversationRowBinding(row);
+                row.setTag(R.id.tag_adapter_row_binding, binding);
+                row.setOnFocusChangeListener(binding);
             }
             // #region agent log
             if (PerfDebug.convGetViewCalls % 20 == 0) {
                 PerfDebug.maybeFlush(MainActivity.this, "convGetView");
             }
             // #endregion
-            final FrameLayout rowView = row;
-            ReachMessageRow.attachFocusHighlight(row, new ReachMessageRow.HighlightBind() {
-                @Override
-                public void bind(boolean highlighted) {
-                    boolean show = highlighted || position == selectedPosition;
-                    bindConversationRow(rowView, position, show);
-                }
-            });
+            binding.bind(position);
             return row;
+        }
+
+        private final class ConversationRowBinding implements View.OnFocusChangeListener {
+            final FrameLayout row;
+            int position;
+            ConversationRowBinding(FrameLayout row) { this.row = row; }
+            void bind(int position) {
+                this.position = position;
+                bindConversationRow(row, position, row.hasFocus() || position == selectedPosition);
+            }
+            @Override public void onFocusChange(View v, boolean hasFocus) {
+                bindConversationRow(row, position, hasFocus || position == selectedPosition);
+            }
         }
     }
 
@@ -25768,20 +26032,31 @@ public class MainActivity extends Activity {
         @Override
         public View getView(final int position, View convertView, ViewGroup parent) {
             FrameLayout row;
+            WallRowBinding binding;
             if (convertView instanceof FrameLayout) {
                 row = (FrameLayout) convertView;
+                binding = (WallRowBinding) row.getTag(R.id.tag_adapter_row_binding);
             } else {
                 row = ReachMessageRow.create(MainActivity.this, conversationRowHeightPx());
+                binding = new WallRowBinding(row);
+                row.setTag(R.id.tag_adapter_row_binding, binding);
+                row.setOnFocusChangeListener(binding);
             }
-            final FrameLayout rowView = row;
-            ReachMessageRow.attachFocusHighlight(row, new ReachMessageRow.HighlightBind() {
-                @Override
-                public void bind(boolean highlighted) {
-                    boolean show = highlighted || position == selectedPosition;
-                    bindWallRow(rowView, position, show);
-                }
-            });
+            binding.bind(position);
             return row;
+        }
+
+        private final class WallRowBinding implements View.OnFocusChangeListener {
+            final FrameLayout row;
+            int position;
+            WallRowBinding(FrameLayout row) { this.row = row; }
+            void bind(int position) {
+                this.position = position;
+                bindWallRow(row, position, row.hasFocus() || position == selectedPosition);
+            }
+            @Override public void onFocusChange(View v, boolean hasFocus) {
+                bindWallRow(row, position, hasFocus || position == selectedPosition);
+            }
         }
     }
 
@@ -28455,6 +28730,7 @@ public class MainActivity extends Activity {
         // #endregion
         final File artDir = com.solar.launcher.flow.AlbumArtCache.cacheDir(getApplicationContext());
         final File flowDir = com.solar.launcher.flow.FlowThumbCache.cacheDir(getApplicationContext());
+        final File backdropDir = com.solar.launcher.flow.AlbumBackdropCache.cacheDir(getApplicationContext());
         final com.solar.launcher.flow.FlowCoverResolver.Host host =
                 new com.solar.launcher.flow.FlowCoverResolver.Host() {
             @Override public File coverFileForTrack(File track) { return MainActivity.this.coverFileForTrack(track); }
@@ -28482,14 +28758,27 @@ public class MainActivity extends Activity {
                             com.solar.launcher.flow.AlbumArtCache.get(artDir, item.coverKey);
                     if (disk != null) {
                         com.solar.launcher.flow.FlowThumbCache.put(flowDir, item.coverKey, disk, flowPx);
+                        com.solar.launcher.flow.AlbumBackdropCache.put(
+                                backdropDir, item.coverKey, disk);
+                        if (!disk.isRecycled()) disk.recycle();
+                    }
+                } else if (!com.solar.launcher.flow.AlbumBackdropCache.has(backdropDir, item.coverKey)) {
+                    android.graphics.Bitmap disk =
+                            com.solar.launcher.flow.AlbumArtCache.get(artDir, item.coverKey);
+                    if (disk != null) {
+                        com.solar.launcher.flow.AlbumBackdropCache.put(backdropDir, item.coverKey, disk);
                         if (!disk.isRecycled()) disk.recycle();
                     }
                 }
                 continue;
             }
-            com.solar.launcher.flow.FlowCoverResolver.resolveFromTracks(
+            android.graphics.Bitmap resolved = com.solar.launcher.flow.FlowCoverResolver.resolveFromTracks(
                     item.tracks, host, com.solar.launcher.flow.AlbumArtCache.THUMB_PX,
                     item.coverKey, artDir, flowDir);
+            if (resolved != null) {
+                com.solar.launcher.flow.AlbumBackdropCache.put(backdropDir, item.coverKey, resolved);
+                if (!resolved.isRecycled()) resolved.recycle();
+            }
             built++;
             if (built % 12 == 0) {
                 final int done = built;
@@ -29362,11 +29651,23 @@ public class MainActivity extends Activity {
         private List<String> items;
         private String type;
         private String browseArtist;
+        private final String[] displayTitles;
+        private final String[] displaySubtitles;
 
         public CategoryListAdapter(List<String> items, String type, String browseArtist) {
             this.items = items;
             this.type = type;
             this.browseArtist = browseArtist;
+            this.displayTitles = new String[items.size()];
+            this.displaySubtitles = new String[items.size()];
+            String prefix = "👤 ";
+            if ("ALBUM".equals(type) || "ARTIST_ALBUM".equals(type)) prefix = "💿 ";
+            else if ("GENRE".equals(type)) prefix = "🎸 ";
+            for (int i = 0; i < items.size(); i++) {
+                displayTitles[i] = prefix + items.get(i);
+                displaySubtitles[i] = "ARTIST_ALBUM".equals(type) && browseArtist != null
+                        ? albumBrowseSubtitle(items.get(i)) : "";
+            }
         }
 
         @Override public int getCount() { return items.size(); }
@@ -29379,12 +29680,20 @@ public class MainActivity extends Activity {
             final boolean artistAlbumBrowse = "ARTIST_ALBUM".equals(type) && browseArtist != null;
 
             if (artistAlbumBrowse) {
-                final String subtitle = albumBrowseSubtitle(name);
+                final String subtitle = displaySubtitles[position];
                 final int rowKind = Y1_ROW_ITEM;
                 final int rowW = y1ActiveRowWidthPx();
                 FrameLayout row;
+                CategoryRowBinding binding;
                 if (convertView instanceof FrameLayout && "artist_album_row".equals(convertView.getTag())) {
                     row = (FrameLayout) convertView;
+                    binding = (CategoryRowBinding) row.getTag(R.id.tag_adapter_row_binding);
+                    if (binding == null || binding.owner != this) {
+                        binding = new CategoryRowBinding(row, true);
+                        row.setTag(R.id.tag_adapter_row_binding, binding);
+                        row.setOnFocusChangeListener(binding);
+                        row.setOnClickListener(binding);
+                    }
                 } else {
                     row = MoveRibbonRows.createLibraryMoveRow(MainActivity.this, y1LibraryRowHeightPx);
                     row.setTag("artist_album_row");
@@ -29392,33 +29701,19 @@ public class MainActivity extends Activity {
                     row.setSoundEffectsEnabled(false);
                     row.setLayoutParams(new android.widget.AbsListView.LayoutParams(
                             android.widget.AbsListView.LayoutParams.MATCH_PARENT, y1LibraryRowHeightPx + 2));
+                    binding = new CategoryRowBinding(row, true);
+                    row.setTag(R.id.tag_adapter_row_binding, binding);
+                    row.setOnFocusChangeListener(binding);
+                    row.setOnClickListener(binding);
                 }
-                final String titleText = "💿 " + name;
-                row.setOnFocusChangeListener(new View.OnFocusChangeListener() {
-                    @Override
-                    public void onFocusChange(View v, boolean hasFocus) {
-                        MoveRibbonRows.bindLibraryMoveRow(MainActivity.this, row, titleText, subtitle,
-                                false, hasFocus, false, false, rowW, y1LibraryRowHeightPx);
-                        if (hasFocus) showFastScrollLetter(name);
-                    }
-                });
-                row.setOnClickListener(new View.OnClickListener() {
-                    @Override
-                    public void onClick(View v) {
-                        clickFeedback();
-                        virtualQueryType = "ARTIST_ALBUM";
-                        virtualQueryValue = name;
-                        currentBrowserMode = BROWSER_VIRTUAL_SONGS;
-                        buildVirtualSongs();
-                    }
-                });
-                MoveRibbonRows.bindLibraryMoveRow(MainActivity.this, row, titleText, subtitle,
-                        false, row.hasFocus(), false, false, rowW, y1LibraryRowHeightPx);
+                final String titleText = displayTitles[position];
+                binding.bind(position, name, titleText, subtitle, rowW);
                 return row;
             }
 
             final Button btn;
-
+            final int rowKind = Y1_ROW_ITEM;
+            final int rowW = y1ActiveRowWidthPx();
             if (convertView != null && convertView instanceof Button) {
                 btn = (Button) convertView;
             } else {
@@ -29427,50 +29722,85 @@ public class MainActivity extends Activity {
                         android.widget.AbsListView.LayoutParams.MATCH_PARENT,
                         android.widget.AbsListView.LayoutParams.WRAP_CONTENT
                 ));
+                btn.setBackground(getY1RowStateBackground(rowW, rowKind));
             }
 
-            String prefix = "👤 ";
-            if ("ALBUM".equals(type) || "ARTIST_ALBUM".equals(type)) prefix = "💿 ";
-            else if ("GENRE".equals(type)) prefix = "🎸 ";
-            btn.setText(prefix + name);
+            btn.setText(displayTitles[position]);
 
-            final int rowKind = Y1_ROW_ITEM;
-            final int rowW = y1ActiveRowWidthPx();
-            btn.setBackground(getY1RowBackground(false, rowW, rowKind));
             ThemeManager.applyThemedTextStyle(btn, y1RowTextColorNormal(rowKind));
             btn.setSelected(false);
-            btn.setOnFocusChangeListener(new View.OnFocusChangeListener() {
-                @Override
-                public void onFocusChange(View v, boolean hasFocus) {
-                    btn.setBackground(getY1RowBackground(hasFocus, rowW, rowKind));
-                    ThemeManager.applyThemedTextStyle(btn, hasFocus
-                            ? y1RowTextColorSelected(rowKind) : y1RowTextColorNormal(rowKind));
-                    btn.setSelected(hasFocus);
-                    if (hasFocus) showFastScrollLetter(name);
-                }
-            });
-
-            btn.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    clickFeedback();
-                    if ("ARTIST".equals(type)) {
-                        openArtistBrowse(name);
-                    } else if ("ARTIST_ALBUM".equals(type)) {
-                        virtualQueryType = "ARTIST_ALBUM";
-                        virtualQueryValue = name;
-                        currentBrowserMode = BROWSER_VIRTUAL_SONGS;
-                        buildVirtualSongs();
-                    } else {
-                        virtualQueryType = type;
-                        virtualQueryValue = name;
-                        currentBrowserMode = BROWSER_VIRTUAL_SONGS;
-                        buildVirtualSongs();
-                    }
-                }
-            });
+            CategoryRowBinding binding = (CategoryRowBinding) btn.getTag(R.id.tag_adapter_row_binding);
+            if (binding == null || binding.owner != this) {
+                binding = new CategoryRowBinding(btn, false);
+                btn.setTag(R.id.tag_adapter_row_binding, binding);
+                btn.setOnFocusChangeListener(binding);
+                btn.setOnClickListener(binding);
+            }
+            binding.bind(position, name, displayTitles[position], "", rowW);
 
             return btn;
+        }
+
+        private final class CategoryRowBinding implements View.OnFocusChangeListener, View.OnClickListener {
+            final CategoryListAdapter owner = CategoryListAdapter.this;
+            final View row;
+            final boolean twoLine;
+            int position;
+            int rowWidth;
+            String name;
+            String title;
+            String subtitle;
+            int styleGeneration = Integer.MIN_VALUE;
+
+            CategoryRowBinding(View row, boolean twoLine) {
+                this.row = row;
+                this.twoLine = twoLine;
+            }
+
+            void bind(int position, String name, String title, String subtitle, int rowWidth) {
+                this.position = position;
+                this.name = name;
+                this.title = title;
+                this.subtitle = subtitle;
+                this.rowWidth = rowWidth;
+                if (!twoLine && styleGeneration != ThemeManager.getStyleGeneration()) {
+                    row.setBackground(getY1RowStateBackground(rowWidth, Y1_ROW_ITEM));
+                    styleGeneration = ThemeManager.getStyleGeneration();
+                }
+                if (twoLine) {
+                    MoveRibbonRows.bindLibraryMoveRow(MainActivity.this, (FrameLayout) row,
+                            title, subtitle, false, row.hasFocus(), false, false,
+                            rowWidth, y1LibraryRowHeightPx);
+                } else {
+                    ((Button) row).setText(title);
+                    onFocusChange(row, row.hasFocus());
+                }
+            }
+
+            @Override public void onFocusChange(View v, boolean hasFocus) {
+                if (twoLine) {
+                    MoveRibbonRows.bindLibraryMoveRow(MainActivity.this, (FrameLayout) row,
+                            title, subtitle, false, hasFocus, false, false,
+                            rowWidth, y1LibraryRowHeightPx);
+                } else {
+                    ThemeManager.applyThemedTextStyle((Button) row, hasFocus
+                            ? y1RowTextColorSelected(Y1_ROW_ITEM) : y1RowTextColorNormal(Y1_ROW_ITEM));
+                    row.setSelected(hasFocus);
+                }
+                if (hasFocus) showFastScrollLetter(name);
+            }
+
+            @Override public void onClick(View v) {
+                clickFeedback();
+                if ("ARTIST".equals(type)) {
+                    openArtistBrowse(name);
+                } else {
+                    virtualQueryType = type;
+                    virtualQueryValue = name;
+                    currentBrowserMode = BROWSER_VIRTUAL_SONGS;
+                    buildVirtualSongs();
+                }
+            }
         }
     }
 
@@ -35753,7 +36083,7 @@ public class MainActivity extends Activity {
                 optsBg.inSampleSize = 4;
                 Bitmap sourceBg = BitmapFactory.decodeByteArray(lastAlbumArtBytes, 0, lastAlbumArtBytes.length, optsBg);
                 if (sourceBg != null && ivPlayerBgBlur != null) {
-                    Bitmap blurredBg = applyGaussianBlur(sourceBg);
+                    Bitmap blurredBg = preparePlayerBackdrop(sourceBg);
                     ivPlayerBgBlur.setImageBitmap(blurredBg);
                     if (sourceBg != blurredBg) sourceBg.recycle();
                 }
@@ -38040,7 +38370,7 @@ public class MainActivity extends Activity {
                         android.graphics.BitmapFactory.Options optsBg = new android.graphics.BitmapFactory.Options();
                         optsBg.inSampleSize = 4;
                         android.graphics.Bitmap sourceBg = android.graphics.BitmapFactory.decodeByteArray(lastAlbumArtBytes, 0, lastAlbumArtBytes.length, optsBg);
-                        android.graphics.Bitmap blurredBg = applyGaussianBlur(sourceBg);
+                        android.graphics.Bitmap blurredBg = preparePlayerBackdrop(sourceBg);
                         ivPlayerBgBlur.setImageBitmap(blurredBg);
                         if (sourceBg != blurredBg) sourceBg.recycle();
                     } else {
@@ -39707,16 +40037,17 @@ public class MainActivity extends Activity {
                     if (delta != 0 && handlePlaylistMoveWheel(delta)) return true;
                 }
 
-                if (Y1InputKeys.isWheelUp(keyCode)) {
-                    listVirtualSongs.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP));
-                    listVirtualSongs.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_UP));
-                    clickFeedback();
-                    return true;
-                }
-                if (Y1InputKeys.isWheelDown(keyCode)) {
-                    listVirtualSongs.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN));
-                    listVirtualSongs.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_DOWN));
-                    clickFeedback();
+                int direction = Y1InputKeys.isWheelUp(keyCode) ? -1
+                        : Y1InputKeys.isWheelDown(keyCode) ? 1 : 0;
+                if (direction != 0) {
+                    ensureWheelSectionIndex();
+                    wheelPhysics.tick(android.os.SystemClock.elapsedRealtimeNanos(), direction, wheelResult);
+                    int current = currentWheelPosition();
+                    int target = wheelResult.sectionJump
+                            ? wheelSectionIndex.jumpTarget(current, direction)
+                            : current + direction * wheelResult.rowSteps;
+                    if (target < 0) target = current + direction * Math.max(1, wheelResult.rowSteps);
+                    moveWheelSelection(target);
                     return true;
                 }
             }
@@ -40040,10 +40371,22 @@ public class MainActivity extends Activity {
         }
         scheduleAdbFlowCarouselIfRequested();
         restoreAirplaneModeAfterFmRadio();
+
+        if (!batteryReceiverRegistered) {
+            Intent sticky = registerReceiver(batteryReceiver, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+            batteryReceiverRegistered = true;
+            if (sticky != null) batteryReceiver.onReceive(this, sticky);
+        }
     }
 
     @Override
     protected void onPause() {
+        if (batteryReceiverRegistered) {
+            try {
+                unregisterReceiver(batteryReceiver);
+            } catch (Exception ignored) {}
+            batteryReceiverRegistered = false;
+        }
         super.onPause();
         try {
             persistPlaybackQueue();
@@ -40068,6 +40411,10 @@ public class MainActivity extends Activity {
         try {
             persistPlaybackQueue();
         } catch (Exception ignored) {}
+        if (wheelIndexedAdapter != null) {
+            try { wheelIndexedAdapter.unregisterDataSetObserver(wheelDataObserver); } catch (Exception ignored) {}
+            wheelIndexedAdapter = null;
+        }
         super.onDestroy();
         clockHandler.removeCallbacks(clockTask);
         progressHandler.removeCallbacks(updateProgressTask);
@@ -40291,25 +40638,19 @@ public class MainActivity extends Activity {
         return getY1RowBackground(focused, y1ActiveRowWidthPx());
     }
 
-    // 💡 안드로이드 하드웨어 가속(RenderScript)을 이용한 고화질 가우시안 블러 함수!
-    private Bitmap applyGaussianBlur(Bitmap original) {
-        if (original == null)
-            return null;
+    /** Runtime uses scan-time cache; fallback is a tiny unblurred sample, never a shader blur. */
+    private Bitmap preparePlayerBackdrop(Bitmap original) {
+        if (original == null) return null;
         try {
-            Bitmap output = Bitmap.createBitmap(original.getWidth(), original.getHeight(), Bitmap.Config.ARGB_8888);
-            RenderScript rs = RenderScript.create(this);
-            ScriptIntrinsicBlur script = ScriptIntrinsicBlur.create(rs, Element.U8_4(rs));
-            Allocation inAlloc = Allocation.createFromBitmap(rs, original, Allocation.MipmapControl.MIPMAP_NONE,
-                    Allocation.USAGE_SCRIPT);
-            Allocation outAlloc = Allocation.createFromBitmap(rs, output);
-
-            script.setRadius(25f); // 💡 블러 강도 설정 (0.0 ~ 25.0 범위, 25가 최대)
-            script.setInput(inAlloc);
-            script.forEach(outAlloc);
-            outAlloc.copyTo(output);
-            rs.destroy();
-
-            return output;
+            String key = resolveNowPlayingFlowMatchKey();
+            if (key != null && !key.isEmpty()) {
+                Bitmap cached = com.solar.launcher.flow.AlbumBackdropCache.get(
+                        com.solar.launcher.flow.AlbumBackdropCache.cacheDir(getApplicationContext()), key);
+                if (cached != null) return cached;
+            }
+            return Bitmap.createScaledBitmap(original,
+                    com.solar.launcher.flow.AlbumBackdropCache.SIZE_PX,
+                    com.solar.launcher.flow.AlbumBackdropCache.SIZE_PX, true);
         } catch (Exception e) {
             return original;
         }
@@ -40739,9 +41080,25 @@ public class MainActivity extends Activity {
             }
             try {
                 if (ivPlayerBgBlur != null) {
-                    android.graphics.Bitmap blurredBg = applyGaussianBlur(raw);
-                    ivPlayerBgBlur.setImageBitmap(blurredBg);
-                    if (!playerAlbumBlurEnabled) ivPlayerBgBlur.setImageResource(0);
+                    final Bitmap rawCopy = raw;
+                    IO_EXECUTOR.submit(new Runnable() {
+                        @Override
+                        public void run() {
+                            final Bitmap blurredBg = preparePlayerBackdrop(rawCopy);
+                            runOnUiThread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    if (ivPlayerBgBlur != null) {
+                                        ivPlayerBgBlur.animate().cancel();
+                                        ivPlayerBgBlur.setAlpha(0f);
+                                        ivPlayerBgBlur.setImageBitmap(blurredBg);
+                                        ivPlayerBgBlur.animate().alpha(1f).setDuration(150).start();
+                                        if (!playerAlbumBlurEnabled) ivPlayerBgBlur.setImageResource(0);
+                                    }
+                                }
+                            });
+                        }
+                    });
                 }
             } catch (Exception e) {}
         } else {
@@ -40801,13 +41158,33 @@ public class MainActivity extends Activity {
             }
 
             // 뒷배경 블러 처리
-            android.graphics.BitmapFactory.Options optsBg = new android.graphics.BitmapFactory.Options();
-            optsBg.inSampleSize = 4;
-            android.graphics.Bitmap sourceBg = android.graphics.BitmapFactory.decodeFile(imagePath, optsBg);
-            android.graphics.Bitmap blurredBg = applyGaussianBlur(sourceBg);
-            ivPlayerBgBlur.setImageBitmap(blurredBg);
-            if (sourceBg != blurredBg) sourceBg.recycle();
-            if (!playerAlbumBlurEnabled) ivPlayerBgBlur.setImageResource(0);
+            final String path = imagePath;
+            IO_EXECUTOR.submit(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        android.graphics.BitmapFactory.Options optsBg = new android.graphics.BitmapFactory.Options();
+                        optsBg.inSampleSize = 4;
+                        final android.graphics.Bitmap sourceBg = android.graphics.BitmapFactory.decodeFile(path, optsBg);
+                        if (sourceBg != null) {
+                            final android.graphics.Bitmap blurredBg = preparePlayerBackdrop(sourceBg);
+                            runOnUiThread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    if (ivPlayerBgBlur != null) {
+                                        ivPlayerBgBlur.animate().cancel();
+                                        ivPlayerBgBlur.setAlpha(0f);
+                                        ivPlayerBgBlur.setImageBitmap(blurredBg);
+                                        ivPlayerBgBlur.animate().alpha(1f).setDuration(150).start();
+                                        if (!playerAlbumBlurEnabled) ivPlayerBgBlur.setImageResource(0);
+                                    }
+                                    if (sourceBg != blurredBg) sourceBg.recycle();
+                                }
+                            });
+                        }
+                    } catch (Exception ignored) {}
+                }
+            });
 
             // 메인 메뉴 배경도 연동하기 위해 파일 데이터를 byte[]로 변환해서 lastAlbumArtBytes에 집어넣습니다!
             java.io.File file = new java.io.File(imagePath);
@@ -41264,13 +41641,25 @@ public class MainActivity extends Activity {
         @Override
         public View getView(final int position, View convertView, android.view.ViewGroup parent) {
             final Button btn;
+            FolderRowBinding binding;
             if (convertView == null) {
                 btn = createListButton("");
                 btn.setLayoutParams(new android.widget.AbsListView.LayoutParams(
                         android.widget.AbsListView.LayoutParams.MATCH_PARENT,
                         android.widget.AbsListView.LayoutParams.WRAP_CONTENT));
+                binding = new FolderRowBinding(btn);
+                btn.setTag(R.id.tag_adapter_row_binding, binding);
+                btn.setOnFocusChangeListener(binding);
+                btn.setOnClickListener(binding);
             } else {
                 btn = (Button) convertView;
+                binding = (FolderRowBinding) btn.getTag(R.id.tag_adapter_row_binding);
+                if (binding == null || binding.owner != this) {
+                    binding = new FolderRowBinding(btn);
+                    btn.setTag(R.id.tag_adapter_row_binding, binding);
+                    btn.setOnFocusChangeListener(binding);
+                    btn.setOnClickListener(binding);
+                }
             }
             final FolderBrowserEntry entry = folderBrowserEntries.get(position);
             String prefix = "📁 ";
@@ -41288,62 +41677,77 @@ public class MainActivity extends Activity {
             btn.setTag(entry.kind == FolderBrowserEntry.KIND_AUDIO ? entry.file : null);
             final int rowKind = Y1_ROW_ITEM;
             final int rowW = y1ActiveRowWidthPx();
-            btn.setBackground(getY1RowBackground(false, rowW, rowKind));
             btn.setSelected(false);
-            btn.setOnFocusChangeListener(new View.OnFocusChangeListener() {
-                @Override
-                public void onFocusChange(View v, boolean hasFocus) {
-                    btn.setBackground(getY1RowBackground(hasFocus, rowW, rowKind));
-                    ThemeManager.applyThemedTextStyle(btn, hasFocus
-                            ? y1RowTextColorSelected(rowKind) : y1RowTextColorNormal(rowKind));
-                    btn.setSelected(hasFocus);
-                    if (hasFocus) showFastScrollLetter(entry.label);
-                }
-            });
-            btn.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    if (System.currentTimeMillis() < suppressListClickUntil) return;
-                    clickFeedback();
-                    if (entry.kind == FolderBrowserEntry.KIND_UP) {
-                        final File parentDir = currentFolder.getParentFile();
-                        drillBrowserBack(new Runnable() {
-                            @Override
-                            public void run() {
-                                if (parentDir != null) currentFolder = parentDir;
-                                buildFileBrowserUI();
-                            }
-                        });
-                    } else if (entry.kind == FolderBrowserEntry.KIND_FOLDER && entry.file != null) {
-                        final File next = entry.file;
-                        drillBrowserForward(new Runnable() {
-                            @Override
-                            public void run() {
-                                currentFolder = next;
-                                buildFileBrowserUI();
-                            }
-                        });
-                    } else if (entry.kind == FolderBrowserEntry.KIND_AUDIO && entry.file != null) {
-                        setupFolderPlaylist(entry.file);
-                    } else if (entry.kind == FolderBrowserEntry.KIND_APK && entry.file != null) {
-                        installApk(entry.file);
-                    } else if (entry.kind == FolderBrowserEntry.KIND_IMAGE && entry.file != null) {
-                        try {
-                            prefs.edit()
-                                    .putString("bg_path", entry.file.getAbsolutePath())
-                                    .putString("background_mode", BG_MODE_CUSTOM)
-                                    .remove(PREF_BG_THEME_WALLPAPER)
-                                    .commit();
-                        } catch (Exception ignored) {}
-                        updateMainMenuBackground();
-                        Toast.makeText(MainActivity.this, getString(R.string.toast_bg_applied),
-                                Toast.LENGTH_SHORT).show();
-                        isPickingBackground = false;
-                        changeScreen(STATE_MENU);
-                    }
-                }
-            });
+            binding.bind(entry, rowW);
             return btn;
+        }
+
+        private final class FolderRowBinding implements View.OnFocusChangeListener, View.OnClickListener {
+            final FolderBrowserAdapter owner = FolderBrowserAdapter.this;
+            final Button button;
+            FolderBrowserEntry entry;
+            int rowWidth;
+            int styleGeneration = Integer.MIN_VALUE;
+
+            FolderRowBinding(Button button) { this.button = button; }
+
+            void bind(FolderBrowserEntry entry, int rowWidth) {
+                this.entry = entry;
+                this.rowWidth = rowWidth;
+                int generation = ThemeManager.getStyleGeneration();
+                if (styleGeneration != generation) {
+                    button.setBackground(getY1RowStateBackground(rowWidth, Y1_ROW_ITEM));
+                    styleGeneration = generation;
+                }
+                onFocusChange(button, button.hasFocus());
+            }
+
+            @Override public void onFocusChange(View v, boolean hasFocus) {
+                ThemeManager.applyThemedTextStyle(button, hasFocus
+                        ? y1RowTextColorSelected(Y1_ROW_ITEM) : y1RowTextColorNormal(Y1_ROW_ITEM));
+                button.setSelected(hasFocus);
+                if (hasFocus && entry != null) showFastScrollLetter(entry.label);
+            }
+
+            @Override public void onClick(View v) {
+                if (entry == null) return;
+                if (System.currentTimeMillis() < suppressListClickUntil) return;
+                clickFeedback();
+                if (entry.kind == FolderBrowserEntry.KIND_UP) {
+                    final File parentDir = currentFolder.getParentFile();
+                    drillBrowserBack(new Runnable() {
+                        @Override public void run() {
+                            if (parentDir != null) currentFolder = parentDir;
+                            buildFileBrowserUI();
+                        }
+                    });
+                } else if (entry.kind == FolderBrowserEntry.KIND_FOLDER && entry.file != null) {
+                    final File next = entry.file;
+                    drillBrowserForward(new Runnable() {
+                        @Override public void run() {
+                            currentFolder = next;
+                            buildFileBrowserUI();
+                        }
+                    });
+                } else if (entry.kind == FolderBrowserEntry.KIND_AUDIO && entry.file != null) {
+                    setupFolderPlaylist(entry.file);
+                } else if (entry.kind == FolderBrowserEntry.KIND_APK && entry.file != null) {
+                    installApk(entry.file);
+                } else if (entry.kind == FolderBrowserEntry.KIND_IMAGE && entry.file != null) {
+                    try {
+                        prefs.edit()
+                                .putString("bg_path", entry.file.getAbsolutePath())
+                                .putString("background_mode", BG_MODE_CUSTOM)
+                                .remove(PREF_BG_THEME_WALLPAPER)
+                                .commit();
+                    } catch (Exception ignored) {}
+                    updateMainMenuBackground();
+                    Toast.makeText(MainActivity.this, getString(R.string.toast_bg_applied),
+                            Toast.LENGTH_SHORT).show();
+                    isPickingBackground = false;
+                    changeScreen(STATE_MENU);
+                }
+            }
         }
     }
 
@@ -41404,12 +41808,6 @@ public class MainActivity extends Activity {
                     btn.setLayoutParams(new android.widget.AbsListView.LayoutParams(
                             android.widget.AbsListView.LayoutParams.MATCH_PARENT, y1RowHeightPx));
                 }
-                btn.setOnClickListener(new View.OnClickListener() {
-                    @Override public void onClick(View v) {
-                        clickFeedback();
-                        onThemeBrowserRowClick(row);
-                    }
-                });
                 bindThemeRowFocus(btn, position, row, Y1_ROW_MENU);
                 return btn;
             }
@@ -41445,12 +41843,6 @@ public class MainActivity extends Activity {
                 tvSub.setText(row.subtitle);
                 ThemeManager.applyThemedTextStyle(tvTitle, ThemeManager.getTextColorPrimary());
                 ThemeManager.applyThemedTextStyle(tvSub, ThemeManager.getTextColorSecondary());
-                layout.setOnClickListener(new View.OnClickListener() {
-                    @Override public void onClick(View v) {
-                        clickFeedback();
-                        onThemeBrowserRowClick(row);
-                    }
-                });
                 bindThemeRowFocus(layout, position, row, Y1_ROW_MENU);
                 return layout;
             }
@@ -41491,12 +41883,6 @@ public class MainActivity extends Activity {
                             android.widget.AbsListView.LayoutParams.MATCH_PARENT, y1RowHeightPx));
                 }
                 btn.setText(row.prefix + row.title);
-                btn.setOnClickListener(new View.OnClickListener() {
-                    @Override public void onClick(View v) {
-                        clickFeedback();
-                        onThemeBrowserRowClick(row);
-                    }
-                });
                 bindThemeRowFocus(btn, position, row, Y1_ROW_MENU);
                 return btn;
             }
@@ -41514,70 +41900,115 @@ public class MainActivity extends Activity {
             final ImageView arrow = (ImageView) themeRow.getTag(HOME_MENU_TAG_ARROW);
             label.setText(row.prefix + row.title);
             applyY1ListRowStyle(themeRow, themeRow.hasFocus(), label, null, arrow, Y1_ROW_HOME);
-            themeRow.setOnClickListener(new View.OnClickListener() {
-                @Override public void onClick(View v) {
-                    clickFeedback();
-                    onThemeBrowserRowClick(row);
-                }
-            });
             bindThemeRowFocus(themeRow, position, row, Y1_ROW_HOME);
             return themeRow;
         }
 
         private void bindThemeRowFocus(final View v, final int position, final ThemeBrowser.Row row, final int rowKind) {
-            v.setOnFocusChangeListener(new View.OnFocusChangeListener() {
-                @Override
-                public void onFocusChange(View view, boolean hasFocus) {
-                    if (v instanceof FrameLayout && "theme_home_row".equals(v.getTag())) {
-                        TextView label = (TextView) v.getTag(HOME_MENU_TAG_LABEL);
-                        ImageView arrow = (ImageView) v.getTag(HOME_MENU_TAG_ARROW);
-                        applyY1ListRowStyle(v, hasFocus, label, null, arrow, rowKind);
-                    } else if (v instanceof Button) {
-                        int rowW = y1ActiveRowWidthPx();
-                        v.setBackground(getY1RowBackground(hasFocus, rowW, rowKind));
-                        ThemeManager.applyThemedTextStyle((Button) v, hasFocus
-                                ? y1RowTextColorSelected(rowKind) : y1RowTextColorNormal(rowKind));
-                    } else if (v instanceof LinearLayout && row.kind == ThemeBrowser.KIND_FILTER) {
-                        int rowW = y1ActiveRowWidthPx();
-                        v.setBackground(getY1RowBackground(hasFocus, rowW, rowKind));
-                        TextView tvTitle = (TextView) ((LinearLayout) v).findViewWithTag("title");
-                        if (tvTitle != null) {
-                            ThemeManager.applyThemedTextStyle(tvTitle, hasFocus
-                                    ? y1RowTextColorSelected(rowKind) : ThemeManager.getTextColorPrimary());
-                        }
-                    }
-                    if (hasFocus) {
-                        themeBrowserFocus = position;
-                        scheduleThemeRowPreview(row);
-                    }
+            ThemeRowBinding binding = (ThemeRowBinding) v.getTag(R.id.tag_adapter_row_binding);
+            if (binding == null) {
+                binding = new ThemeRowBinding(v);
+                v.setTag(R.id.tag_adapter_row_binding, binding);
+                v.setOnFocusChangeListener(binding);
+                v.setOnClickListener(binding);
+            }
+            binding.bind(position, row, rowKind);
+        }
+
+        private final class ThemeRowBinding implements View.OnFocusChangeListener, View.OnClickListener {
+            final View view;
+            int position;
+            int rowKind;
+            ThemeBrowser.Row row;
+
+            ThemeRowBinding(View view) { this.view = view; }
+            void bind(int position, ThemeBrowser.Row row, int rowKind) {
+                this.position = position;
+                this.row = row;
+                this.rowKind = rowKind;
+                onFocusChange(view, view.hasFocus());
+            }
+            @Override public void onFocusChange(View ignored, boolean hasFocus) {
+                if (view instanceof FrameLayout && "theme_home_row".equals(view.getTag())) {
+                    TextView label = (TextView) view.getTag(HOME_MENU_TAG_LABEL);
+                    ImageView arrow = (ImageView) view.getTag(HOME_MENU_TAG_ARROW);
+                    applyY1ListRowStyle(view, hasFocus, label, null, arrow, rowKind);
+                } else if (view instanceof Button) {
+                    view.setBackground(getY1RowBackground(hasFocus, y1ActiveRowWidthPx(), rowKind));
+                    ThemeManager.applyThemedTextStyle((Button) view, hasFocus
+                            ? y1RowTextColorSelected(rowKind) : y1RowTextColorNormal(rowKind));
+                } else if (view instanceof LinearLayout && row != null
+                        && row.kind == ThemeBrowser.KIND_FILTER) {
+                    view.setBackground(getY1RowBackground(hasFocus, y1ActiveRowWidthPx(), rowKind));
+                    TextView tvTitle = (TextView) ((LinearLayout) view).findViewWithTag("title");
+                    if (tvTitle != null) ThemeManager.applyThemedTextStyle(tvTitle, hasFocus
+                            ? y1RowTextColorSelected(rowKind) : ThemeManager.getTextColorPrimary());
                 }
-            });
+                if (hasFocus && row != null) {
+                    themeBrowserFocus = position;
+                    scheduleThemeRowPreview(row);
+                }
+            }
+            @Override public void onClick(View ignored) {
+                if (row == null) return;
+                clickFeedback();
+                onThemeBrowserRowClick(row);
+            }
         }
     }
 
     private class SongListAdapter extends android.widget.BaseAdapter {
         private List<SongItem> items;
         private final boolean reorderable;
+        private String[] displayTitles;
+        private String[] subtitles;
 
         public SongListAdapter(List<SongItem> items) {
             this(items, false);
         }
 
         public SongListAdapter(List<SongItem> items, boolean reorderable) {
-            this.items = items;
+            this.items = new ArrayList<SongItem>(items);
             this.reorderable = reorderable;
+            rebuildBindingCache();
         }
 
         private SongItem songAt(int position) {
             if (reorderable) {
                 if (position < 0 || position >= virtualSongList.size()) {
-                    return new SongItem(new File(""), "", "", "", "");
+                    return EMPTY_SONG;
                 }
+                if (position < items.size()) return items.get(position);
                 File f = virtualSongList.get(position);
                 SongItem si = findSongItem(f);
-                return si != null ? si : new SongItem(f, f.getName(), "", "", "");
+                return si != null ? si : EMPTY_SONG;
             }
-            return items.get(position);
+            return position >= 0 && position < items.size() ? items.get(position) : EMPTY_SONG;
+        }
+
+        private void rebuildBindingCache() {
+            if (reorderable) {
+                ArrayList<SongItem> resolved = new ArrayList<SongItem>(virtualSongList.size());
+                for (File f : virtualSongList) {
+                    SongItem song = findSongItem(f);
+                    resolved.add(song != null ? song : new SongItem(f, f != null ? f.getName() : "", "", "", ""));
+                }
+                items = resolved;
+            }
+            int count = items.size();
+            displayTitles = new String[count];
+            subtitles = new String[count];
+            for (int i = 0; i < count; i++) {
+                SongItem song = items.get(i);
+                displayTitles[i] = reorderable
+                        ? String.format(Locale.US, "%02d · %s", i + 1, song.title) : song.title;
+                subtitles[i] = songSubtitleLine(song);
+            }
+        }
+
+        @Override public void notifyDataSetChanged() {
+            rebuildBindingCache();
+            super.notifyDataSetChanged();
         }
 
         @Override public int getCount() {
@@ -41594,8 +42025,16 @@ public class MainActivity extends Activity {
         private View buildTwoLineSongRowView(final int position, View convertView, final boolean numbered) {
             final SongItem song = songAt(position);
             FrameLayout row;
+            SongRowBinding binding;
             if (convertView instanceof FrameLayout && "two_line_song_row".equals(convertView.getTag())) {
                 row = (FrameLayout) convertView;
+                binding = (SongRowBinding) row.getTag(R.id.tag_adapter_row_binding);
+                if (binding == null || binding.owner != this) {
+                    binding = new SongRowBinding(row);
+                    row.setTag(R.id.tag_adapter_row_binding, binding);
+                    row.setOnFocusChangeListener(binding);
+                    row.setOnClickListener(binding);
+                }
             } else {
                 row = MoveRibbonRows.createLibraryMoveRow(MainActivity.this, y1LibraryRowHeightPx);
                 row.setTag("two_line_song_row");
@@ -41603,36 +42042,55 @@ public class MainActivity extends Activity {
                 row.setSoundEffectsEnabled(false);
                 row.setLayoutParams(new android.widget.AbsListView.LayoutParams(
                         android.widget.AbsListView.LayoutParams.MATCH_PARENT, y1LibraryRowHeightPx + 2));
+                binding = new SongRowBinding(row);
+                row.setTag(R.id.tag_adapter_row_binding, binding);
+                row.setOnFocusChangeListener(binding);
+                row.setOnClickListener(binding);
             }
-            final boolean nowPlaying = isPlaylistViewNowPlayingSlot(position);
-            final boolean playing = nowPlaying && !isPausedByHand && playback.isMusicActive();
-            row.setOnFocusChangeListener(new View.OnFocusChangeListener() {
-                @Override
-                public void onFocusChange(View v, boolean hasFocus) {
-                    MoveRibbonRows.bindLibraryMoveRow(MainActivity.this, row,
-                            numbered ? String.format(Locale.US, "%02d · %s", position + 1, song.title)
-                                    : song.title,
-                            songSubtitleLine(song), false, hasFocus, nowPlaying, playing,
-                            y1ActiveRowWidthPx(), y1LibraryRowHeightPx);
-                    if (hasFocus) showFastScrollLetter(song.title);
-                }
-            });
-            row.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    if (System.currentTimeMillis() < suppressListClickUntil) return;
-                    clickFeedback();
-                    if (playlistMoveFrom >= 0) return;
-                    playTrackList(virtualSongList, position,
-                            "PLAYLIST".equals(virtualQueryType) ? virtualQueryValue : null);
-                }
-            });
-            MoveRibbonRows.bindLibraryMoveRow(MainActivity.this, row,
-                    numbered ? String.format(Locale.US, "%02d · %s", position + 1, song.title)
-                            : song.title,
-                    songSubtitleLine(song), false, row.hasFocus(), nowPlaying, playing,
-                    y1ActiveRowWidthPx(), y1LibraryRowHeightPx);
+            binding.bind(position, song,
+                    position < displayTitles.length ? displayTitles[position] : song.title,
+                    position < subtitles.length ? subtitles[position] : "");
             return row;
+        }
+
+        private final class SongRowBinding implements View.OnFocusChangeListener, View.OnClickListener {
+            final SongListAdapter owner = SongListAdapter.this;
+            final FrameLayout row;
+            int position;
+            SongItem song;
+            String title;
+            String subtitle;
+
+            SongRowBinding(FrameLayout row) { this.row = row; }
+
+            void bind(int position, SongItem song, String title, String subtitle) {
+                this.position = position;
+                this.song = song;
+                this.title = title;
+                this.subtitle = subtitle;
+                render(row.hasFocus());
+            }
+
+            void render(boolean focused) {
+                boolean nowPlaying = isPlaylistViewNowPlayingSlot(position);
+                boolean playing = nowPlaying && !isPausedByHand && playback.isMusicActive();
+                MoveRibbonRows.bindLibraryMoveRow(MainActivity.this, row, title, subtitle,
+                        false, focused, nowPlaying, playing,
+                        y1ActiveRowWidthPx(), y1LibraryRowHeightPx);
+            }
+
+            @Override public void onFocusChange(View v, boolean hasFocus) {
+                render(hasFocus);
+                if (hasFocus && song != null) showFastScrollLetter(song.title);
+            }
+
+            @Override public void onClick(View v) {
+                if (System.currentTimeMillis() < suppressListClickUntil) return;
+                clickFeedback();
+                if (playlistMoveFrom >= 0) return;
+                playTrackList(virtualSongList, position,
+                        "PLAYLIST".equals(virtualQueryType) ? virtualQueryValue : null);
+            }
         }
 
         private View buildSimpleSongRowView(final int position, View convertView) {

@@ -60,6 +60,7 @@ public class ThemeManager {
 
     public static List<ThemeEntry> availableThemes = new ArrayList<>();
     private static int currentThemeIndex = 0;
+    private static int styleGeneration = 1;
     private static final Map<String, Bitmap> bitmapCache = new HashMap<>();
     /** ponytail: cache scaled row tiles — focus scroll was re-scaling on every D-pad step (Y1 jank) */
     private static final Map<String, Bitmap> scaledRowBitmapCache = new HashMap<>();
@@ -486,10 +487,12 @@ public class ThemeManager {
         auraFont = null;
         availableThemes.addAll(scanDiscoveredThemes());
         if (currentThemeIndex >= availableThemes.size()) currentThemeIndex = 0;
+        styleGeneration++;
     }
 
     /** Rescan theme folders; clears stale bitmap cache so home icons match the active theme. */
     public static void rescanInstalled(Context ctx) {
+        styleGeneration++;
         bitmapCache.clear();
         if (ctx != null) themesRootPath = resolveThemesRoot(ctx);
         String prevFolder = availableThemes.isEmpty() ? BUILTIN_DEFAULT_FOLDER
@@ -618,6 +621,7 @@ public class ThemeManager {
     }
 
     public static void setThemeIndex(int index) {
+        styleGeneration++;
         if (index >= 0 && index < availableThemes.size()) {
             currentThemeIndex = index;
             bitmapCache.clear();
@@ -628,6 +632,10 @@ public class ThemeManager {
         } else {
             currentThemeIndex = 0;
         }
+    }
+
+    public static int getStyleGeneration() {
+        return styleGeneration;
     }
 
     public static void setThemeByFolderPath(String path) {
@@ -1962,6 +1970,23 @@ public class ThemeManager {
         int w = widthPx > 0 ? widthPx : bmp.getWidth();
         Bitmap scaled = cachedScaledRowBitmap("item", selected, w, heightPx, bmp);
         return new BitmapDrawable(res, scaled);
+    }
+
+    public static android.graphics.drawable.StateListDrawable createLibraryRowStateBackground(
+            android.content.res.Resources res, int rowWidthPx, int rowHeightPx) {
+        android.graphics.drawable.StateListDrawable states = new android.graphics.drawable.StateListDrawable();
+        Drawable sel = getItemRowBackgroundScaled(res, true, rowWidthPx, rowHeightPx);
+        if (sel == null) {
+            sel = new android.graphics.drawable.ColorDrawable(getRowSelectionFillColor());
+        }
+        Drawable norm = getItemRowBackgroundScaled(res, false, rowWidthPx, rowHeightPx);
+        if (norm == null) {
+            norm = new android.graphics.drawable.ColorDrawable(getListButtonNormalBg());
+        }
+        states.addState(new int[] { android.R.attr.state_focused }, sel);
+        states.addState(new int[] { android.R.attr.state_pressed }, sel);
+        states.addState(new int[] {}, norm);
+        return states;
     }
 
     /** ponytail: follow Y1 config semantics for both selected and unselected menu rows */

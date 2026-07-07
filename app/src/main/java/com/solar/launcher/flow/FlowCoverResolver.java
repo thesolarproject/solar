@@ -120,6 +120,9 @@ public final class FlowCoverResolver {
 
     public static Bitmap resolveFromTracks(List<File> tracks, Host host, int thumbPx,
             String albumKey, File artDir, File flowThumbDir) {
+        if (ArtworkThreads.isMainThread()) {
+            return placeholder(thumbPx, "♪", 0xFF34343A);
+        }
         if (tracks == null || tracks.isEmpty()) {
             return cachePlaceholder(thumbPx, albumKey, artDir, flowThumbDir);
         }

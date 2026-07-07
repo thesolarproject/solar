@@ -5,6 +5,7 @@ import com.solar.launcher.media.MediaSuiteHost;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 public class ScreenTransitionTest {
 
@@ -98,5 +99,30 @@ public class ScreenTransitionTest {
     public void updatedPacingConstants() {
         assertEquals(240, ScreenTransition.PUSH_MS);
         assertEquals(260, ScreenTransition.PLAYER_MS);
+    }
+
+    @Test
+    public void mechanicalInterpolatorIsMonotonicAndClamped() {
+        MechanicalInterpolator i = new MechanicalInterpolator(new float[] {0f, 0.2f, 0.7f, 1f});
+        assertEquals(0f, i.getInterpolation(-1f), 0f);
+        assertEquals(1f, i.getInterpolation(2f), 0f);
+        float previous = 0f;
+        for (int n = 0; n <= 100; n++) {
+            float value = i.getInterpolation(n / 100f);
+            assertTrue(value >= previous);
+            previous = value;
+        }
+    }
+
+    @Test
+    public void mechanicalCurvesHaveDistinctMass() {
+        float push = ScreenTransition.pushInterpolation(0.5f);
+        float player = ScreenTransition.playerInterpolation(0.5f);
+        float modal = ScreenTransition.modalInterpolation(0.5f);
+        assertTrue(player < push);
+        assertTrue(push < modal);
+        assertEquals(1f, ScreenTransition.pushInterpolation(1f), 0f);
+        assertEquals(1f, ScreenTransition.playerInterpolation(1f), 0f);
+        assertEquals(1f, ScreenTransition.modalInterpolation(1f), 0f);
     }
 }

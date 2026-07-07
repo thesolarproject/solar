@@ -17,6 +17,14 @@ public final class FlowThumbCache {
 
     public static final int DEFAULT_THUMB_PX = 144;
     public static final int JPEG_QUALITY = 88;
+    private static final ThreadLocal<BitmapFactory.Options> DECODE_OPTIONS =
+            new ThreadLocal<BitmapFactory.Options>() {
+                @Override protected BitmapFactory.Options initialValue() {
+                    BitmapFactory.Options options = new BitmapFactory.Options();
+                    options.inPreferredConfig = Bitmap.Config.RGB_565;
+                    return options;
+                }
+            };
 
     private FlowThumbCache() {}
 
@@ -50,11 +58,13 @@ public final class FlowThumbCache {
 
     /** Decode at native file size — file is already thumbPx square. */
     public static Bitmap get(File dir, String coverKey, int thumbPx) {
+        if (ArtworkThreads.isMainThread()) return null;
         File f = fileForKey(dir, coverKey, thumbPx);
         if (f == null || !f.isFile()) return null;
         try {
-            BitmapFactory.Options opts = new BitmapFactory.Options();
-            opts.inPreferredConfig = Bitmap.Config.RGB_565;
+            BitmapFactory.Options opts = DECODE_OPTIONS.get();
+            opts.inBitmap = null;
+            opts.inSampleSize = 1;
             return BitmapFactory.decodeFile(f.getAbsolutePath(), opts);
         } catch (Exception ignored) {
             return null;
