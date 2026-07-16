@@ -1,16 +1,32 @@
 package com.solar.launcher;
 
 import com.solar.launcher.soulseek.ReachCache;
+import com.solar.launcher.soulseek.ReachPeerModelCache;
 import com.solar.launcher.soulseek.StreamTempCache;
 import com.solar.launcher.soulseek.SoulseekAccount;
 import com.solar.launcher.soulseek.SoulseekClient;
+import com.solar.launcher.soulseek.SoulseekMessaging;
 import com.solar.launcher.soulseek.SoulseekSearchHistory;
 import com.solar.launcher.soulseek.SoulseekShareIndex;
 import com.solar.launcher.soulseek.SoulseekSharePolicy;
 import com.solar.launcher.soulseek.SoulseekSearchRanking;
 import com.solar.launcher.soulseek.SoulseekSearchSuggestions;
+import com.solar.launcher.soulseek.SolarDeveloperAccounts;
+import com.solar.launcher.soulseek.SolarDeveloperMessaging;
+import com.solar.launcher.soulseek.SolarDevelopmentBootstrap;
 import com.solar.launcher.theme.ThemeBrowser;
 import com.solar.launcher.theme.ThemeDownloader;
+import com.solar.launcher.feature.apps.AppLauncher;
+import com.solar.launcher.feature.apps.AppsFeature;
+import com.solar.launcher.feature.home.HomeMenuConfig;
+import com.solar.launcher.feature.settings.RowKeys;
+import com.solar.launcher.feature.settings.SettingsScreens;
+import com.solar.launcher.feature.storage.StoragePieView;
+import com.solar.launcher.stage.SolarDeviceStaging;
+import com.solar.launcher.stage.StageResult;
+import com.solar.launcher.stage.StageStep;
+import com.solar.launcher.contracts.SolarFeature;
+import com.solar.launcher.keyboard.KeyboardCharset;
 import com.solar.launcher.theme.ThemeManager;
 import com.solar.launcher.podcast.OpenRssClient;
 import com.solar.launcher.podcast.PodcastCatalog;
@@ -122,7 +138,7 @@ public class MainActivity extends Activity {
     private AudioVisualizerView visualizerView;
     private boolean isVisualizerShowing = false;
     private int currentAlbumColor = 0xFFFFFFFF; // 스펙트럼 바의 색상
-    private static final int STATE_MENU = 1;
+    static final int STATE_MENU = 1;
     static final int STATE_BROWSER = 2;
     static final int STATE_PLAYER = 3;
     static final int STATE_SETTINGS = 4;
@@ -140,6 +156,11 @@ public class MainActivity extends Activity {
     private static final int KEYBOARD_SOULSEEK_USER = 1;
     private static final int KEYBOARD_SOULSEEK_PASS = 2;
     private static final int KEYBOARD_SOULSEEK_SEARCH = 3;
+    private static final int KEYBOARD_SOULSEEK_MSG = 11;
+    private static final int KEYBOARD_SOULSEEK_CONTACT = 12;
+    private String soulseekMessagePeer = "";
+    private String contextReachPeerUser = "";
+    private String contextReachPmBody = "";
     private static final int KEYBOARD_PODCAST_SEARCH = 4;
     /** ponytail: stock Y1 row art — home=itemConfig, settings/menu lists=menuConfig, file lists=itemConfig */
     private static final int Y1_ROW_HOME = 0;
@@ -217,8 +238,13 @@ public class MainActivity extends Activity {
     private boolean isScreenOffControlEnabled = false;
     private boolean isAutoFetchEnabled = true; // 🚀 [추가] 인터넷 자동 검색 스위치 기본값
     private static List<SongItem> customLibrary = new ArrayList<>();
+    /** JJ 0.11 parity: separate scan/list from Music. */
+    private static List<SongItem> audiobookLibrary = new ArrayList<>();
+    private boolean isAudiobookLibraryMode = false;
+    private File audiobookRootFolder = AudiobookBookmarkStore.primaryRoot();
+    private long lastAudiobookBookmarkSaveMs = 0;
     private boolean isCustomScanning = false;
-    private int currentScreenState = STATE_MENU;
+    int currentScreenState = STATE_MENU;
     // 💡 자체 날짜/시간 설정용 임시 변수
     private int dtYear = 2026, dtMonth = 1, dtDay = 1, dtHour = 12, dtMinute = 0;
     private View layoutMainMenu, layoutBrowserMode;
@@ -258,6 +284,14 @@ public class MainActivity extends Activity {
     // 🚀 [추가] 화면 전체를 덮는 고급 로딩 인디케이터 오버레이
     private LinearLayout layoutLoadingOverlay;
     private TextView tvLoadingOverlayText;
+    /** 2026-07-16 — first-run Solar device staging (no Rockbox/JJ). */
+    private LinearLayout layoutFirstRunSetup;
+    private TextView tvFirstRunTitle;
+    private TextView tvFirstRunStatus;
+    private ProgressBar pbFirstRun;
+    private LinearLayout containerFirstRunSteps;
+    private Button btnFirstRunContinue;
+    private boolean firstRunSetupActive;
     private ImageView ivMenuPreview, ivAlbumArt, ivPlayerBgBlur, ivPauseOverlay;
 
     private FrameLayout menuListHost;
@@ -757,6 +791,8 @@ public class MainActivity extends Activity {
     };
 
     private SolarWebServer webServer;
+    private com.solar.launcher.scrobble.ScrobbleSettingsHost scrobbleSettingsHost;
+    private String lastScrobbleIdentity = "";
     private boolean isServerRunning = false;
 
     private Handler clockHandler = new Handler();
@@ -804,6 +840,11 @@ public class MainActivity extends Activity {
                         PodcastResumeStore.save(getApplicationContext(), podcastResumeKey, current,
                                 podcastResumeDurationForSave());
                         lastPodcastResumeSaveMs = System.currentTimeMillis();
+                    }
+                    if (isPlayingAudiobookTrack()
+                            && System.currentTimeMillis() - lastAudiobookBookmarkSaveMs > 5000) {
+                        saveAudiobookBookmarkIfNeeded();
+                        lastAudiobookBookmarkSaveMs = System.currentTimeMillis();
                     }
                     if (podcastGrowingCacheFile != null
                             && (podcastDownloadInProgress || podcastPartialPlaybackStarted)) {
@@ -854,11 +895,59 @@ public class MainActivity extends Activity {
                 } else if (mediaPlayer != null && reachPartialPlaybackStarted && reachGrowingCacheFile != null) {
                     updateReachGrowingTimeUi();
                 }
+                // Last.fm / ListenBrainz: track listen progress while music is active.
+                if (mediaPlayer != null && !playback.isPodcastActive()) {
+                    try {
+                        int pos = mediaPlayer.getCurrentPosition();
+                        int dur = mediaPlayer.getDuration();
+                        if (dur <= 0) dur = 0;
+                        boolean playing = mediaPlayer.isPlaying() && !isPausedByHand;
+                        notifyScrobbleFromProgress(pos, dur, playing);
+                    } catch (Exception ignored) {}
+                }
             } catch (Exception e) {
             }
             progressHandler.postDelayed(this, 500);
         }
     };
+
+    /** Feed Last.fm / ListenBrainz from the player progress tick. */
+    private void notifyScrobbleFromProgress(int positionMs, int durationMs, boolean playing) {
+        try {
+            PlayQueue.QueueItem cur = playback.currentItem();
+            if (cur == null) return;
+            String title = "";
+            String artist = "";
+            String album = "";
+            if (tvPlayerTitle != null) {
+                title = stripReachProgressPrefix(tvPlayerTitle.getText().toString());
+            }
+            if (tvPlayerArtist != null) {
+                artist = tvPlayerArtist.getText().toString();
+            }
+            if (cur.kind == PlayQueue.ItemKind.MUSIC_FILE && cur.file != null) {
+                SongItem si = findSongItem(cur.file);
+                if (si != null) {
+                    if (title == null || title.isEmpty()) title = si.title;
+                    if (artist == null || artist.isEmpty()) artist = si.artist;
+                    album = si.album != null ? si.album : "";
+                }
+            } else if (cur.kind == PlayQueue.ItemKind.REACH_STREAM && cur.reachMeta != null
+                    && (title == null || title.isEmpty())) {
+                title = cur.reachMeta;
+            }
+            if (title == null) title = "";
+            if (artist == null) artist = "";
+            String identity = title + "\u0001" + artist + "\u0001"
+                    + (cur.file != null ? cur.file.getAbsolutePath() : cur.kind.name());
+            boolean trackChanged = !identity.equals(lastScrobbleIdentity);
+            if (trackChanged) lastScrobbleIdentity = identity;
+            com.solar.launcher.scrobble.ScrobbleManager.onPlaybackStateChange(
+                    this, title, artist, album, durationMs, positionMs, playing, trackChanged,
+                    playback.isPodcastActive() || cur.kind == PlayQueue.ItemKind.PODCAST_EPISODE,
+                    cur, false);
+        } catch (Exception ignored) {}
+    }
 
     private Handler volumeHandler = new Handler();
     private Runnable hideVolumeTask = new Runnable() {
@@ -1081,6 +1170,7 @@ public class MainActivity extends Activity {
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
         setContentView(R.layout.activity_main);
+        initSolarHost();
         initY1LayoutMetrics();
 
         // 🚀 [여기서부터 새로 추가!] 메인 화면 위에 덮어씌울 '로딩 스피너 팝업창'을 생성합니다.
@@ -1110,6 +1200,7 @@ public class MainActivity extends Activity {
                 android.view.ViewGroup.LayoutParams.MATCH_PARENT
         ));
         // 🚀 [여기까지 추가 끝!]
+        initFirstRunSetupOverlay(root);
         themedContextMenu = new ThemedContextMenu(this);
         tvFastScrollLetter = new TextView(this);
         tvFastScrollLetter.setTextSize(50); // 글자 크기를 아주 큼직하게!
@@ -1223,6 +1314,8 @@ public class MainActivity extends Activity {
 
         if (!rootFolder.exists())
             rootFolder.mkdirs();
+        AudiobookBookmarkStore.ensureRootsExist();
+        SolarDevelopmentBootstrap.ensureReady(this, prefs);
 
         // 🚀 [추가된 부분] 앱이 켜질 때(혹은 튕기고 재시작될 때) 조용히 자동 스캔을 돌려 리스트를 복구합니다!
         if (customLibrary.isEmpty() && !isCustomScanning) {
@@ -1440,6 +1533,7 @@ public class MainActivity extends Activity {
         btnScanBt.setVisibility(View.GONE);
         btnScanWifi.setVisibility(View.GONE);
         layoutWifiKeyboard = findViewById(R.id.layout_wifi_keyboard);
+        mountSolarKeyboardPreviewIfNeeded();
         tvKeyboardSsid = findViewById(R.id.tv_keyboard_ssid);
         tvKeyboardInput = findViewById(R.id.tv_keyboard_input);
         tvKeyPprev = findViewById(R.id.tv_key_pprev);
@@ -1514,6 +1608,7 @@ public class MainActivity extends Activity {
         applyFullWidthMenusLayout();
         initY1ThemedActionButtons();
         buildHomeMenu();
+        maybeStartFirstRunSetup();
 
         tvPlayerTitle = findViewById(R.id.tv_player_title);
         tvPlayerArtist = findViewById(R.id.tv_player_artist);
@@ -3124,6 +3219,74 @@ public class MainActivity extends Activity {
         return false;
     }
 
+    private boolean handleScrobblingSettingsBack() {
+        if (!SettingsScreens.SCROBBLING.equals(settingsSubScreenKey)) return false;
+        settingsSubScreenKey = null;
+        buildSettingsUI();
+        return true;
+    }
+
+    private void buildScrobblingSettingsUI() {
+        if (scrobbleSettingsHost == null) {
+            scrobbleSettingsHost = new com.solar.launcher.scrobble.ScrobbleSettingsHost(
+                    new com.solar.launcher.scrobble.ScrobbleSettingsHost.Actions() {
+                        @Override public android.app.Activity activity() { return MainActivity.this; }
+                        @Override public SharedPreferences prefs() { return prefs; }
+                        @Override public void clickFeedback() { MainActivity.this.clickFeedback(); }
+                        @Override public LinearLayout createSettingsRow(String rowKey, int labelRes, boolean submenu) {
+                            return MainActivity.this.createSettingsRow(rowKey, labelRes, submenu);
+                        }
+                        @Override public LinearLayout createSettingsRow(String rowKey, CharSequence title, boolean submenu) {
+                            return MainActivity.this.createSettingsRow(rowKey, title, submenu, true);
+                        }
+                        @Override public Button createListButton(String label) {
+                            return MainActivity.this.createListButton(label);
+                        }
+                        @Override public void styleSecondaryLabel(Button btn) {
+                            MainActivity.this.styleSecondaryLabel(btn);
+                        }
+                        @Override public void addSettingsRow(View row) {
+                            containerSettingsItems.addView(row);
+                        }
+                        @Override public void clearSettingsRows() {
+                            containerSettingsItems.removeAllViews();
+                        }
+                        @Override public void setSettingsSubScreen(String key) {
+                            MainActivity.this.setSettingsSubScreen(key);
+                        }
+                        @Override public void updateStatusBarTitle() {
+                            MainActivity.this.updateStatusBarTitle();
+                        }
+                        @Override public void applyReachBrowseLayoutMode() {
+                            applyFullWidthMenusLayout();
+                        }
+                        @Override public void refreshSettingsPreview(String rowKey) {
+                            MainActivity.this.refreshSettingsPreview(rowKey);
+                        }
+                        @Override public void drillSettingsBack(Runnable back) {
+                            if (back != null) {
+                                back.run();
+                            } else {
+                                handleScrobblingSettingsBack();
+                            }
+                        }
+                        @Override public void openKeyboard(int purpose, String prefill) {
+                            keyboardPurpose = purpose;
+                            keyboardReturnState = STATE_SETTINGS;
+                            keyboardPrefill = prefill != null ? prefill : "";
+                            changeScreen(STATE_WIFI_KEYBOARD);
+                        }
+                        @Override public String previewForRow(String rowKey) {
+                            return com.solar.launcher.scrobble.ScrobbleSettingsHost.previewValue(prefs, rowKey);
+                        }
+                    });
+        }
+        scrobbleSettingsHost.build();
+        if (containerSettingsItems.getChildCount() > 1) {
+            containerSettingsItems.getChildAt(1).requestFocus();
+        }
+    }
+
     private boolean handleHomeScreenEditorBack() {
         if (!SettingsScreens.isHome(settingsSubScreenKey)) {
             return false;
@@ -3217,6 +3380,10 @@ public class MainActivity extends Activity {
             buildSoulseekConnectionInfoUI();
         } else if (SettingsScreens.SOULSEEK_ABOUT.equals(subKey)) {
             buildSoulseekAboutInfoUI();
+        } else if (SettingsScreens.SOULSEEK_MESSAGES.equals(subKey)) {
+            buildSoulseekMessagesUI();
+        } else if (SettingsScreens.SOULSEEK_MESSAGES_THREAD.equals(subKey)) {
+            buildSoulseekConversationUI(soulseekMessagePeer);
         } else {
             buildSoulseekSettingsUI();
         }
@@ -3224,6 +3391,16 @@ public class MainActivity extends Activity {
 
     private String resolveSettingsSubTitle() {
         if (settingsSubScreenKey == null) return getString(R.string.status_settings);
+        if (SettingsScreens.SOULSEEK_MESSAGES.equals(settingsSubScreenKey)) {
+            return getString(R.string.soulseek_messages);
+        }
+        if (SettingsScreens.SOULSEEK_MESSAGES_THREAD.equals(settingsSubScreenKey)) {
+            return SolarDeveloperAccounts.displayNameForPeer(
+                    settingsSubScreenExtra != null ? settingsSubScreenExtra : soulseekMessagePeer);
+        }
+        if (SettingsScreens.SCROBBLING.equals(settingsSubScreenKey)) {
+            return getString(R.string.settings_scrobbling);
+        }
         int res = SettingsScreens.titleResId(settingsSubScreenKey);
         if (res == 0) return getString(R.string.status_settings);
         if (SettingsScreens.EQ.equals(settingsSubScreenKey)
@@ -3236,7 +3413,9 @@ public class MainActivity extends Activity {
 
     private void setSettingsSubScreen(String key) {
         settingsSubScreenKey = key;
-        settingsSubScreenExtra = null;
+        if (!SettingsScreens.SOULSEEK_MESSAGES_THREAD.equals(key)) {
+            settingsSubScreenExtra = null;
+        }
     }
 
     private void setSettingsSubScreen(String key, String extra) {
@@ -4525,6 +4704,8 @@ public class MainActivity extends Activity {
                 changeScreen(STATE_BROWSER);
             }
         } else if (HomeMenuConfig.ID_MUSIC.equals(id)) {
+            isAudiobookLibraryMode = false;
+            currentFolder = rootFolder;
             currentBrowserMode = BROWSER_ROOT;
             changeScreen(STATE_BROWSER);
         } else if (HomeMenuConfig.ID_BLUETOOTH.equals(id)) {
@@ -4567,7 +4748,7 @@ public class MainActivity extends Activity {
         } else if (HomeMenuConfig.ID_PHOTOS.equals(id)) {
             Toast.makeText(this, getString(R.string.home_photos_coming_soon), Toast.LENGTH_LONG).show();
         } else if (HomeMenuConfig.ID_AUDIOBOOKS.equals(id)) {
-            Toast.makeText(this, getString(R.string.home_audiobooks_coming_soon), Toast.LENGTH_LONG).show();
+            openAudiobooksLibrary();
         } else if (HomeMenuConfig.ID_APPS.equals(id)) {
             changeScreen(STATE_APPS);
         }
@@ -4617,6 +4798,15 @@ public class MainActivity extends Activity {
         }
         if (keyboardPurpose == KEYBOARD_PODCAST_SEARCH) {
             return getString(R.string.status_podcast_search);
+        }
+        if (keyboardPurpose == com.solar.launcher.scrobble.ScrobbleSettingsHost.KEYBOARD_LASTFM_USER) {
+            return getString(R.string.keyboard_lastfm_user);
+        }
+        if (keyboardPurpose == com.solar.launcher.scrobble.ScrobbleSettingsHost.KEYBOARD_LASTFM_PASS) {
+            return getString(R.string.keyboard_lastfm_pass);
+        }
+        if (keyboardPurpose == com.solar.launcher.scrobble.ScrobbleSettingsHost.KEYBOARD_LISTENBRAINZ_TOKEN) {
+            return getString(R.string.keyboard_listenbrainz_token);
         }
         return getString(R.string.keyboard_soulseek_password);
     }
@@ -4673,7 +4863,7 @@ public class MainActivity extends Activity {
         changeScreen(screenBackReturnTo);
     }
 
-    private void changeScreen(int state) {
+    void changeScreen(int state) {
         if (otaSystemReplaceInProgress) return;
         dismissThemedContextMenu();
         hideFastScrollLetter();
@@ -4804,6 +4994,8 @@ public class MainActivity extends Activity {
                 buildAboutUI();
             } else if (SettingsScreens.SYSTEM_UPDATE.equals(settingsSubScreenKey)) {
                 buildUpdateSettingsUI();
+            } else if (SettingsScreens.SCROBBLING.equals(settingsSubScreenKey)) {
+                buildScrobblingSettingsUI();
             } else {
                 buildSettingsUI();
             }
@@ -5004,6 +5196,8 @@ public class MainActivity extends Activity {
     private long lastClickTime = 0;
 
     // 💡 앱 자체의 억지 소리 발생 코드를 완전히 삭제합니다! (기기 하드웨어 소리만 사용)
+    void hostClickFeedback() { clickFeedback(); }
+
     private void clickFeedback() {
         long now = System.currentTimeMillis();
 
@@ -5053,7 +5247,9 @@ public class MainActivity extends Activity {
     private boolean isSoulseekKeyboardPurpose() {
         return keyboardPurpose == KEYBOARD_SOULSEEK_USER
                 || keyboardPurpose == KEYBOARD_SOULSEEK_PASS
-                || keyboardPurpose == KEYBOARD_SOULSEEK_SEARCH;
+                || keyboardPurpose == KEYBOARD_SOULSEEK_SEARCH
+                || keyboardPurpose == KEYBOARD_SOULSEEK_MSG
+                || keyboardPurpose == KEYBOARD_SOULSEEK_CONTACT;
     }
 
     private boolean isPodcastKeyboardPurpose() {
@@ -5180,7 +5376,37 @@ public class MainActivity extends Activity {
         changeScreen(STATE_WIFI_KEYBOARD);
     }
 
+    private com.solar.launcher.keyboard.KeyboardEngine keyboardEngine;
+    private com.solar.launcher.keyboard.SolarKeyboardView solarKeyboardView;
+
+    private void ensureKeyboardEngine() {
+        if (keyboardEngine == null) {
+            keyboardEngine = new com.solar.launcher.keyboard.KeyboardEngine(
+                    new com.solar.launcher.keyboard.KeyboardEngine.Callback() {
+                        @Override public void onTextChanged(String text) {
+                            typedPassword = text != null ? text : "";
+                            updateKeyboardUI();
+                        }
+                        @Override public void onCommit(String text) {
+                            typedPassword = text != null ? text : "";
+                            handleKeyboardEnter();
+                        }
+                    }, "", 128, false);
+        }
+        keyboardEngine.setWheelIndex(keyboardIndex);
+    }
+
+    private void syncKeyboardEngineText() {
+        ensureKeyboardEngine();
+        // typedPassword remains source of truth for legacy wheel UI; engine mirrors on commit paths
+        if (solarKeyboardView != null) solarKeyboardView.refreshPreview();
+    }
+
     private void updateKeyboardUI() {
+        if (tvKeyPprev == null || tvKeyPrev == null || tvKeyCurrent == null
+                || tvKeyNext == null || tvKeyNnext == null || tvKeyboardInput == null) {
+            return;
+        }
         int len = KEYBOARD_CHARS.length;
         int idxPprev = (keyboardIndex - 2 + len) % len;
         int idxPrev = (keyboardIndex - 1 + len) % len;
@@ -5201,6 +5427,12 @@ public class MainActivity extends Activity {
             tvKeyboardInput.setText(typedPassword.length() == 0 ? getString(R.string.keyboard_blank_auto) : typedPassword);
         } else if (keyboardPurpose == KEYBOARD_SOULSEEK_SEARCH) {
             tvKeyboardInput.setText(typedPassword.length() == 0 ? getString(R.string.soulseek_type_search) : typedPassword);
+        } else if (keyboardPurpose == KEYBOARD_SOULSEEK_MSG) {
+            tvKeyboardInput.setText(typedPassword.length() == 0
+                    ? getString(R.string.soulseek_compose_message) : typedPassword);
+        } else if (keyboardPurpose == KEYBOARD_SOULSEEK_CONTACT) {
+            tvKeyboardInput.setText(typedPassword.length() == 0
+                    ? getString(R.string.soulseek_new_message) : typedPassword);
         } else if (keyboardPurpose == KEYBOARD_PODCAST_SEARCH) {
             tvKeyboardInput.setText(typedPassword.length() == 0 ? getString(R.string.podcasts_type_search) : typedPassword);
         } else {
@@ -5215,6 +5447,18 @@ public class MainActivity extends Activity {
         }
         styleKeyboardInputField(inputPlaceholder);
         styleKeyboardCurrentKey();
+        syncKeyboardEngineText();
+    }
+
+    private void mountSolarKeyboardPreviewIfNeeded() {
+        if (layoutWifiKeyboard == null || solarKeyboardView != null) return;
+        ensureKeyboardEngine();
+        solarKeyboardView = new com.solar.launcher.keyboard.SolarKeyboardView(
+                this, com.solar.launcher.keyboard.SolarKeyboardView.Mode.FULL, keyboardEngine);
+        solarKeyboardView.setVisibility(View.GONE);
+        if (layoutWifiKeyboard instanceof ViewGroup) {
+            ((ViewGroup) layoutWifiKeyboard).addView(solarKeyboardView);
+        }
     }
 
     private void handleKeyboardInput() {
@@ -5262,7 +5506,18 @@ public class MainActivity extends Activity {
         if (keyboardPurpose == KEYBOARD_WIFI) connectToWifi();
         else if (keyboardPurpose == KEYBOARD_SOULSEEK_USER) finishSoulseekUserEntry();
         else if (keyboardPurpose == KEYBOARD_SOULSEEK_SEARCH) finishSoulseekSearchEntry();
+        else if (keyboardPurpose == KEYBOARD_SOULSEEK_MSG) finishSoulseekMsgEntry();
+        else if (keyboardPurpose == KEYBOARD_SOULSEEK_CONTACT) finishSoulseekContactEntry();
         else if (keyboardPurpose == KEYBOARD_PODCAST_SEARCH) finishPodcastSearchEntry();
+        else if (keyboardPurpose == com.solar.launcher.scrobble.ScrobbleSettingsHost.KEYBOARD_LASTFM_USER
+                || keyboardPurpose == com.solar.launcher.scrobble.ScrobbleSettingsHost.KEYBOARD_LASTFM_PASS
+                || keyboardPurpose == com.solar.launcher.scrobble.ScrobbleSettingsHost.KEYBOARD_LISTENBRAINZ_TOKEN) {
+            if (scrobbleSettingsHost != null) {
+                scrobbleSettingsHost.finishKeyboard(keyboardPurpose, typedPassword.trim());
+            }
+            changeScreen(STATE_SETTINGS);
+            buildScrobblingSettingsUI();
+        }
         else finishSoulseekPassEntry();
     }
 
@@ -6124,7 +6379,7 @@ public class MainActivity extends Activity {
         return currentScreenState == STATE_APPS && !isFullWidthMenus;
     }
 
-    private void applyPodcastBrowserLayout() {
+    void applyPodcastBrowserLayout() {
         if (browserListHost == null) return;
         int menuLeft = (int) getResources().getDimension(R.dimen.y1_menu_left);
         int narrowW = (int) getResources().getDimension(R.dimen.y1_settings_menu_width);
@@ -6305,7 +6560,7 @@ public class MainActivity extends Activity {
         return row;
     }
 
-    private void clearPodcastPreviewPane() {
+    void clearPodcastPreviewPane() {
         podcastPreviewArtGen++;
         if (ivPodcastPreviewArt != null) {
             ivPodcastPreviewArt.setImageDrawable(null);
@@ -6715,7 +6970,7 @@ public class MainActivity extends Activity {
             if (HomeMenuConfig.ID_VIDEOS.equals(id)) return getString(R.string.home_screen_preview_videos);
             if (HomeMenuConfig.ID_PHOTOS.equals(id)) return getString(R.string.home_screen_preview_photos);
             if (HomeMenuConfig.ID_AUDIOBOOKS.equals(id)) {
-                return getString(R.string.home_audiobooks_coming_soon);
+                return getString(R.string.home_screen_preview_audiobooks);
             }
             return stateOnOff(HomeMenuConfig.isShortcutEnabled(prefs, id));
         }
@@ -6766,6 +7021,24 @@ public class MainActivity extends Activity {
         }
         // ponytail: Reach blurb only in Reach settings sub-panes — home preview uses appReach icon
         if (RowKeys.SOULSEEK.equals(rowKey)) return "";
+        if (RowKeys.LASTFM_ENABLE.equals(rowKey)
+                || RowKeys.LASTFM_USER.equals(rowKey)
+                || RowKeys.LASTFM_PASS.equals(rowKey)
+                || RowKeys.LASTFM_AUTH.equals(rowKey)
+                || RowKeys.LISTENBRAINZ_ENABLE.equals(rowKey)
+                || RowKeys.LISTENBRAINZ_TOKEN.equals(rowKey)) {
+            return com.solar.launcher.scrobble.ScrobbleSettingsHost.previewValue(prefs, rowKey);
+        }
+        if (RowKeys.SCROBBLING.equals(rowKey)) {
+            boolean lfm = prefs.getBoolean(
+                    com.solar.launcher.scrobble.ScrobbleManager.PREF_LASTFM_ENABLED, false);
+            boolean lb = prefs.getBoolean(
+                    com.solar.launcher.scrobble.ScrobbleManager.PREF_LISTENBRAINZ_ENABLED, false);
+            if (lfm && lb) return "Last.fm · ListenBrainz";
+            if (lfm) return "Last.fm";
+            if (lb) return "ListenBrainz";
+            return "Off";
+        }
         return "";
     }
 
@@ -7464,9 +7737,31 @@ public class MainActivity extends Activity {
         return shouldShowNowPlayingHome();
     }
 
+    private void openAudiobooksLibrary() {
+        isAudiobookLibraryMode = true;
+        AudiobookBookmarkStore.ensureRootsExist();
+        audiobookRootFolder = AudiobookBookmarkStore.primaryRoot();
+        currentFolder = audiobookRootFolder;
+        currentBrowserMode = BROWSER_ROOT;
+        changeScreen(STATE_BROWSER);
+        if (audiobookLibrary.isEmpty() && !isCustomScanning) {
+            startAudiobookLibraryScan(true);
+        }
+    }
+
+    private List<SongItem> activeMediaLibrary() {
+        return isAudiobookLibraryMode ? audiobookLibrary : customLibrary;
+    }
+
+    private File activeLibraryRoot() {
+        return isAudiobookLibraryMode ? audiobookRootFolder : rootFolder;
+    }
+
     private void openMusicLibraryFromContextQuickBar() {
         suppressListClickUntil = System.currentTimeMillis() + CONTEXT_MENU_CLICK_SUPPRESS_MS;
         dismissThemedContextMenu();
+        isAudiobookLibraryMode = false;
+        currentFolder = rootFolder;
         currentBrowserMode = BROWSER_ROOT;
         changeScreen(STATE_BROWSER);
     }
@@ -8955,9 +9250,9 @@ public class MainActivity extends Activity {
 
     private List<ArtistBrowsePolicy.Track> policyTracksFromLibrary() {
         List<ArtistBrowsePolicy.Track> out = new ArrayList<>();
-        for (SongItem song : customLibrary) {
+        for (SongItem song : activeMediaLibrary()) {
             out.add(new ArtistBrowsePolicy.Track(song.artist, song.album, song.albumArtist,
-                    song.file.lastModified()));
+                    song.file != null ? song.file.lastModified() : 0L));
         }
         return out;
     }
@@ -9561,6 +9856,7 @@ public class MainActivity extends Activity {
 
     private void showThemedContextMenu() {
         if (themedContextMenu == null) return;
+        QuickMenuBridge.dismiss(this);
         if (layoutLoadingOverlay != null && layoutLoadingOverlay.getVisibility() == View.VISIBLE) return;
         volumeHandler.removeCallbacks(hideVolumeContextTask);
         contextMenuInVolumeSlider = false;
@@ -9671,8 +9967,8 @@ public class MainActivity extends Activity {
                     navigateToPodcastUi(PODCAST_UI_EPISODES);
                 }
             });
-            if (playback.podcastIndex() >= 0 && playback.podcastIndex() < playback.podcastQueue().size()) {
-                final OpenRssClient.Episode ep = playback.podcastQueue().get(playback.podcastIndex());
+            if (playback.podcastIndex() >= 0 && playback.podcastIndex() < PodcastPlaybackBridge.fromCoordinator(playback).size()) {
+                final OpenRssClient.Episode ep = PodcastPlaybackBridge.currentEpisode(playback);
                 addContextAction(getString(R.string.context_action_save_episode), new Runnable() {
                     @Override
                     public void run() {
@@ -10506,7 +10802,7 @@ public class MainActivity extends Activity {
                 if (currentBrowserMode == BROWSER_ROOT) {
                     changeScreen(STATE_MENU);
                 } else if (currentBrowserMode == BROWSER_FOLDER) {
-                    if (currentFolder.getAbsolutePath().equals(rootFolder.getAbsolutePath())) {
+                    if (currentFolder.getAbsolutePath().equals(activeLibraryRoot().getAbsolutePath())) {
                         currentBrowserMode = BROWSER_ROOT;
                         buildFileBrowserUI();
                     } else {
@@ -10629,6 +10925,7 @@ public class MainActivity extends Activity {
             if (handleHomeScreenEditorBack()) return;
             if (handleLanguageSettingsBack()) return;
             if (handleSoulseekSettingsBack()) return;
+            if (handleScrobblingSettingsBack()) return;
             if (handleLibraryBrowseSettingsBack()) return;
             if (handleAboutSettingsBack()) return;
             if (handleThemeGalleryBack()) return;
@@ -10980,6 +11277,16 @@ public class MainActivity extends Activity {
         if (ConnectivityHelper.shouldShowMenuItem(this, HomeMenuConfig.ID_PC_UPLOAD)) {
             containerSettingsItems.addView(btnServerMenu);
         }
+
+        LinearLayout btnScrobbling = createSettingsRow(RowKeys.SCROBBLING, R.string.settings_scrobbling, true);
+        btnScrobbling.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildScrobblingSettingsUI();
+            }
+        });
+        containerSettingsItems.addView(btnScrobbling);
 
         LinearLayout btnWifiMenu = createSettingsRow(RowKeys.WIFI_SETUP, R.string.settings_wifi_setup, true);
         btnWifiMenu.setOnClickListener(new View.OnClickListener() {
@@ -11503,6 +11810,16 @@ public class MainActivity extends Activity {
         });
         containerSettingsItems.addView(btnSearch);
 
+        LinearLayout btnMessages = createSettingsRow(RowKeys.SOULSEEK_MESSAGES, R.string.soulseek_messages, true);
+        btnMessages.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildSoulseekMessagesUI();
+            }
+        });
+        containerSettingsItems.addView(btnMessages);
+
         SoulseekAccount skAccount = SoulseekAccount.load(prefs);
         LinearLayout btnAccount = createSettingRow(RowKeys.SOULSEEK_ACCOUNT, R.string.soulseek_account_row, SoulseekAccount.displayLabel(skAccount));
         btnAccount.setOnClickListener(new View.OnClickListener() {
@@ -11745,6 +12062,17 @@ public class MainActivity extends Activity {
 
         containerSettingsItems.addView(content, new LinearLayout.LayoutParams(
                 rowW, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout btnStage = createSettingsRow(RowKeys.ABOUT, R.string.stage_setup_rerun, false);
+        btnStage.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                SolarDeviceStaging.clearStageComplete(MainActivity.this);
+                startFirstRunSetup(true);
+            }
+        });
+        containerSettingsItems.addView(btnStage);
 
         if (BuildConfig.FEATURE_OTA_UPDATE) {
             final Button otaProbe = createListButton(getString(R.string.update_checking));
@@ -11989,67 +12317,107 @@ public class MainActivity extends Activity {
         new Thread(new Runnable() {
             @Override
             public void run() {
+                File dir = getDir("update", Context.MODE_PRIVATE);
+                final File updateFile = new File(dir, "Solar_Update.apk");
                 try {
-                    com.solar.launcher.net.TlsHelper.ensureSecurityProvider();
-                    okhttp3.OkHttpClient client = com.solar.launcher.net.SolarHttp.longReadClient();
-                    okhttp3.Request.Builder rb = new okhttp3.Request.Builder()
-                            .url(apkUrl)
-                            .header("User-Agent", "SolarLauncher/1.0")
-                            .header("Accept", "application/vnd.android.package-archive,*/*")
-                            .header("Accept-Encoding", "identity");
-                    okhttp3.Response resp = client.newCall(rb.build()).execute();
-                    if (!resp.isSuccessful() || resp.body() == null) {
-                        int code = resp.code();
-                        resp.close();
-                        throw new java.io.IOException("HTTP " + code);
-                    }
-                    final int fileLength = (int) resp.body().contentLength();
-                    File dir = getDir("update", Context.MODE_PRIVATE);
-                    final File updateFile = new File(dir, "Solar_Update.apk");
-                    java.io.FileOutputStream fos = new java.io.FileOutputStream(updateFile);
-                    java.io.InputStream is = resp.body().byteStream();
-                    byte[] buffer = new byte[4096];
-                    int len;
-                    long total = 0;
-                    while ((len = is.read(buffer)) != -1) {
-                        total += len;
-                        fos.write(buffer, 0, len);
-                        if (fileLength > 0) {
-                            final int progress = (int) (total * 100 / fileLength);
-                            runOnUiThread(new Runnable() {
+                    final long[] lastUiMs = new long[] { 0L };
+                    final int[] lastPct = new int[] { -1 };
+                    com.solar.launcher.net.SolarHttp.DownloadProgress progressCb =
+                            new com.solar.launcher.net.SolarHttp.DownloadProgress() {
                                 @Override
-                                public void run() {
-                                    if (themedContextMenu != null) {
-                                        themedContextMenu.updateProgressOverlay(progress, progress + "%");
-                                    }
+                                public void onProgress(long bytesRead, long totalBytes) {
+                                    if (totalBytes <= 0) return;
+                                    int pct = (int) Math.min(99L, (bytesRead * 100L) / totalBytes);
+                                    long now = android.os.SystemClock.uptimeMillis();
+                                    if (pct == lastPct[0] && now - lastUiMs[0] < 250L) return;
+                                    if (pct < lastPct[0] + 1 && now - lastUiMs[0] < 250L) return;
+                                    lastPct[0] = pct;
+                                    lastUiMs[0] = now;
+                                    final int progress = pct;
+                                    runOnUiThread(new Runnable() {
+                                        @Override
+                                        public void run() {
+                                            if (themedContextMenu != null) {
+                                                themedContextMenu.updateProgressOverlay(
+                                                        progress, progress + "%");
+                                            }
+                                        }
+                                    });
                                 }
-                            });
+                            };
+                    com.solar.launcher.net.SolarHttp.DownloadResult result = null;
+                    Exception lastErr = null;
+                    for (int attempt = 0; attempt < 2; attempt++) {
+                        try {
+                            long resume = (attempt > 0 && updateFile.isFile()) ? updateFile.length() : 0L;
+                            if (attempt == 0 && updateFile.exists()) updateFile.delete();
+                            result = com.solar.launcher.net.SolarHttp.downloadToFileResult(
+                                    apkUrl, updateFile, progressCb, 0L, null, null, resume);
+                            lastErr = null;
+                            break;
+                        } catch (Exception e) {
+                            lastErr = e;
+                            if (attempt == 0 && updateFile.isFile() && updateFile.length() > 0) {
+                                continue;
+                            }
+                            break;
                         }
                     }
-                    fos.close();
-                    is.close();
-                    resp.close();
-                    if (fileLength > 0 && total != fileLength) {
+                    if (lastErr != null) throw lastErr;
+                    if (result == null || !isValidOtaApkFile(updateFile, result)) {
                         if (updateFile.exists()) updateFile.delete();
-                        throw new IllegalStateException("Incomplete download");
+                        throw new IllegalStateException("Incomplete or invalid APK");
                     }
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
+                            if (themedContextMenu != null) {
+                                themedContextMenu.updateProgressOverlay(100, "100%");
+                            }
                             finishDownloadAndInstall(updateFile, release);
                         }
                     });
                 } catch (Exception e) {
+                    if (updateFile.exists()) {
+                        try { updateFile.delete(); } catch (Exception ignored) {}
+                    }
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
                             dismissThemedContextMenu();
-                            Toast.makeText(MainActivity.this, getString(R.string.toast_download_failed), Toast.LENGTH_LONG).show();
+                            Toast.makeText(MainActivity.this,
+                                    getString(R.string.toast_download_failed), Toast.LENGTH_LONG).show();
                         }
                     });
                 }
             }
-        }).start();
+        }, "SolarOtaDownload").start();
+    }
+
+    /** Integrity gate after OTA download — length match and/or ZIP/APK magic. */
+    private static boolean isValidOtaApkFile(File apk,
+            com.solar.launcher.net.SolarHttp.DownloadResult result) {
+        if (apk == null || !apk.isFile()) return false;
+        long len = apk.length();
+        if (len < 1024L * 1024L) return false;
+        if (result != null && result.expectedTotal > 0 && len != result.expectedTotal) {
+            return false;
+        }
+        if (result != null && result.bytesWritten > 0 && len < result.bytesWritten) {
+            return false;
+        }
+        java.io.RandomAccessFile raf = null;
+        try {
+            raf = new java.io.RandomAccessFile(apk, "r");
+            if (raf.length() < 4) return false;
+            int b0 = raf.read();
+            int b1 = raf.read();
+            return b0 == 'P' && b1 == 'K';
+        } catch (Exception e) {
+            return false;
+        } finally {
+            if (raf != null) try { raf.close(); } catch (Exception ignored) {}
+        }
     }
 
     private String homeEditorToggleLabel(int labelResId, boolean enabled) {
@@ -12298,7 +12666,8 @@ public class MainActivity extends Activity {
             return false;
         String name = f.getName().toLowerCase();
         return name.endsWith(".mp3") || name.endsWith(".flac") || name.endsWith(".wav") || name.endsWith(".ogg")
-                || name.endsWith(".m4a") || name.endsWith(".aac") || name.endsWith(".ape") || name.endsWith(".wma");
+                || name.endsWith(".m4a") || name.endsWith(".aac") || name.endsWith(".ape") || name.endsWith(".wma")
+                || name.endsWith(".opus");
     }
 
     private boolean isApkFile(File f) {
@@ -12334,14 +12703,30 @@ public class MainActivity extends Activity {
     private final java.util.HashSet<String> libraryScanMetaKeys = new java.util.HashSet<String>();
 
     private void buildCustomLibrary(File folder) {
+        buildCustomLibraryInto(folder, customLibrary, false);
+    }
+
+    private void buildAudiobookLibraryScan() {
+        libraryScanPaths.clear();
+        libraryScanMetaKeys.clear();
+        for (File root : AudiobookBookmarkStore.audiobookRoots()) {
+            if (root != null && root.isDirectory()) {
+                buildCustomLibraryInto(root, audiobookLibrary, true);
+            }
+        }
+    }
+
+    private void buildCustomLibraryInto(File folder, List<SongItem> target, boolean audiobookTags) {
         if (libraryScanGen != activeLibraryScanGen) return;
+        if (folder == null || target == null) return;
         File[] files = folder.listFiles();
         if (files != null) {
             for (File f : files) {
                 if (f.isDirectory()) {
-                    buildCustomLibrary(f);
+                    buildCustomLibraryInto(f, target, audiobookTags);
                 } else if (isAudioFile(f)) {
                     if (blacklist.contains(f.getAbsolutePath())) continue;
+                    if (!audiobookTags && AudiobookBookmarkStore.isUnderAudiobooks(f)) continue;
                     String normPath = f.getAbsolutePath().toLowerCase(java.util.Locale.US);
                     if (!libraryScanPaths.add(normPath)) continue;
                     try {
@@ -12361,8 +12746,14 @@ public class MainActivity extends Activity {
                         }
 
                         if (title == null || title.isEmpty()) title = f.getName();
-                        if (artist == null || artist.isEmpty()) artist = "Unknown Artist";
-                        if (album == null || album.isEmpty()) album = "Unknown Album";
+                        if (artist == null || artist.isEmpty()) {
+                            artist = audiobookTags
+                                    ? getString(R.string.audiobook_unknown_author) : "Unknown Artist";
+                        }
+                        if (album == null || album.isEmpty()) {
+                            File parent = f.getParentFile();
+                            album = (parent != null && audiobookTags) ? parent.getName() : "Unknown Album";
+                        }
                         if (albumArtist == null) albumArtist = "";
 
                         String metaKey = (title + "\0" + artist + "\0" + duration).toLowerCase(java.util.Locale.US);
@@ -12372,7 +12763,7 @@ public class MainActivity extends Activity {
                             continue;
                         }
 
-                        customLibrary.add(new SongItem(f, title, artist, album, genre, albumArtist));
+                        target.add(new SongItem(f, title, artist, album, genre, albumArtist));
 
                         fis.close();
                         mmr.release();
@@ -12381,6 +12772,33 @@ public class MainActivity extends Activity {
                 }
             }
         }
+    }
+
+    private void startAudiobookLibraryScan(final boolean rebuildUi) {
+        if (isCustomScanning) return;
+        isCustomScanning = true;
+        final int gen = ++libraryScanGen;
+        activeLibraryScanGen = gen;
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                audiobookLibrary.clear();
+                invalidateSongPathIndex();
+                buildAudiobookLibraryScan();
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        isCustomScanning = false;
+                        if (rebuildUi && currentScreenState == STATE_BROWSER && isAudiobookLibraryMode) {
+                            if (currentBrowserMode == BROWSER_ROOT) buildFileBrowserUI();
+                            else if (currentBrowserMode == BROWSER_ARTISTS) buildVirtualCategories("ARTIST");
+                            else if (currentBrowserMode == BROWSER_ALBUMS) buildVirtualCategories("ALBUM");
+                            else if (currentBrowserMode == BROWSER_VIRTUAL_SONGS) buildVirtualSongs();
+                        }
+                    }
+                });
+            }
+        }, "AudiobookScan").start();
     }
 
     /** Merge album tags that differ only by letter case (majority spelling wins). */
@@ -12537,47 +12955,8 @@ public class MainActivity extends Activity {
     }
 
     private void buildAppsLauncherUI() {
-        if (scrollViewBrowser != null) scrollViewBrowser.setVisibility(View.VISIBLE);
-        if (listVirtualSongs != null) listVirtualSongs.setVisibility(View.GONE);
-        containerBrowserItems.removeAllViews();
-        browserStatusTitle = getString(R.string.status_apps);
-        updateStatusBarTitle();
-        if (tvBrowserPath != null) {
-            tvBrowserPath.setText(getString(R.string.path_apps));
-            tvBrowserPath.setVisibility(View.VISIBLE);
-        }
-
-        Button btnBack = createListButton(getString(R.string.common_back));
-        styleSecondaryLabel(btnBack);
-        btnBack.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                clickFeedback();
-                changeScreen(STATE_MENU);
-            }
-        });
-        containerBrowserItems.addView(btnBack);
-
-        Button loading = createListButton(getString(R.string.apps_loading));
-        loading.setEnabled(false);
-        containerBrowserItems.addView(loading);
-
-        applyPodcastBrowserLayout();
-        final int gen = ++appsListGen;
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                final List<AppLauncher.Entry> apps = AppLauncher.load(
-                        getPackageManager(), getPackageName());
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (currentScreenState != STATE_APPS || gen != appsListGen) return;
-                        populateAppsLauncherList(apps);
-                    }
-                });
-            }
-        }).start();
+        SolarFeature apps = featureRegistry.get(com.solar.launcher.contracts.FeatureIds.APPS);
+        if (apps != null) apps.onEnter();
     }
 
     private void populateAppsLauncherList(final List<AppLauncher.Entry> apps) {
@@ -12625,7 +13004,9 @@ public class MainActivity extends Activity {
         }
 
         if (currentBrowserMode == BROWSER_ROOT) {
-            browserStatusTitle = getString(R.string.status_library_main);
+            browserStatusTitle = isAudiobookLibraryMode
+                    ? getString(R.string.status_library_audiobooks)
+                    : getString(R.string.status_library_main);
             updateStatusBarTitle();
             updateLibraryBreadcrumb();
 
@@ -12633,11 +13014,13 @@ public class MainActivity extends Activity {
             btnFolder.setOnClickListener(v -> {
                 clickFeedback();
                 currentBrowserMode = BROWSER_FOLDER;
+                currentFolder = activeLibraryRoot();
                 buildFileBrowserUI();
             });
             containerBrowserItems.addView(btnFolder);
 
-            Button btnArtist = createListButton(getString(R.string.browser_artists));
+            Button btnArtist = createListButton(isAudiobookLibraryMode
+                    ? getString(R.string.browser_authors) : getString(R.string.browser_artists));
             btnArtist.setOnClickListener(v -> {
                 clickFeedback();
                 currentBrowserMode = BROWSER_ARTISTS;
@@ -12645,7 +13028,8 @@ public class MainActivity extends Activity {
             });
             containerBrowserItems.addView(btnArtist);
 
-            Button btnAlbum = createListButton(getString(R.string.browser_albums));
+            Button btnAlbum = createListButton(isAudiobookLibraryMode
+                    ? getString(R.string.browser_books) : getString(R.string.browser_albums));
             btnAlbum.setOnClickListener(v -> {
                 clickFeedback();
                 currentBrowserMode = BROWSER_ALBUMS;
@@ -12653,7 +13037,8 @@ public class MainActivity extends Activity {
             });
             containerBrowserItems.addView(btnAlbum);
 
-            Button btnAll = createListButton(getString(R.string.browser_all_songs));
+            Button btnAll = createListButton(isAudiobookLibraryMode
+                    ? getString(R.string.browser_all_audiobooks) : getString(R.string.browser_all_songs));
             btnAll.setOnClickListener(v -> {
                 clickFeedback();
                 currentBrowserMode = BROWSER_VIRTUAL_SONGS;
@@ -12662,29 +13047,40 @@ public class MainActivity extends Activity {
             });
             containerBrowserItems.addView(btnAll);
 
-            Button btnGenres = createListButton(getString(R.string.browser_genres));
-            btnGenres.setOnClickListener(v -> {
-                clickFeedback();
-                currentBrowserMode = BROWSER_GENRES;
-                buildVirtualCategories("GENRE");
-            });
-            containerBrowserItems.addView(btnGenres);
+            if (!isAudiobookLibraryMode) {
+                Button btnGenres = createListButton(getString(R.string.browser_genres));
+                btnGenres.setOnClickListener(v -> {
+                    clickFeedback();
+                    currentBrowserMode = BROWSER_GENRES;
+                    buildVirtualCategories("GENRE");
+                });
+                containerBrowserItems.addView(btnGenres);
 
-            Button btnPlaylists = createListButton(getString(R.string.browser_playlists));
-            btnPlaylists.setOnClickListener(v -> {
-                clickFeedback();
-                currentBrowserMode = BROWSER_PLAYLISTS;
-                buildPlaylistsUI();
-            });
-            containerBrowserItems.addView(btnPlaylists);
+                Button btnPlaylists = createListButton(getString(R.string.browser_playlists));
+                btnPlaylists.setOnClickListener(v -> {
+                    clickFeedback();
+                    currentBrowserMode = BROWSER_PLAYLISTS;
+                    buildPlaylistsUI();
+                });
+                containerBrowserItems.addView(btnPlaylists);
+            }
 
-            // 🚀 시스템을 거치지 않는 '앱 자체 스캔 엔진' 버튼!
-            Button btnScan = createListButton(isCustomScanning ? "⏳ Scanning Media..." : "🔄 Scan Media Library");
+            Button btnScan = createListButton(isCustomScanning
+                    ? (isAudiobookLibraryMode
+                            ? getString(R.string.browser_scanning_audiobooks)
+                            : getString(R.string.browser_scanning))
+                    : (isAudiobookLibraryMode
+                            ? getString(R.string.browser_scan_audiobooks)
+                            : "🔄 Scan Media Library"));
             btnScan.setTextColor(isCustomScanning ? 0xFF000000 : 0xFFFFFFFF);
             btnScan.setOnClickListener(v -> {
                 clickFeedback();
-                if (isCustomScanning)
+                if (isCustomScanning) return;
+                if (isAudiobookLibraryMode) {
+                    startAudiobookLibraryScan(true);
+                    buildFileBrowserUI();
                     return;
+                }
 
                 isCustomScanning = true;
                 btnScan.setText(getString(R.string.browser_scanning));
@@ -12697,6 +13093,8 @@ public class MainActivity extends Activity {
                     public void run() {
                         customLibrary.clear();
                         invalidateSongPathIndex();
+                        libraryScanPaths.clear();
+                        libraryScanMetaKeys.clear();
                         buildCustomLibrary(rootFolder);
                         normalizeLibraryAlbumTitles();
 
@@ -12730,7 +13128,7 @@ public class MainActivity extends Activity {
                 }).start();
             });
             containerBrowserItems.addView(btnScan);
-            if (hasInternetConnection()) {
+            if (!isAudiobookLibraryMode && hasInternetConnection()) {
                 Button btnGetMore = createListButton(getString(R.string.browser_get_more));
                 btnGetMore.setOnClickListener(new View.OnClickListener() {
                     @Override
@@ -12740,6 +13138,11 @@ public class MainActivity extends Activity {
                     }
                 });
                 containerBrowserItems.addView(btnGetMore);
+            }
+            if (isAudiobookLibraryMode && audiobookLibrary.isEmpty() && !isCustomScanning) {
+                Button empty = createListButton(getString(R.string.audiobooks_empty));
+                empty.setEnabled(false);
+                containerBrowserItems.addView(empty);
             }
             if (containerBrowserItems.getChildCount() > 0)
                 containerBrowserItems.getChildAt(0).requestFocus();
@@ -12759,15 +13162,25 @@ public class MainActivity extends Activity {
         scrollViewBrowser.setVisibility(View.GONE);
         listVirtualSongs.setVisibility(View.VISIBLE);
 
-        browserStatusTitle = "ARTIST".equals(type) ? getString(R.string.status_library_artists)
-                : ("GENRE".equals(type) ? getString(R.string.status_library_genres) : getString(R.string.status_library_albums));
+        if ("ARTIST".equals(type)) {
+            browserStatusTitle = isAudiobookLibraryMode
+                    ? getString(R.string.status_library_authors)
+                    : getString(R.string.status_library_artists);
+        } else if ("GENRE".equals(type)) {
+            browserStatusTitle = getString(R.string.status_library_genres);
+        } else {
+            browserStatusTitle = isAudiobookLibraryMode
+                    ? getString(R.string.status_library_books)
+                    : getString(R.string.status_library_albums);
+        }
         updateStatusBarTitle();
         updateLibraryBreadcrumb();
 
+        final List<SongItem> lib = activeMediaLibrary();
         java.util.HashMap<String, String> albumByKey = new java.util.HashMap<>();
         java.util.HashSet<String> uniqueCategories = new java.util.HashSet<>();
         if (!"ARTIST".equals(type)) {
-            for (SongItem song : customLibrary) {
+            for (SongItem song : lib) {
                 if ("GENRE".equals(type)) {
                     uniqueCategories.add(song.genre);
                 } else if ("ALBUM".equals(type)) {
@@ -13002,7 +13415,7 @@ public class MainActivity extends Activity {
             return;
         }
         java.util.LinkedHashMap<String, String> albumsByKey = new java.util.LinkedHashMap<>();
-        for (SongItem song : customLibrary) {
+        for (SongItem song : activeMediaLibrary()) {
             if (!ArtistParser.containsArtist(song.artist, virtualQueryArtist)) continue;
             if (song.album == null || song.album.trim().isEmpty()) continue;
             String key = AlbumNames.matchKey(song.album);
@@ -13421,14 +13834,20 @@ public class MainActivity extends Activity {
         scrollViewBrowser.setVisibility(View.GONE);
         listVirtualSongs.setVisibility(View.VISIBLE);
 
-        browserStatusTitle = virtualQueryType.equals("ALL") ? getString(R.string.status_library_all_songs) : getString(R.string.status_path, virtualQueryValue);
+        if (virtualQueryType.equals("ALL")) {
+            browserStatusTitle = isAudiobookLibraryMode
+                    ? getString(R.string.browser_all_audiobooks)
+                    : getString(R.string.status_library_all_songs);
+        } else {
+            browserStatusTitle = getString(R.string.status_path, virtualQueryValue);
+        }
         updateStatusBarTitle();
         updateLibraryBreadcrumb();
 
         virtualSongList.clear();
         currentScrollIndexList.clear();
         final List<SongItem> targetSongs = new ArrayList<>();
-        for (SongItem song : customLibrary) {
+        for (SongItem song : activeMediaLibrary()) {
             boolean match = false;
             if (virtualQueryType.equals("ALL")) match = true;
             else if (virtualQueryType.equals("ARTIST")
@@ -13469,9 +13888,10 @@ public class MainActivity extends Activity {
         File[] files = currentFolder.listFiles();
 
         final File storageRoot = getStorageRoot();
+        final File libraryRoot = activeLibraryRoot();
         boolean showUp = isPickingBackground
                 ? !currentFolder.getAbsolutePath().equals(storageRoot.getAbsolutePath())
-                : !currentFolder.getAbsolutePath().equals(rootFolder.getAbsolutePath());
+                : !currentFolder.getAbsolutePath().equals(libraryRoot.getAbsolutePath());
 
         if (files == null || files.length == 0) {
             if (scrollViewBrowser != null) scrollViewBrowser.setVisibility(View.VISIBLE);
@@ -13506,7 +13926,7 @@ public class MainActivity extends Activity {
                             if (parent != null) currentFolder = parent;
                             buildFileBrowserUI();
                         }
-                    } else if (currentFolder.getAbsolutePath().equals(rootFolder.getAbsolutePath())) {
+                    } else if (currentFolder.getAbsolutePath().equals(libraryRoot.getAbsolutePath())) {
                         isPickingBackground = false;
                         changeScreen(STATE_MENU);
                     } else {
@@ -13528,7 +13948,7 @@ public class MainActivity extends Activity {
             if (f.isDirectory()) folders.add(f);
             else if (isPickingBackground && isImageFile(f)) imageFiles.add(f);
             else if (!isPickingBackground && isAudioFile(f)) audioFiles.add(f);
-            else if (!isPickingBackground && isApkFile(f)) apkFiles.add(f);
+            else if (!isPickingBackground && !isAudiobookLibraryMode && isApkFile(f)) apkFiles.add(f);
         }
         java.util.Comparator<File> fileSorter = new java.util.Comparator<File>() {
             @Override
@@ -14380,10 +14800,371 @@ public class MainActivity extends Activity {
             SoulseekAccount account = SoulseekAccount.load(prefs);
             soulseekClient = new SoulseekClient(account.username, account.password, rootFolder,
                     MainActivity.this, soulseekListener);
+            soulseekClient.setSocialListener(soulseekSocialListener);
         }
         soulseekClient.setSharePolicy(soulseekSharePolicy);
         soulseekClient.setShareIndex(soulseekShareIndex);
         return soulseekClient;
+    }
+
+    private final SoulseekClient.SocialListener soulseekSocialListener =
+            new SoulseekClient.SocialListener() {
+                @Override
+                public void onPrivateMessage(int messageId, int timestamp, String fromUser,
+                        String text) {
+                    if (fromUser == null) return;
+                    if (SolarDeveloperAccounts.isDiagHandle(fromUser)) return;
+                    if (SolarDeveloperAccounts.isAutoDiagnosticText(text)) return;
+                    final String visible = SolarDeveloperAccounts.stripDiagnosticText(text);
+                    if (visible == null || visible.isEmpty()) return;
+                    final String peer = SolarDeveloperAccounts.mapToConversationPeer(fromUser);
+                    if (SolarDeveloperAccounts.isCanonicalPeer(peer)
+                            || SolarDeveloperAccounts.isDeveloper(fromUser)) {
+                        SolarDeveloperMessaging.appendIncoming(
+                                MainActivity.this, messageId, timestamp, fromUser, visible);
+                    } else {
+                        SoulseekMessaging.append(MainActivity.this, new SoulseekMessaging.Message(
+                                messageId, timestamp, peer, visible, true));
+                    }
+                    final String notifyPeer = peer;
+                    final String notifyText = visible;
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (SettingsScreens.SOULSEEK_MESSAGES_THREAD.equals(settingsSubScreenKey)
+                                    && notifyPeer.equalsIgnoreCase(soulseekMessagePeer)) {
+                                buildSoulseekConversationUI(notifyPeer);
+                            } else if (SettingsScreens.SOULSEEK_MESSAGES.equals(settingsSubScreenKey)) {
+                                buildSoulseekMessagesUI();
+                            } else {
+                                showSoulseekPmNotification(notifyPeer, notifyText);
+                            }
+                        }
+                    });
+                }
+            };
+
+    private void buildSoulseekMessagesUI() {
+        SolarDevelopmentBootstrap.ensureReady(this, prefs);
+        setSettingsSubScreen(SettingsScreens.SOULSEEK_MESSAGES);
+        updateStatusBarTitle();
+        containerSettingsItems.removeAllViews();
+
+        Button btnBack = createListButton(getString(R.string.soulseek_back_settings));
+        styleSecondaryLabel(btnBack);
+        btnBack.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildSoulseekSettingsUI();
+            }
+        });
+        containerSettingsItems.addView(btnBack);
+
+        Button btnNew = createListButton(getString(R.string.soulseek_new_message));
+        btnNew.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                keyboardPurpose = KEYBOARD_SOULSEEK_CONTACT;
+                keyboardReturnState = STATE_SETTINGS;
+                keyboardReturnSettingsSubKey = SettingsScreens.SOULSEEK_MESSAGES;
+                typedPassword = "";
+                changeScreen(STATE_WIFI_KEYBOARD);
+            }
+        });
+        containerSettingsItems.addView(btnNew);
+
+        java.util.List<SoulseekMessaging.InboxRow> inbox = SoulseekMessaging.loadInbox(this);
+        pinSolarDeveloperInbox(inbox);
+        if (inbox.isEmpty()) {
+            Button empty = createListButton(getString(R.string.soulseek_messages_empty));
+            empty.setEnabled(false);
+            containerSettingsItems.addView(empty);
+        } else {
+            for (final SoulseekMessaging.InboxRow row : inbox) {
+                final String peer = row.peer;
+                String title = SolarDeveloperAccounts.displayNameForPeer(peer);
+                String sub = row.preview;
+                if (sub == null || sub.isEmpty()) {
+                    sub = SoulseekMessaging.formatTimestamp(row.timestamp);
+                }
+                final String rowTitle = title;
+                final String rowSub = sub != null ? sub : "";
+                LinearLayout r = createSettingsRow(peer, rowTitle, true, false);
+                TextView right = r.getChildCount() > 1 && r.getChildAt(1) instanceof TextView
+                        ? (TextView) r.getChildAt(1) : null;
+                if (right != null) right.setText(rowSub);
+                r.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        clickFeedback();
+                        soulseekMessagePeer = peer;
+                        buildSoulseekConversationUI(peer);
+                    }
+                });
+                containerSettingsItems.addView(r);
+            }
+        }
+        if (containerSettingsItems.getChildCount() > 1) {
+            containerSettingsItems.getChildAt(1).requestFocus();
+        }
+    }
+
+    private void pinSolarDeveloperInbox(java.util.List<SoulseekMessaging.InboxRow> inbox) {
+        if (inbox == null) return;
+        final String peer = SolarDeveloperAccounts.SOLAR_DEVELOPER;
+        int existing = -1;
+        for (int i = 0; i < inbox.size(); i++) {
+            if (peer.equalsIgnoreCase(inbox.get(i).peer)) {
+                existing = i;
+                break;
+            }
+        }
+        if (existing > 0) {
+            inbox.add(0, inbox.remove(existing));
+        } else if (existing < 0) {
+            SoulseekMessaging.Message last =
+                    SoulseekMessaging.lastMessageForPeer(this, peer);
+            String preview = last != null
+                    ? SolarDeveloperAccounts.stripDiagnosticText(last.text) : "";
+            int ts = last != null ? last.timestamp : 0;
+            inbox.add(0, new SoulseekMessaging.InboxRow(peer, preview, ts));
+        }
+    }
+
+    private void buildSoulseekConversationUI(final String peer) {
+        if (peer == null || peer.trim().isEmpty()) return;
+        soulseekMessagePeer = peer.trim();
+        setSettingsSubScreen(SettingsScreens.SOULSEEK_MESSAGES_THREAD);
+        settingsSubScreenExtra = soulseekMessagePeer;
+        updateStatusBarTitle();
+        containerSettingsItems.removeAllViews();
+
+        Button btnBack = createListButton(getString(R.string.soulseek_back_settings));
+        styleSecondaryLabel(btnBack);
+        btnBack.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildSoulseekMessagesUI();
+            }
+        });
+        containerSettingsItems.addView(btnBack);
+
+        String title = SolarDeveloperAccounts.displayNameForPeer(soulseekMessagePeer);
+        Button header = createListButton(title);
+        header.setEnabled(false);
+        containerSettingsItems.addView(header);
+
+        java.util.List<SoulseekMessaging.Message> msgs =
+                SolarDeveloperAccounts.isCanonicalPeer(soulseekMessagePeer)
+                        || SolarDeveloperAccounts.isDeveloper(soulseekMessagePeer)
+                        ? SolarDeveloperMessaging.thread(this)
+                        : SoulseekMessaging.thread(this, soulseekMessagePeer);
+        for (SoulseekMessaging.Message m : msgs) {
+            String who = m.incoming
+                    ? SolarDeveloperAccounts.displayNameForPeer(soulseekMessagePeer)
+                    : getString(R.string.soulseek_message_outgoing_you);
+            String line = who + ": " + m.text;
+            if (line.length() > 120) line = line.substring(0, 120) + "…";
+            Button b = createListButton(line);
+            b.setEnabled(false);
+            containerSettingsItems.addView(b);
+        }
+
+        Button compose = createListButton(getString(R.string.soulseek_compose_message));
+        compose.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                openSoulseekMessageCompose(soulseekMessagePeer);
+            }
+        });
+        containerSettingsItems.addView(compose);
+        compose.requestFocus();
+    }
+
+    private void openSoulseekMessageCompose(String peer) {
+        if (peer == null || peer.trim().isEmpty()) return;
+        soulseekMessagePeer = peer.trim();
+        keyboardPurpose = KEYBOARD_SOULSEEK_MSG;
+        keyboardReturnState = STATE_SETTINGS;
+        keyboardReturnSettingsSubKey = SettingsScreens.SOULSEEK_MESSAGES_THREAD;
+        typedPassword = "";
+        changeScreen(STATE_WIFI_KEYBOARD);
+    }
+
+    private void finishSoulseekContactEntry() {
+        String typed = typedPassword != null ? typedPassword.trim() : "";
+        if (typed.isEmpty()) {
+            buildSoulseekMessagesUI();
+            return;
+        }
+        if ("solar development".equalsIgnoreCase(typed)
+                || "solardeveloper".equalsIgnoreCase(typed.replace("@", "").replace(" ", ""))
+                || "solar developer".equalsIgnoreCase(typed)
+                || SolarDeveloperAccounts.isDeveloper(typed)) {
+            soulseekMessagePeer = SolarDeveloperAccounts.SOLAR_DEVELOPER;
+        } else {
+            soulseekMessagePeer = typed.replace("@", "").trim();
+        }
+        restoreConversationAfterKeyboard();
+        buildSoulseekConversationUI(soulseekMessagePeer);
+    }
+
+    private void finishSoulseekMsgEntry() {
+        final String body = typedPassword != null ? typedPassword.trim() : "";
+        final String peer = soulseekMessagePeer;
+        restoreConversationAfterKeyboard();
+        if (body.isEmpty() || peer == null || peer.isEmpty()) {
+            if (peer != null && !peer.isEmpty()) buildSoulseekConversationUI(peer);
+            else buildSoulseekMessagesUI();
+            return;
+        }
+        if (SolarDeveloperAccounts.isCanonicalPeer(peer)
+                || SolarDeveloperAccounts.isDeveloper(peer)) {
+            SoulseekClient client = ensureSoulseekClient();
+            SolarDeveloperMessaging.sendUserMessage(this, prefs, client, body,
+                    new SoulseekClient.MessageSendCallback() {
+                        @Override
+                        public void onSent() {
+                            runOnUiThread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    Toast.makeText(MainActivity.this,
+                                            getString(R.string.soulseek_message_sent),
+                                            Toast.LENGTH_SHORT).show();
+                                    buildSoulseekConversationUI(
+                                            SolarDeveloperAccounts.SOLAR_DEVELOPER);
+                                }
+                            });
+                        }
+
+                        @Override
+                        public void onError(final String reason) {
+                            runOnUiThread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    Toast.makeText(MainActivity.this,
+                                            reason != null ? reason : "Send failed",
+                                            Toast.LENGTH_LONG).show();
+                                    buildSoulseekConversationUI(
+                                            SolarDeveloperAccounts.SOLAR_DEVELOPER);
+                                }
+                            });
+                        }
+                    });
+            return;
+        }
+        SoulseekMessaging.append(this, new SoulseekMessaging.Message(
+                (int) (System.currentTimeMillis() & 0x7fffffff),
+                (int) (System.currentTimeMillis() / 1000L), peer, body, false));
+        ensureSoulseekClient().sendPrivateMessage(peer, body, new SoulseekClient.MessageSendCallback() {
+            @Override
+            public void onSent() {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        Toast.makeText(MainActivity.this,
+                                getString(R.string.soulseek_message_sent),
+                                Toast.LENGTH_SHORT).show();
+                        buildSoulseekConversationUI(peer);
+                    }
+                });
+            }
+
+            @Override
+            public void onError(final String reason) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        Toast.makeText(MainActivity.this,
+                                reason != null ? reason : "Send failed",
+                                Toast.LENGTH_LONG).show();
+                        buildSoulseekConversationUI(peer);
+                    }
+                });
+            }
+        });
+    }
+
+    private void restoreConversationAfterKeyboard() {
+        currentScreenState = STATE_SETTINGS;
+        if (layoutWifiKeyboard != null) layoutWifiKeyboard.setVisibility(View.GONE);
+        if (layoutSettingsMode != null) layoutSettingsMode.setVisibility(View.VISIBLE);
+        updateStatusBarTitle();
+    }
+
+    private void showSoulseekPmNotification(final String fromUser, final String text) {
+        if (fromUser == null || fromUser.trim().isEmpty()) return;
+        final String body = text != null ? text : "";
+        if (body.isEmpty()) return;
+        contextReachPeerUser = fromUser.trim();
+        contextReachPmBody = body;
+        if (themedContextMenu == null) return;
+        if (!themedContextMenu.isShowing()) {
+            showThemedContextMenu();
+            contextMenuTierStack.clear();
+            contextMenuTierStack.addLast(CONTEXT_NAV_ROOT);
+        }
+        pushContextMenuTier("reach_pm");
+        rebuildContextReachPmTier(true);
+    }
+
+    private void rebuildContextReachPmTier(boolean focusList) {
+        final String peer = contextReachPeerUser;
+        if (peer == null) return;
+        final String body = contextReachPmBody != null ? contextReachPmBody : "";
+        java.util.ArrayList<String> labels = new java.util.ArrayList<String>();
+        java.util.ArrayList<String> states = new java.util.ArrayList<String>();
+        java.util.ArrayList<Boolean> headers = new java.util.ArrayList<Boolean>();
+        java.util.ArrayList<Runnable> actions = new java.util.ArrayList<Runnable>();
+
+        String titlePeer = SolarDeveloperAccounts.displayNameForPeer(peer);
+        labels.add(getString(R.string.soulseek_message_from, titlePeer) + "\n" + body);
+        states.add(null);
+        headers.add(Boolean.TRUE);
+        actions.add(null);
+
+        labels.add(getString(R.string.soulseek_pm_reply));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+                openSoulseekMessageCompose(peer);
+            }
+        });
+
+        labels.add(getString(R.string.soulseek_pm_open));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+                soulseekMessagePeer = peer;
+                buildSoulseekConversationUI(peer);
+            }
+        });
+
+        labels.add(getString(R.string.soulseek_pm_dismiss));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+            }
+        });
+
+        String title = SolarDeveloperAccounts.isCanonicalPeer(peer)
+                || SolarDeveloperAccounts.isDeveloper(peer)
+                ? getString(R.string.solar_developer_message_from)
+                : getString(R.string.soulseek_message_from, titlePeer);
+        showContextMenuTierInPlace(title, labels, states, null, headers, actions, focusList);
     }
 
     private void updateSoulseekSharePolicy() {
@@ -15302,7 +16083,7 @@ public class MainActivity extends Activity {
         if (tvPlayerTrackCount == null) return;
         if (playback.isPodcastActive()) {
             int idx = playback.podcastIndex();
-            int total = playback.podcastQueue().size();
+            int total = PodcastPlaybackBridge.fromCoordinator(playback).size();
             if (idx < 0 || total <= 0) {
                 tvPlayerTrackCount.setText("— / —");
             } else {
@@ -16237,7 +17018,7 @@ public class MainActivity extends Activity {
         podcastDownloadPaused = false;
         podcastDownloadCancel = new java.util.concurrent.atomic.AtomicBoolean(false);
         resumePodcastDownload(playback.podcastIndex(),
-                playback.podcastQueue().get(playback.podcastIndex()), podcastLoadGeneration);
+                PodcastPlaybackBridge.currentEpisode(playback), podcastLoadGeneration);
     }
 
     private int podcastAvailableDurationMs() {
@@ -16597,21 +17378,21 @@ public class MainActivity extends Activity {
         if (!offline && !requireInternet(R.string.podcasts_wifi_required_stream)) return;
         saveCurrentPodcastResume();
         String showTitle = podcastSelected != null ? podcastSelected.title : playback.podcastShowTitle();
-        playback.activatePodcast(episodes, index, showTitle, fromSavedLibrary);
+        playback.activatePodcast(PodcastPlaybackBridge.toQueue(episodes), index, showTitle, fromSavedLibrary);
         preparePodcastEpisode(playback.podcastIndex());
     }
 
     private void preparePodcastEpisode(final int index) {
-        if (!playback.isPodcastActive() || playback.podcastQueue().isEmpty()) return;
+        if (!playback.isPodcastActive() || PodcastPlaybackBridge.fromCoordinator(playback).isEmpty()) return;
         saveCurrentPodcastResume();
-        final OpenRssClient.Episode ep = playback.podcastQueue().get(index);
+        final OpenRssClient.Episode ep = PodcastPlaybackBridge.fromCoordinator(playback).get(index);
         final int gen = ++podcastLoadGeneration;
         playback.setPodcastIndex(index);
         isPausedByHand = false;
         String showTitle = podcastSelected != null ? podcastSelected.title : playback.podcastShowTitle();
         tvPlayerTitle.setText(ep.title);
         tvPlayerArtist.setText(showTitle.isEmpty() ? "Podcast" : showTitle);
-        tvPlayerTrackCount.setText(PlaybackCoordinator.formatTrackPosition(index, playback.podcastQueue().size()));
+        tvPlayerTrackCount.setText(PlaybackCoordinator.formatTrackPosition(index, PodcastPlaybackBridge.fromCoordinator(playback).size()));
         tvPlayerTimeCurrent.setText("00:00");
         tvPlayerTimeTotal.setText(getString(R.string.podcasts_buffering));
         ivAlbumArt.setImageResource(R.drawable.default_album);
@@ -16778,7 +17559,7 @@ public class MainActivity extends Activity {
             } catch (Exception ignored) {}
             maybeExtendPodcastGrowingPlayback(index, gen, true);
         }
-        final OpenRssClient.Episode ep = playback.podcastQueue().get(index);
+        final OpenRssClient.Episode ep = PodcastPlaybackBridge.fromCoordinator(playback).get(index);
         if (!podcastDownloadInProgress) {
             resumePodcastDownload(index, ep, gen);
         }
@@ -17087,9 +17868,9 @@ public class MainActivity extends Activity {
                 PodcastResumeStore.clear(getApplicationContext(), podcastResumeKey);
                 if (repeatMode == 1) {
                     preparePodcastEpisode(playback.podcastIndex());
-                } else if (playback.podcastIndex() < playback.podcastQueue().size() - 1) {
+                } else if (playback.podcastIndex() < PodcastPlaybackBridge.fromCoordinator(playback).size() - 1) {
                     preparePodcastEpisode(playback.podcastIndex() + 1);
-                } else if (repeatMode == 2 && !playback.podcastQueue().isEmpty()) {
+                } else if (repeatMode == 2 && !PodcastPlaybackBridge.fromCoordinator(playback).isEmpty()) {
                     preparePodcastEpisode(0);
                 } else {
                     stopPodcastDownloadFully();
@@ -17104,7 +17885,7 @@ public class MainActivity extends Activity {
                 if (gen != podcastLoadGeneration) return true;
                 podcastGrowingReprepareInFlight = false;
                 if (streaming) {
-                    tryPodcastStream(index, playback.podcastQueue().get(index), gen, streamUrlVariant + 1);
+                    tryPodcastStream(index, PodcastPlaybackBridge.fromCoordinator(playback).get(index), gen, streamUrlVariant + 1);
                 } else if (isPodcastGrowingPlayback()) {
                     recoverPodcastStream(index, gen);
                 } else {
@@ -17311,6 +18092,153 @@ public class MainActivity extends Activity {
         }, "SolarSystemApkInstall").start();
     }
 
+    /** 2026-07-16 — Solar-only first-run staging overlay (never Rockbox/JJ). */
+    private void initFirstRunSetupOverlay(android.view.ViewGroup root) {
+        layoutFirstRunSetup = new LinearLayout(this);
+        layoutFirstRunSetup.setOrientation(LinearLayout.VERTICAL);
+        layoutFirstRunSetup.setBackgroundColor(0xF0000000);
+        layoutFirstRunSetup.setClickable(true);
+        layoutFirstRunSetup.setFocusable(true);
+        layoutFirstRunSetup.setVisibility(View.GONE);
+        int pad = (int) (16 * getResources().getDisplayMetrics().density);
+        layoutFirstRunSetup.setPadding(pad, pad, pad, pad);
+
+        tvFirstRunTitle = new TextView(this);
+        tvFirstRunTitle.setText(R.string.stage_setup_title);
+        tvFirstRunTitle.setTextColor(0xFFFFFFFF);
+        tvFirstRunTitle.setTextSize(20);
+        tvFirstRunTitle.setGravity(android.view.Gravity.CENTER);
+        layoutFirstRunSetup.addView(tvFirstRunTitle);
+
+        TextView sub = new TextView(this);
+        sub.setText(R.string.stage_setup_subtitle);
+        sub.setTextColor(0xFFCCCCCC);
+        sub.setTextSize(13);
+        sub.setPadding(0, pad / 2, 0, pad);
+        layoutFirstRunSetup.addView(sub);
+
+        pbFirstRun = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        pbFirstRun.setMax(100);
+        layoutFirstRunSetup.addView(pbFirstRun, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (int) (12 * getResources().getDisplayMetrics().density)));
+
+        tvFirstRunStatus = new TextView(this);
+        tvFirstRunStatus.setText(R.string.stage_setup_working);
+        tvFirstRunStatus.setTextColor(0xFFFFFFFF);
+        tvFirstRunStatus.setPadding(0, pad / 2, 0, pad / 2);
+        layoutFirstRunSetup.addView(tvFirstRunStatus);
+
+        android.widget.ScrollView scroll = new android.widget.ScrollView(this);
+        containerFirstRunSteps = new LinearLayout(this);
+        containerFirstRunSteps.setOrientation(LinearLayout.VERTICAL);
+        scroll.addView(containerFirstRunSteps);
+        layoutFirstRunSetup.addView(scroll, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        btnFirstRunContinue = createListButton(getString(R.string.stage_setup_continue));
+        btnFirstRunContinue.setEnabled(false);
+        btnFirstRunContinue.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                dismissFirstRunSetup();
+            }
+        });
+        layoutFirstRunSetup.addView(btnFirstRunContinue);
+
+        root.addView(layoutFirstRunSetup, new android.view.ViewGroup.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
+    private void maybeStartFirstRunSetup() {
+        if (SolarDeviceStaging.isFirstRunSeen(this)
+                && SolarDeviceStaging.isStageComplete(this)) {
+            return;
+        }
+        startFirstRunSetup(false);
+    }
+
+    private void startFirstRunSetup(boolean force) {
+        if (layoutFirstRunSetup == null) return;
+        firstRunSetupActive = true;
+        layoutFirstRunSetup.setVisibility(View.VISIBLE);
+        layoutFirstRunSetup.bringToFront();
+        containerFirstRunSteps.removeAllViews();
+        btnFirstRunContinue.setEnabled(false);
+        btnFirstRunContinue.setText(getString(R.string.stage_setup_continue));
+        tvFirstRunStatus.setText(R.string.stage_setup_working);
+        pbFirstRun.setProgress(0);
+        SolarDeviceStaging.run(this, force, new SolarDeviceStaging.Listener() {
+            @Override
+            public void onStepStart(final int index, final int total, final int titleResId) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (!firstRunSetupActive) return;
+                        tvFirstRunStatus.setText(getString(titleResId) + "…");
+                        if (total > 0) {
+                            pbFirstRun.setProgress((index * 100) / total);
+                        }
+                    }
+                });
+            }
+
+            @Override
+            public void onStepDone(final StageStep step, final int index, final int total) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (!firstRunSetupActive || step == null) return;
+                        String resultLabel = step.result == StageResult.OK
+                                ? getString(R.string.stage_result_ok)
+                                : (step.result == StageResult.FAILED
+                                        ? getString(R.string.stage_result_failed)
+                                        : getString(R.string.stage_result_skipped));
+                        String line = getString(step.titleResId) + " — " + resultLabel;
+                        if (step.detail != null && step.detail.length() > 0) {
+                            line = line + "\n  " + step.detail;
+                        }
+                        TextView row = new TextView(MainActivity.this);
+                        row.setText(line);
+                        row.setTextColor(step.result == StageResult.FAILED
+                                ? 0xFFFF8888
+                                : (step.result == StageResult.SKIPPED ? 0xFFFFCC66 : 0xFFAAFFAA));
+                        row.setTextSize(13);
+                        row.setPadding(0, 4, 0, 4);
+                        containerFirstRunSteps.addView(row);
+                        if (total > 0) {
+                            pbFirstRun.setProgress(((index + 1) * 100) / total);
+                        }
+                    }
+                });
+            }
+
+            @Override
+            public void onFinished(final java.util.List<StageStep> steps, final boolean hadRoot) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (!firstRunSetupActive) return;
+                        pbFirstRun.setProgress(100);
+                        tvFirstRunStatus.setText(R.string.stage_setup_done);
+                        btnFirstRunContinue.setEnabled(true);
+                        btnFirstRunContinue.requestFocus();
+                    }
+                });
+            }
+        });
+    }
+
+    private void dismissFirstRunSetup() {
+        firstRunSetupActive = false;
+        SolarDeviceStaging.markFirstRunSeen(this);
+        if (layoutFirstRunSetup != null) {
+            layoutFirstRunSetup.setVisibility(View.GONE);
+        }
+    }
+
     private void scheduleStartupUpdateNudge() {
         if (!BuildConfig.FEATURE_OTA_UPDATE) return;
         long now = System.currentTimeMillis();
@@ -17420,6 +18348,12 @@ public class MainActivity extends Activity {
         saveCurrentPodcastResume();
         stopPodcastDownloadFully();
         finalizeReachStreamHandoff();
+        if (playlist != null && !playlist.isEmpty()) {
+            File probe = playlist.get(Math.max(0, Math.min(startIndex, playlist.size() - 1)));
+            if (AudiobookBookmarkStore.isUnderAudiobooks(probe)) {
+                isAudiobookLibraryMode = true;
+            }
+        }
         playback.activateMusic(playlist, startIndex, isShuffleMode);
         playback.setMusicActivePlaylistName(activePlaylistName);
         purgeUnreferencedReachCache();
@@ -17439,6 +18373,10 @@ public class MainActivity extends Activity {
         persistPlaybackQueue();
     }
     private void setupFolderPlaylist(File selectedFile) {
+        if (isAudiobookLibraryMode || AudiobookBookmarkStore.isUnderAudiobooks(selectedFile)) {
+            setupAudiobookChapterPlaylist(selectedFile);
+            return;
+        }
         List<File> list = new ArrayList<>();
         File[] files = currentFolder.listFiles();
         int matchIndex = 0;
@@ -17451,7 +18389,113 @@ public class MainActivity extends Activity {
                 }
             }
         }
+        java.util.Collections.sort(list, new java.util.Comparator<File>() {
+            @Override
+            public int compare(File a, File b) {
+                return a.getName().compareToIgnoreCase(b.getName());
+            }
+        });
+        matchIndex = 0;
+        for (int i = 0; i < list.size(); i++) {
+            if (list.get(i).getAbsolutePath().equals(selectedFile.getAbsolutePath())) {
+                matchIndex = i;
+                break;
+            }
+        }
         playTrackList(list, matchIndex);
+    }
+
+    /** JJ 0.11: siblings in parent folder, name-sorted, resume bookmark. */
+    private void setupAudiobookChapterPlaylist(File selectedFile) {
+        isAudiobookLibraryMode = true;
+        File parent = selectedFile != null ? selectedFile.getParentFile() : currentFolder;
+        if (parent == null) parent = audiobookRootFolder;
+        List<File> list = new ArrayList<>();
+        File[] files = parent.listFiles();
+        if (files != null) {
+            for (File f : files) {
+                if (isAudioFile(f)) list.add(f);
+            }
+        }
+        java.util.Collections.sort(list, new java.util.Comparator<File>() {
+            @Override
+            public int compare(File a, File b) {
+                return a.getName().compareToIgnoreCase(b.getName());
+            }
+        });
+        int matchIndex = 0;
+        for (int i = 0; i < list.size(); i++) {
+            if (selectedFile != null
+                    && list.get(i).getAbsolutePath().equals(selectedFile.getAbsolutePath())) {
+                matchIndex = i;
+                break;
+            }
+        }
+        playTrackList(list, matchIndex);
+    }
+
+    private boolean isPlayingAudiobookTrack() {
+        if (isAudiobookLibraryMode) return true;
+        try {
+            if (playback.isMusicActive() && !playback.musicPlaylist().isEmpty()) {
+                File t = playback.musicPlaylist().get(playback.musicIndex());
+                return AudiobookBookmarkStore.isUnderAudiobooks(t);
+            }
+        } catch (Exception ignored) {}
+        return false;
+    }
+
+    private void saveAudiobookBookmarkIfNeeded() {
+        if (mediaPlayer == null || !playback.isMusicActive()) return;
+        if (playback.musicPlaylist().isEmpty()) return;
+        try {
+            File track = playback.musicPlaylist().get(playback.musicIndex());
+            if (track == null || !AudiobookBookmarkStore.isUnderAudiobooks(track)
+                    && !isAudiobookLibraryMode) {
+                return;
+            }
+            int pos = mediaPlayer.getCurrentPosition();
+            int dur = mediaPlayer.getDuration();
+            AudiobookBookmarkStore.save(getApplicationContext(), track.getAbsolutePath(),
+                    pos, dur, playback.musicIndex());
+        } catch (Exception ignored) {}
+    }
+
+    private void applyAudiobookResumeOnPrepared(MediaPlayer mp, File track) {
+        if (mp == null || track == null) return;
+        if (!isAudiobookLibraryMode && !AudiobookBookmarkStore.isUnderAudiobooks(track)) return;
+        int resumeMs = AudiobookBookmarkStore.getPositionMs(
+                getApplicationContext(), track.getAbsolutePath());
+        if (resumeMs > 0) {
+            try {
+                mp.seekTo(resumeMs);
+            } catch (Exception ignored) {}
+        }
+    }
+
+    /** JJ-style progress fill on audiobook chapter rows (pos/dur from bookmark store). */
+    private void applyAudiobookListProgress(View row, File audio) {
+        if (row == null || audio == null) return;
+        int pos = AudiobookBookmarkStore.getPositionMs(this, audio.getAbsolutePath());
+        int dur = AudiobookBookmarkStore.getDurationMs(this, audio.getAbsolutePath());
+        if (pos <= 0 || dur <= 0) return;
+        float ratio = Math.min(1f, (float) pos / (float) dur);
+        int baseColor = ThemeManager.getListButtonNormalBg();
+        int fillColor = ThemeManager.getListButtonFocusedBg();
+        try {
+            android.graphics.drawable.GradientDrawable base =
+                    new android.graphics.drawable.GradientDrawable();
+            base.setColor(baseColor);
+            android.graphics.drawable.ClipDrawable clip = new android.graphics.drawable.ClipDrawable(
+                    new android.graphics.drawable.ColorDrawable(fillColor),
+                    android.view.Gravity.LEFT,
+                    android.graphics.drawable.ClipDrawable.HORIZONTAL);
+            clip.setLevel((int) (ratio * 10000));
+            android.graphics.drawable.LayerDrawable layer =
+                    new android.graphics.drawable.LayerDrawable(
+                            new android.graphics.drawable.Drawable[] { base, clip });
+            row.setBackground(layer);
+        } catch (Exception ignored) {}
     }
 
     private void prepareMusicTrack(int index) {
@@ -17515,9 +18559,11 @@ public class MainActivity extends Activity {
             if (t != null && !t.trim().isEmpty()) tvPlayerTitle.setText(t);
             else tvPlayerTitle.setText(safeFileName);
 
-            // 가수 화면에 표시
+            // 가수/저자 화면에 표시
+            boolean bookTrack = isAudiobookLibraryMode || AudiobookBookmarkStore.isUnderAudiobooks(track);
             if (a != null && !a.trim().isEmpty()) tvPlayerArtist.setText(a);
-            else tvPlayerArtist.setText("Unknown Artist");
+            else tvPlayerArtist.setText(bookTrack
+                    ? getString(R.string.audiobook_unknown_author) : "Unknown Artist");
 
             // 2. 앨범 아트 세팅 및 인터넷 검색
             if (lastAlbumArtBytes != null) {
@@ -17662,6 +18708,7 @@ public class MainActivity extends Activity {
                         }
                         tvPlayerTimeTotal.setText(formatTime(mp.getDuration()));
                         updateMusicTrackCountUi();
+                        applyAudiobookResumeOnPrepared(mp, track);
                         if (!isPausedByHand) {
                             mp.start();
                         }
@@ -17674,6 +18721,14 @@ public class MainActivity extends Activity {
                 @Override
                 public void onCompletion(MediaPlayer mp) {
                     try {
+                        saveAudiobookBookmarkIfNeeded();
+                        if (isPlayingAudiobookTrack()) {
+                            try {
+                                File done = playback.musicPlaylist().get(playback.musicIndex());
+                                AudiobookBookmarkStore.clear(getApplicationContext(),
+                                        done.getAbsolutePath());
+                            } catch (Exception ignored) {}
+                        }
                         if (repeatMode == 1) {
                             mediaPlayer.seekTo(0);
                             mediaPlayer.start();
@@ -17882,7 +18937,7 @@ public class MainActivity extends Activity {
             // #region agent log
             boolean mpNull = mediaPlayer == null;
             boolean musicEmpty = !playback.isPodcastActive() && playback.musicPlaylist().isEmpty();
-            boolean podEmpty = playback.isPodcastActive() && playback.podcastQueue().isEmpty();
+            boolean podEmpty = playback.isPodcastActive() && PodcastPlaybackBridge.fromCoordinator(playback).isEmpty();
             boolean playing = !mpNull && mediaPlayer.isPlaying();
             try {
                 org.json.JSONObject d = new org.json.JSONObject();
@@ -17898,11 +18953,12 @@ public class MainActivity extends Activity {
             // #endregion
             if (mediaPlayer == null) return;
             if (!playback.isPodcastActive() && playback.musicPlaylist().isEmpty()) return;
-            if (playback.isPodcastActive() && playback.podcastQueue().isEmpty()) return;
+            if (playback.isPodcastActive() && PodcastPlaybackBridge.fromCoordinator(playback).isEmpty()) return;
             if (mediaPlayer.isPlaying()) {
                 mediaPlayer.pause();
                 isPausedByHand = true;
                 flushPodcastResumeIfNeeded();
+                saveAudiobookBookmarkIfNeeded();
             } else {
                 mediaPlayer.start();
                 isPausedByHand = false;
@@ -17914,6 +18970,7 @@ public class MainActivity extends Activity {
     }
     private void nextTrack() {
         lastTrackChangeTime = System.currentTimeMillis();
+        saveAudiobookBookmarkIfNeeded();
         finalizeReachStreamHandoff();
         int next = playback.nextIndex(repeatMode > 0);
         if (next < 0) {
@@ -18328,6 +19385,18 @@ public class MainActivity extends Activity {
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
+        // 2026-07-16: first-run Solar staging steals keys until Continue (center/OK only)
+        if (firstRunSetupActive && layoutFirstRunSetup != null
+                && layoutFirstRunSetup.getVisibility() == View.VISIBLE) {
+            if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+                    || keyCode == KeyEvent.KEYCODE_ENTER
+                    || keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
+                if (btnFirstRunContinue != null && btnFirstRunContinue.isEnabled()) {
+                    btnFirstRunContinue.performClick();
+                }
+            }
+            return true;
+        }
         if (handleThemedContextMenuKeyDown(keyCode, event)) return true;
 
         PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
@@ -19795,8 +20864,13 @@ public class MainActivity extends Activity {
                     if (System.currentTimeMillis() < suppressListClickUntil) return;
                     clickFeedback();
                     if (entry.kind == FolderBrowserEntry.KIND_UP) {
-                        File parentDir = currentFolder.getParentFile();
-                        if (parentDir != null) currentFolder = parentDir;
+                        if (currentFolder.getAbsolutePath().equals(
+                                activeLibraryRoot().getAbsolutePath())) {
+                            currentBrowserMode = BROWSER_ROOT;
+                        } else {
+                            File parentDir = currentFolder.getParentFile();
+                            if (parentDir != null) currentFolder = parentDir;
+                        }
                         buildFileBrowserUI();
                     } else if (entry.kind == FolderBrowserEntry.KIND_FOLDER && entry.file != null) {
                         currentFolder = entry.file;
@@ -19821,6 +20895,10 @@ public class MainActivity extends Activity {
                     }
                 }
             });
+            if (isAudiobookLibraryMode && entry.kind == FolderBrowserEntry.KIND_AUDIO
+                    && entry.file != null) {
+                applyAudiobookListProgress(btn, entry.file);
+            }
             return btn;
         }
     }
@@ -20101,6 +21179,9 @@ public class MainActivity extends Activity {
                             : song.title,
                     songSubtitleLine(song), false, row.hasFocus(), nowPlaying, playing,
                     y1ActiveRowWidthPx(), y1LibraryRowHeightPx);
+            if (isAudiobookLibraryMode && song.file != null) {
+                applyAudiobookListProgress(row, song.file);
+            }
             return row;
         }
 
@@ -20112,5 +21193,118 @@ public class MainActivity extends Activity {
             return buildTwoLineSongRowView(position, convertView, true);
         }
 
+    }
+
+
+    void hostClearBrowserItems() {
+        if (containerBrowserItems != null) containerBrowserItems.removeAllViews();
+    }
+
+    void hostAddBrowserRow(View row) {
+        if (containerBrowserItems != null) containerBrowserItems.addView(row);
+    }
+
+    void hostSetBrowserPath(String path) {
+        if (tvBrowserPath != null) {
+            tvBrowserPath.setText(path);
+            tvBrowserPath.setVisibility(View.VISIBLE);
+        }
+    }
+
+    void hostSetBrowserScrollVisible(boolean visible) {
+        if (scrollViewBrowser != null) scrollViewBrowser.setVisibility(visible ? View.VISIBLE : View.GONE);
+    }
+
+    void hostSetVirtualListVisible(boolean visible) {
+        if (listVirtualSongs != null) listVirtualSongs.setVisibility(visible ? View.VISIBLE : View.GONE);
+    }
+
+    void hostRequestBrowserFocus(int childIndex) {
+        if (containerBrowserItems != null && containerBrowserItems.getChildCount() > childIndex) {
+            containerBrowserItems.getChildAt(childIndex).requestFocus();
+        }
+    }
+
+    private final com.solar.launcher.feature.apps.AppsController.UiDelegate appsUiDelegate =
+            new com.solar.launcher.feature.apps.AppsController.UiDelegate() {
+        @Override public String appsStatusTitle() { return getString(R.string.status_apps); }
+        @Override public String appsPathLabel() { return getString(R.string.path_apps); }
+        @Override public String loadingLabel() { return getString(R.string.apps_loading); }
+        @Override public String emptyLabel() { return getString(R.string.apps_empty); }
+        @Override public View createBackButton(final Runnable onBack) {
+            Button btn = createListButton(getString(R.string.common_back));
+            styleSecondaryLabel(btn);
+            btn.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { clickFeedback(); onBack.run(); }
+            });
+            return btn;
+        }
+        @Override public View createLoadingRow() {
+            Button loading = createListButton(getString(R.string.apps_loading));
+            loading.setEnabled(false);
+            return loading;
+        }
+        @Override public View createEmptyRow() {
+            Button empty = createListButton(getString(R.string.apps_empty));
+            empty.setEnabled(false);
+            return empty;
+        }
+        @Override public View createAppRow(final com.solar.launcher.feature.apps.AppLauncher.Entry app) {
+            return createAppLauncherRow(app);
+        }
+        @Override public void onListPopulated(final java.util.List<com.solar.launcher.feature.apps.AppLauncher.Entry> apps) {
+            currentScrollIndexList.clear();
+            if (apps != null) {
+                for (com.solar.launcher.feature.apps.AppLauncher.Entry app : apps) {
+                    currentScrollIndexList.add(app.label);
+                }
+                if (!apps.isEmpty()) updateAppsPreview(apps.get(0));
+            }
+        }
+        @Override public void applyBrowserLayout() { applyPodcastBrowserLayout(); }
+        @Override public void setBrowserPath(String path) { hostSetBrowserPath(path); }
+        @Override public void setBrowserScrollVisible(boolean visible) { hostSetBrowserScrollVisible(visible); }
+        @Override public void setVirtualListVisible(boolean visible) { hostSetVirtualListVisible(visible); }
+    };
+
+    // --- modular shell host (pilot) ---
+    private final FeatureRegistry featureRegistry = new FeatureRegistry();
+    private FeatureBrowserHostImpl browserHost;
+
+    FeatureRegistry getFeatureRegistry() { return featureRegistry; }
+
+    void initSolarHost() {
+        if (browserHost == null) browserHost = new FeatureBrowserHostImpl(this);
+        AppsFeature apps = featureRegistry.appsFeature();
+        if (apps != null) apps.bind(browserHost, appsUiDelegate);
+    }
+
+    void changeFeatureById(String featureId) {
+        if (featureId == null) return;
+        if (com.solar.launcher.contracts.FeatureIds.APPS.equals(featureId)) {
+            changeScreen(STATE_APPS);
+            return;
+        }
+        if (com.solar.launcher.contracts.FeatureIds.MUSIC.equals(featureId)) {
+            changeScreen(STATE_BROWSER);
+        }
+    }
+
+    void showKeyboardRequest(com.solar.launcher.contracts.KeyboardRequest request) {
+        if (request == null) return;
+        keyboardPrefill = request.initialText;
+        keyboardReturnState = currentScreenState;
+        changeScreen(STATE_WIFI_KEYBOARD);
+    }
+
+    void dismissKeyboardRequest() {
+        if (currentScreenState == STATE_WIFI_KEYBOARD) {
+            changeScreen(keyboardReturnState);
+        }
+    }
+
+    void setStatusBarTitleExternal(String title) {
+        browserStatusTitle = title;
+        updateStatusBarTitle();
     }
 }

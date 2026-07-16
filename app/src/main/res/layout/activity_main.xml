@@ -261,7 +261,7 @@
                 android:textSize="18sp"
                 android:textStyle="bold" />
 
-            <com.solar.launcher.StoragePieView
+            <com.solar.launcher.feature.storage.StoragePieView
                 android:id="@+id/storage_pie_view"
                 android:layout_width="130dp"
                 android:layout_height="130dp"

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="podcast_cat_technology">Technology</string>
+    <string name="podcast_cat_news">News</string>
+    <string name="podcast_cat_music">Music</string>
+    <string name="podcast_cat_science">Science</string>
+    <string name="podcast_cat_history">History</string>
+    <string name="podcast_cat_comedy">Comedy</string>
+    <string name="podcast_genre_technology">Technology</string>
+    <string name="podcast_genre_news">News</string>
+    <string name="podcast_genre_comedy">Comedy</string>
+    <string name="podcast_genre_science">Science</string>
+    <string name="podcast_genre_history">History</string>
+    <string name="podcast_genre_true_crime">True Crime</string>
+    <string name="podcast_genre_sports">Sports</string>
+    <string name="podcast_genre_society">Society &amp; Culture</string>
+    <string name="podcast_genre_business">Business</string>
+    <string name="podcast_genre_education">Education</string>
+    <string name="podcast_country_us">United States</string>
+    <string name="podcast_country_gb">United Kingdom</string>
+    <string name="podcast_country_kr">South Korea</string>
+    <string name="podcast_country_jp">Japan</string>
+    <string name="podcast_country_de">Germany</string>
+    <string name="podcast_country_fr">France</string>
+    <string name="podcast_country_ca">Canada</string>
+    <string name="podcast_country_au">Australia</string>
+    <string name="podcast_country_in">India</string>
+    <string name="podcast_country_br">Brazil</string>
+    <string name="podcast_country_mx">Mexico</string>
+    <string name="podcast_country_es">Spain</string>
+    <string name="podcast_country_it">Italy</string>
+    <string name="podcast_country_nl">Netherlands</string>
+    <string name="podcast_country_se">Sweden</string>
+</resources>

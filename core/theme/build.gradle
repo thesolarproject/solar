@@ -1,0 +1,13 @@
+plugins {
+    alias(libs.plugins.android.library)
+}
+apply from: "$rootDir/gradle/solar-android-library.gradle"
+android {
+    namespace 'com.solar.launcher.theme'
+}
+dependencies {
+    api project(':core:contracts')
+    implementation project(':core:net')
+    testImplementation libs.junit
+    testImplementation 'org.json:json:20240303'
+}

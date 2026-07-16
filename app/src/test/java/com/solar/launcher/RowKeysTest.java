@@ -1,17 +1,21 @@
 package com.solar.launcher;
 
+import com.solar.launcher.feature.home.HomeMenuConfig;
+import com.solar.launcher.feature.settings.RowKeys;
+
 import org.junit.Test;
 
 public class RowKeysTest {
     @Test
-    public void homeShortcut_resolvesLabel() {
+    public void homeShortcut_keyFormat() {
         String key = RowKeys.homeShortcut(HomeMenuConfig.ID_MUSIC);
         if (!"home.shortcut.music".equals(key)) throw new AssertionError("key");
-        if (RowKeys.labelResId(key) != R.string.home_menu_music) {
-            throw new AssertionError("labelResId");
+        // labelResId for home shortcuts comes from feature/home R; non-home rows return 0
+        // (app passes R.string at call sites after module split).
+        if (RowKeys.labelResId(RowKeys.SHUFFLE) != 0) {
+            throw new AssertionError("non-home row labels live in app call sites");
         }
-        if (RowKeys.labelResId(RowKeys.SHUFFLE) != R.string.settings_shuffle_mode) {
-            throw new AssertionError("shuffle");
-        }
+        int homeLabel = RowKeys.labelResId(key);
+        if (homeLabel == 0) throw new AssertionError("home shortcut should resolve label");
     }
 }

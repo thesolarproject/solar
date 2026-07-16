@@ -10,7 +10,7 @@ if [[ -f "$CATALOG" ]]; then
   cp "$CATALOG" "$ASSET"
 fi
 chmod +x gradlew
-./gradlew assembleRelease "$@"
+./gradlew assembleRelease :keyboard-app:assembleRelease :quickmenu-app:assembleRelease "$@"
 
 UNSIGNED="$ROOT/app/build/outputs/apk/release/app-release-unsigned.apk"
 SIGNED="$ROOT/app/build/outputs/apk/release/app-release.apk"
@@ -38,3 +38,16 @@ echo "== Sign release APK with AOSP platform key =="
 "$APKSIGNER" sign --key "$KEY_PK8" --cert "$KEY_PEM" --out "$SIGNED" "$UNSIGNED"
 "$APKSIGNER" verify --verbose "$SIGNED" >/dev/null
 echo "Signed: $SIGNED"
+sign_apk() {
+  local unsigned="$1" signed="$2"
+  [[ -f "$unsigned" ]] || return 0
+  "$APKSIGNER" sign --key "$KEY_PK8" --cert "$KEY_PEM" --out "$signed" "$unsigned"
+  "$APKSIGNER" verify --verbose "$signed" >/dev/null
+  echo "Signed: $signed"
+}
+
+for pair in   "keyboard-app/build/outputs/apk/release/keyboard-app-release-unsigned.apk:keyboard-app/build/outputs/apk/release/keyboard-app-release.apk"   "quickmenu-app/build/outputs/apk/release/quickmenu-app-release-unsigned.apk:quickmenu-app/build/outputs/apk/release/quickmenu-app-release.apk"; do
+  u="${pair%%:*}"; s="${pair##*:}"
+  sign_apk "$ROOT/$u" "$ROOT/$s"
+done
+

@@ -1,0 +1,10 @@
+plugins {
+    alias(libs.plugins.android.library)
+}
+apply from: "$rootDir/gradle/solar-android-library.gradle"
+android {
+    namespace 'com.solar.launcher.feature.storage'
+}
+dependencies {
+    api project(':core:contracts')
+}

@@ -1,0 +1,22 @@
+plugins {
+    alias(libs.plugins.android.library)
+}
+apply from: "$rootDir/gradle/solar-android-library.gradle"
+android {
+    namespace 'com.solar.launcher.podcast'
+    buildFeatures { buildConfig true }
+    defaultConfig {
+        def podcastIndexKey = project.findProperty("PODCAST_INDEX_API_KEY") ?: ""
+        def podcastIndexSecret = project.findProperty("PODCAST_INDEX_API_SECRET") ?: ""
+        buildConfigField "String", "PODCAST_INDEX_API_KEY", "\"${podcastIndexKey}\""
+        buildConfigField "String", "PODCAST_INDEX_API_SECRET", "\"${podcastIndexSecret}\""
+    }
+}
+dependencies {
+    api project(':core:contracts')
+    api project(':core:net')
+    implementation 'com.squareup.okhttp3:okhttp:3.12.13'
+    testImplementation libs.junit
+    testImplementation 'org.json:json:20240303'
+    testImplementation 'net.sf.kxml:kxml2:2.3.0'
+}

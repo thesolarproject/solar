@@ -1,0 +1,12 @@
+plugins {
+    alias(libs.plugins.android.library)
+}
+apply from: "$rootDir/gradle/solar-android-library.gradle"
+android {
+    namespace 'com.solar.launcher.net'
+}
+dependencies {
+    implementation 'org.conscrypt:conscrypt-android:2.5.3'
+    implementation 'com.squareup.okhttp3:okhttp:3.12.13'
+    testImplementation libs.junit
+}

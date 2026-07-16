@@ -3,6 +3,8 @@ package com.solar.launcher;
 import android.content.Context;
 import android.content.SharedPreferences;
 
+import com.solar.launcher.feature.settings.RowKeys;
+
 /** Persisted music library browse preferences (artist split, filters, sort). */
 public final class LibraryBrowsePrefs {
     public static final int GUEST_BROWSE_AUTO = 0;

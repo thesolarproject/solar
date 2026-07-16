@@ -43,8 +43,20 @@ android {
 }
 
 dependencies {
+    implementation project(':core:contracts')
+    implementation project(':core:net')
+    implementation project(':core:keyboard')
+    implementation project(':core:theme')
+    implementation project(':core:ui')
+    implementation project(':core:playback')
+    implementation project(':core:library')
+    implementation project(':feature:home')
+    implementation project(':feature:apps')
+    implementation project(':feature:podcasts')
+    implementation project(':feature:reach')
+    implementation project(':feature:settings')
+    implementation project(':feature:storage')
     implementation 'org.conscrypt:conscrypt-android:2.5.3'
-    // ponytail: 3.12.x last branch for API 17; 3.13+ requires API 21 (Karewan gist)
     implementation 'com.squareup.okhttp3:okhttp:3.12.13'
     testImplementation libs.junit
     testImplementation 'org.json:json:20240303'
@@ -54,7 +66,30 @@ dependencies {
     androidTestImplementation 'androidx.test:core:1.5.0'
     androidTestImplementation 'androidx.test:rules:1.5.0'
 }
-// 파일 맨 밑에 추가: 최신 라이브러리 버전 체크 안전장치를 강제로 끄는 코드
 tasks.withType(com.android.build.gradle.internal.tasks.CheckAarMetadataTask).configureEach {
     enabled = false
 }
+
+// 2026-07-16: package helper APKs into assets/stage when sibling modules have been built.
+// First-run SolarDeviceStaging installs them with root — never Rockbox/JJ packages.
+tasks.register("packageStageHelpers") {
+    doLast {
+        def stageDir = file("src/main/assets/stage")
+        stageDir.mkdirs()
+        def pairs = [
+                [file("${rootProject.projectDir}/keyboard-app/build/outputs/apk/release/keyboard-app-release.apk"),
+                 new File(stageDir, "keyboard.apk")],
+                [file("${rootProject.projectDir}/quickmenu-app/build/outputs/apk/release/quickmenu-app-release.apk"),
+                 new File(stageDir, "quickmenu.apk")],
+        ]
+        pairs.each { src, dest ->
+            if (src.exists()) {
+                ant.copy(file: src, tofile: dest, overwrite: true)
+                logger.lifecycle("stage: ${src.name} -> assets/stage/${dest.name}")
+            } else {
+                logger.lifecycle("stage: skip missing ${src}")
+            }
+        }
+    }
+}
+tasks.named("preBuild").configure { dependsOn("packageStageHelpers") }

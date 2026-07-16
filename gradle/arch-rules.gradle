@@ -1,0 +1,22 @@
+// Enforce module dependency boundaries: feature:* may only depend on core:* (not :app).
+subprojects { sub ->
+    sub.afterEvaluate {
+        if (!sub.name.startsWith('feature')) return
+        sub.configurations.configureEach { cfg ->
+            cfg.dependencies.matching { dep ->
+                dep instanceof ProjectDependency && dep.dependencyProject.path == ':app'
+            }.all { dep ->
+                throw new GradleException(
+                        "Architecture violation: ${sub.path} must not depend on :app (${dep.name})")
+            }
+            cfg.dependencies.matching { dep ->
+                dep instanceof ProjectDependency && dep.dependencyProject.path.startsWith(':feature:')
+                        && dep.dependencyProject.path != sub.path
+                        && !(sub.path == ':feature:reach' && dep.dependencyProject.path == ':feature:podcasts')
+            }.all { dep ->
+                throw new GradleException(
+                        "Architecture violation: ${sub.path} must not depend on ${dep.dependencyProject.path}")
+            }
+        }
+    }
+}

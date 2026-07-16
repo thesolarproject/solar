@@ -1,0 +1,12 @@
+plugins {
+    alias(libs.plugins.android.library)
+}
+apply from: "$rootDir/gradle/solar-android-library.gradle"
+android {
+    namespace 'com.solar.launcher.playback'
+    buildFeatures { buildConfig false }
+}
+dependencies {
+    api project(':core:contracts')
+    testImplementation libs.junit
+}

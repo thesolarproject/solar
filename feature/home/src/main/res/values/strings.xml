@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="home_menu_now_playing">Now Playing</string>
+    <string name="home_menu_music">Music</string>
+    <string name="home_menu_bluetooth">Bluetooth</string>
+    <string name="home_menu_settings">Settings</string>
+    <string name="home_menu_fm">FM Radio</string>
+    <string name="home_menu_pc_upload">Wi‑Fi Transfer</string>
+    <string name="home_menu_podcasts">Podcasts</string>
+    <string name="home_menu_soulseek">Get Music</string>
+    <string name="home_menu_themes">Themes</string>
+    <string name="home_menu_more">More</string>
+    <string name="home_menu_videos">Videos</string>
+    <string name="home_menu_photos">Photos</string>
+    <string name="home_menu_audiobooks">Audiobooks</string>
+    <string name="home_menu_apps">Apps</string>
+</resources>

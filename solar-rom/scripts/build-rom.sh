@@ -14,6 +14,10 @@ WORK_DIR=""
 MOUNT_SYS=""
 MOUNT_USER=""
 SYSTEM_APK_NAME="com.solar.launcher.apk"
+KEYBOARD_APK_NAME="com.solar.keyboard.apk"
+QUICKMENU_APK_NAME="com.solar.quickmenu.apk"
+KEYBOARD_APK=""
+QUICKMENU_APK=""
 
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/solar-repo.sh"
@@ -24,6 +28,8 @@ usage: $0 <a|b|y2> (--apk PATH | [--solar-tag TAG] [--solar-apk-url URL]) [outpu
 
   a|b|y2              Y1 type A (2.0.0+), Y1 type B (pre-2.0.0), or Y2 ATA (MT6582)
   --apk PATH          Local signed app-release.apk (CI / local builds)
+  --keyboard-apk PATH Optional signed keyboard APK (default: beside launcher apk)
+  --quickmenu-apk PATH Optional signed quickmenu APK (default: beside launcher apk)
   --solar-tag         GitHub release tag on ${SOLAR_GITHUB_REPO} (default: latest)
   --solar-apk-url     Direct APK download URL (skips GitHub HTML lookup)
   output.zip          Output archive path
@@ -40,6 +46,16 @@ while [ "$#" -gt 0 ]; do
         --apk)
             SOLAR_APK="${2:-}"
             [ -n "$SOLAR_APK" ] || usage
+            shift 2
+            ;;
+        --keyboard-apk)
+            KEYBOARD_APK="${2:-}"
+            [ -n "$KEYBOARD_APK" ] || usage
+            shift 2
+            ;;
+        --quickmenu-apk)
+            QUICKMENU_APK="${2:-}"
+            [ -n "$QUICKMENU_APK" ] || usage
             shift 2
             ;;
         --solar-tag)
@@ -319,6 +335,15 @@ else
     download_solar_apk "$STAGING_APK"
 fi
 
+if [ -z "$KEYBOARD_APK" ] && [ -n "$SOLAR_APK" ]; then
+    _dir=$(dirname "$SOLAR_APK")
+    [ -f "$_dir/keyboard-app-release.apk" ] && KEYBOARD_APK="$_dir/keyboard-app-release.apk"
+fi
+if [ -z "$QUICKMENU_APK" ] && [ -n "$SOLAR_APK" ]; then
+    _dir=$(dirname "$SOLAR_APK")
+    [ -f "$_dir/quickmenu-app-release.apk" ] && QUICKMENU_APK="$_dir/quickmenu-app-release.apk"
+fi
+
 echo "==> Downloading type-${TYPE} base firmware"
 curl -fsSL -o "$BASE_DIR/rom.zip" "$BASE_URL"
 unzip -q "$BASE_DIR/rom.zip" -d "$BASE_DIR"
@@ -368,6 +393,19 @@ sudo mkdir -p "$MOUNT_SYS/app" "$MOUNT_SYS/usr/keylayout"
 sudo cp "$STAGING_APK" "$MOUNT_SYS/app/$SYSTEM_APK_NAME"
 sudo chmod 644 "$MOUNT_SYS/app/$SYSTEM_APK_NAME"
 sudo chown root:root "$MOUNT_SYS/app/$SYSTEM_APK_NAME"
+
+if [ -n "$KEYBOARD_APK" ] && [ -f "$KEYBOARD_APK" ]; then
+    echo "==> Install $KEYBOARD_APK_NAME"
+    sudo cp "$KEYBOARD_APK" "$MOUNT_SYS/app/$KEYBOARD_APK_NAME"
+    sudo chmod 644 "$MOUNT_SYS/app/$KEYBOARD_APK_NAME"
+    sudo chown root:root "$MOUNT_SYS/app/$KEYBOARD_APK_NAME"
+fi
+if [ -n "$QUICKMENU_APK" ] && [ -f "$QUICKMENU_APK" ]; then
+    echo "==> Install $QUICKMENU_APK_NAME"
+    sudo cp "$QUICKMENU_APK" "$MOUNT_SYS/app/$QUICKMENU_APK_NAME"
+    sudo chmod 644 "$MOUNT_SYS/app/$QUICKMENU_APK_NAME"
+    sudo chown root:root "$MOUNT_SYS/app/$QUICKMENU_APK_NAME"
+fi
 
 echo "==> Install TLS prep (Conscrypt JNI + modern CA roots)"
 TLS_STAGE="$WORK_DIR/system-tls"

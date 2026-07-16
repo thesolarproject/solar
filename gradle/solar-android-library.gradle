@@ -1,0 +1,13 @@
+// Shared Android library defaults for Solar core/feature modules.
+android {
+    compileSdk 35
+
+    defaultConfig {
+        minSdk 17
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}

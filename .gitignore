@@ -14,7 +14,13 @@
 .cxx
 local.properties
 /reference/
-/.cursor
+# Cursor — track rule stubs, ignore local secrets and debug logs
+/.cursor/*
+!/.cursor/rules/
+/.cursor/rules/*
+!/.cursor/rules/*.mdc
+/.cursor/rules/local/
+/.cursor/debug*.log
 # Local dev / adb / emulator scripts (not used by CI — see .github/workflows/build-release.yml)
 /scripts/audit_strings.sh
 /scripts/clean_install_system.sh
@@ -32,6 +38,9 @@ local.properties
 # Stray docs / screenshots at repo root
 /docs/
 /*.md
+!AGENTS.md
+!CLAUDE.md
+!GEMINI.md
 !solar-rom/README.md
 *.logcat
 Screenshot_*.png

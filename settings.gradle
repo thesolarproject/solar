@@ -21,3 +21,18 @@ dependencyResolutionManagement {
 
 rootProject.name = "Solar"
 include ':app'
+include ':core:contracts'
+include ':core:net'
+include ':core:keyboard'
+include ':core:theme'
+include ':core:ui'
+include ':core:playback'
+include ':core:library'
+include ':feature:home'
+include ':feature:apps'
+include ':feature:podcasts'
+include ':feature:reach'
+include ':feature:settings'
+include ':feature:storage'
+include ':keyboard-app'
+include ':quickmenu-app'
