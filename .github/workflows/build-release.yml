@@ -15,10 +15,19 @@ concurrency:
   group: solar-release-${{ github.ref }}
   cancel-in-progress: true
 
+# APK + OTA publish runs first and is independent of ROM packing.
+# ROM failure must not block a successful OTA on thesolarproject/solar-update.
+
 jobs:
-  release:
+  apk-ota:
+    name: APK build · GitHub release · OTA catalog
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 45
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version_name: ${{ steps.meta.outputs.version_name }}
+      version_code: ${{ steps.meta.outputs.version_code }}
+      short_sha: ${{ steps.meta.outputs.short_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,6 +46,18 @@ jobs:
           python3 solar-rom/scripts/resolve-release-version.py --self-test
           ./solar-rom/scripts/prepare-release.sh
 
+      - name: Verify OTA PAT can push to solar-update
+        env:
+          SOLAR_GITHUB_PAT: ${{ secrets.SOLAR_GITHUB_PAT }}
+        run: |
+          if [ -z "$SOLAR_GITHUB_PAT" ]; then
+            echo "::error::SOLAR_GITHUB_PAT secret is missing — OTA publish requires repo write to thesolarproject/solar-update"
+            exit 1
+          fi
+          curl -fsSIL -H "Authorization: token $SOLAR_GITHUB_PAT" \
+            -o /dev/null "https://api.github.com/repos/thesolarproject/solar-update"
+          echo "OTA PAT can reach solar-update"
+
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
@@ -50,20 +71,6 @@ jobs:
         run: |
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-
-      - name: Install ROM build dependencies
-        run: |
-          sudo apt-get update && sudo apt-get install -y unzip zip e2fsprogs curl util-linux kmod openssl android-sdk-libsparse-utils
-          sudo modprobe loop || true
-
-      - name: Verify ROM base firmware URLs
-        run: |
-          # Solar ROM bases are y1-community ATA firmware — never rockbox-y1 type-a/b bases.
-          curl -fsSIL -o /dev/null "https://github.com/y1-community/y1-ata-rom/releases/download/0.1/rom.zip"
-          curl -fsSIL -o /dev/null "https://github.com/y1-community/y1-ata-rom/releases/download/0.1/rom_type_b.zip"
-          curl -fsSIL -o /dev/null "https://github.com/y1-community/y2-ata-rom/releases/download/y2-ata/rom_y2.zip"
-          curl -fsSIL -o /dev/null "https://github.com/y1-community/a5-ata-rom/releases/download/0.1/rom_a5.zip"
-          echo "ROM base sources OK (y1-ata-rom A/B, y2-ata-rom, a5-ata-rom)"
 
       - name: Decode platform signing keys
         env:
@@ -88,52 +95,36 @@ jobs:
         run: |
           chmod +x gradlew scripts/build.sh
           ./scripts/build.sh
+          test -f app/build/outputs/apk/release/app-release.apk
 
-      - name: Build ROM images
-        env:
-          SOLAR_GITHUB_REPO: thesolarproject/solar
+      - name: Prepare release notes (APK-first)
         run: |
-          APK="$GITHUB_WORKSPACE/app/build/outputs/apk/release/app-release.apk"
-          test -f "$APK"
-          mkdir -p dist
-          chmod +x solar-rom/scripts/build-rom.sh
-          ./solar-rom/scripts/build-rom.sh a --apk "$APK" "$GITHUB_WORKSPACE/dist/rom.zip"
-          ./solar-rom/scripts/build-rom.sh b --apk "$APK" "$GITHUB_WORKSPACE/dist/rom_type_b.zip"
-          ./solar-rom/scripts/build-rom.sh y2 --apk "$APK" "$GITHUB_WORKSPACE/dist/rom_y2.zip"
-          ./solar-rom/scripts/build-rom.sh a5 --apk "$APK" "$GITHUB_WORKSPACE/dist/rom_a5.zip"
-          ls -la dist/
-          for z in dist/rom.zip dist/rom_type_b.zip dist/rom_y2.zip dist/rom_a5.zip; do
-            test -s "$z" || { echo "::error::Missing or empty $z"; exit 1; }
-          done
-          unzip -l dist/rom.zip | grep -q MT6572_Android_scatter.txt
-          unzip -l dist/rom_type_b.zip | grep -q MT6572_Android_scatter.txt
-          unzip -l dist/rom_y2.zip | grep -q MT6582_Android_scatter.txt
-          unzip -l dist/rom_a5.zip | grep -q MT6572_Android_scatter.txt
-          echo "All four ROM zips built and verified (Y1 A/B + Y2 + A5, y1-community ATA bases)"
+          chmod +x solar-rom/scripts/format-release-notes.sh
+          ./solar-rom/scripts/format-release-notes.sh release.json > RELEASE_NOTES.md
+          {
+            echo ""
+            echo "## Pipeline"
+            echo ""
+            echo "- APK + OTA published before ROM packing (ROMs attach when the rom job succeeds)."
+          } >> RELEASE_NOTES.md
 
-      - name: Prepare release notes
-        run: ./solar-rom/scripts/format-release-notes.sh release.json > RELEASE_NOTES.md
-
-      - name: Create GitHub release
+      - name: Create GitHub release (APK)
         uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           name: Solar ${{ steps.meta.outputs.version_name }} (${{ steps.meta.outputs.short_sha }})
           body_path: RELEASE_NOTES.md
           files: |
             app/build/outputs/apk/release/app-release.apk
-            dist/rom.zip
-            dist/rom_type_b.zip
-            dist/rom_y2.zip
-            dist/rom_a5.zip
           fail_on_unmatched_files: true
           make_latest: ${{ github.ref == 'refs/heads/main' }}
           prerelease: ${{ github.ref == 'refs/heads/nightly' }}
           generate_release_notes: false
 
-      - name: Publish OTA catalog
+      - name: Publish OTA catalog to solar-update
         env:
           SOLAR_GITHUB_PAT: ${{ secrets.SOLAR_GITHUB_PAT }}
         run: |
@@ -146,6 +137,14 @@ jobs:
             --version-name "${{ steps.meta.outputs.version_name }}" \
             --version-code "${{ steps.meta.outputs.version_code }}" \
             $([ "$NIGHTLY" = true ] && echo --nightly)
+          echo "OTA published to thesolarproject/solar-update (independent of ROM job)"
+
+      - name: Upload signed APK for ROM job
+        uses: actions/upload-artifact@v4
+        with:
+          name: solar-release-apk
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
 
       - name: Bump stable version for next release
         if: github.ref == 'refs/heads/main'
@@ -188,3 +187,71 @@ jobs:
       - name: Remove signing keys
         if: always()
         run: rm -rf .ci-keys
+
+  roms:
+    name: Pack ROMs · attach to release
+    needs: apk-ota
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    # Continues only after successful APK/OTA; failure here does not undo OTA.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download signed APK from apk-ota job
+        uses: actions/download-artifact@v4
+        with:
+          name: solar-release-apk
+          path: app/build/outputs/apk/release
+
+      - name: Install ROM build dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y unzip zip e2fsprogs curl util-linux kmod openssl android-sdk-libsparse-utils
+          sudo modprobe loop || true
+
+      - name: Verify ROM base firmware URLs
+        run: |
+          # y1-community ATA bases only — never rockbox-y1 type-a/b as Solar base.
+          curl -fsSIL -o /dev/null "https://github.com/y1-community/y1-ata-rom/releases/download/0.1/rom.zip"
+          curl -fsSIL -o /dev/null "https://github.com/y1-community/y1-ata-rom/releases/download/0.1/rom_type_b.zip"
+          curl -fsSIL -o /dev/null "https://github.com/y1-community/y2-ata-rom/releases/download/y2-ata/rom_y2.zip"
+          curl -fsSIL -o /dev/null "https://github.com/y1-community/a5-ata-rom/releases/download/0.1/rom_a5.zip"
+          echo "ROM base sources OK (y1-ata-rom A/B, y2-ata-rom, a5-ata-rom)"
+
+      - name: Build ROM images
+        env:
+          SOLAR_GITHUB_REPO: thesolarproject/solar
+        run: |
+          APK="$GITHUB_WORKSPACE/app/build/outputs/apk/release/app-release.apk"
+          test -f "$APK"
+          mkdir -p dist
+          chmod +x solar-rom/scripts/build-rom.sh
+          ./solar-rom/scripts/build-rom.sh a --apk "$APK" "$GITHUB_WORKSPACE/dist/rom.zip"
+          ./solar-rom/scripts/build-rom.sh b --apk "$APK" "$GITHUB_WORKSPACE/dist/rom_type_b.zip"
+          ./solar-rom/scripts/build-rom.sh y2 --apk "$APK" "$GITHUB_WORKSPACE/dist/rom_y2.zip"
+          ./solar-rom/scripts/build-rom.sh a5 --apk "$APK" "$GITHUB_WORKSPACE/dist/rom_a5.zip"
+          ls -la dist/
+          for z in dist/rom.zip dist/rom_type_b.zip dist/rom_y2.zip dist/rom_a5.zip; do
+            test -s "$z" || { echo "::error::Missing or empty $z"; exit 1; }
+          done
+          unzip -l dist/rom.zip | grep -q MT6572_Android_scatter.txt
+          unzip -l dist/rom_type_b.zip | grep -q MT6572_Android_scatter.txt
+          unzip -l dist/rom_y2.zip | grep -q MT6582_Android_scatter.txt
+          unzip -l dist/rom_a5.zip | grep -q MT6572_Android_scatter.txt
+          echo "All four ROM zips built and verified"
+
+      - name: Attach ROMs to existing GitHub release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ needs.apk-ota.outputs.tag }}
+          files: |
+            dist/rom.zip
+            dist/rom_type_b.zip
+            dist/rom_y2.zip
+            dist/rom_a5.zip
+          fail_on_unmatched_files: true
+          # Append only; do not rewrite release body from APK job
+          append_body: false

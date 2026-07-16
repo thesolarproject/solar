@@ -116,7 +116,8 @@ public class SolarWebServer extends Thread {
                     if (files != null) {
                         for (File f : files) {
                             if (f.isDirectory()) {
-                                foldersHtml.append("<option value=\"").append(f.getName()).append("\">📁 ").append(f.getName()).append("</option>");
+                                foldersHtml.append("<option value=\"").append(f.getName()).append("\">")
+                                        .append(f.getName()).append("</option>");
                             }
                         }
                     }
@@ -125,10 +126,10 @@ public class SolarWebServer extends Thread {
                             "<title>Solar Music Server</title><style>" +
                             "body{font-family:sans-serif; background:#111; color:#fff; padding:20px; text-align:center;} " +
                             "input, select, button{font-size:16px; padding:10px; margin:5px 0; width:100%; max-width:400px; box-sizing:border-box;} " +
-                            "button{background:#00ffff; color:#000; border:none; font-weight:bold; cursor:pointer;} " +
-                            ".box{background:#222; padding:20px; border-radius:10px; margin:10px auto; max-width:400px;}" +
-                            "a{color:#0ff;}</style></head><body>" +
-                            "<h2>🎧 Solar Wireless Upload</h2>" +
+                            "button{background:#e8e4dc; color:#111; border:none; font-weight:600; cursor:pointer;} " +
+                            ".box{background:#1a1a1a; padding:20px; border-radius:8px; margin:10px auto; max-width:400px; border:1px solid #333;}" +
+                            "a{color:#c4b8a0;}</style></head><body>" +
+                            "<h2>Solar Wireless Upload</h2>" +
                             "<div class='box'><h3>1. Create Folder</h3>" +
                             "<input type='text' id='fName' placeholder='e.g., Pop, Jazz'>" +
                             "<button onclick='createFolder()'>Create</button></div>" +
@@ -136,9 +137,9 @@ public class SolarWebServer extends Thread {
                             "<select id='tFolder'>" + foldersHtml.toString() + "</select>" +
                             "<input type='file' id='fInput' multiple accept='.mp3,.flac,.wav,.ogg,.m4a,.aac,.ape,.wma,.jpg,.png'>" +
                             "<button onclick='uploadAll()'>Upload All</button>" +
-                            "<div id='status' style='margin-top:10px; color:#0f0;'></div></div>" +
+                            "<div id='status' style='margin-top:10px; color:#9c9;'></div></div>" +
                             "<div class='box'><h3>3. Scrobbling</h3>" +
-                            "<p style='color:#aaa;font-size:14px;margin:0 0 8px'>Configure Last.fm &amp; ListenBrainz from your PC (same as Settings → Scrobbling).</p>" +
+                            "<p style='color:#888;font-size:14px;margin:0 0 8px'>Configure Last.fm &amp; ListenBrainz from your PC (same as Settings → Scrobbling).</p>" +
                             "<p><a href='/scrobbling'>Last.fm / ListenBrainz setup →</a></p></div>" +
                             "<script>" +
                             "function createFolder() { " +
@@ -155,7 +156,7 @@ public class SolarWebServer extends Thread {
                             "    st.innerText = 'Uploading: ' + files[i].name + ' (' + (i+1) + '/' + files.length + ')'; " +
                             "    await fetch('/upload?folder=' + encodeURIComponent(folder) + '&name=' + encodeURIComponent(files[i].name), {method:'POST', body:files[i]}); " +
                             "  } " +
-                            "  st.innerText = '✅ All uploads completed!'; " +
+                            "  st.innerText = 'All uploads completed.'; " +
                             "}" +
                             "</script></body></html>";
 
@@ -330,9 +331,9 @@ public class SolarWebServer extends Thread {
                     "a{color:#0ff;}" +
                     "code{background:#333;padding:2px 6px;border-radius:3px;font-size:12px;}" +
                     "</style></head><body>" +
-                    "<h2>🎵 Scrobbling</h2>" +
+                    "<h2>Scrobbling</h2>" +
                     msgHtml +
-                    "<p style='color:#aaa;font-size:14px;max-width:480px;margin:0 auto 12px'>" +
+                    "<p style='color:#888;font-size:14px;max-width:480px;margin:0 auto 12px'>" +
                     "Same preferences as <b>Settings → Scrobbling</b> on the device. " +
                     "Leave password/token blank to keep the value already stored on the player.</p>" +
                     "<form method='POST' action='/scrobbling' class='box'>" +
