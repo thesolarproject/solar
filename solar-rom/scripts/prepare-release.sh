@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Emit release tag and metadata for CI — version is sequential from latest git release tag.
+# 2026-07-05 — Emits release tag/metadata for CI; version from SOURCE_DATE_EPOCH build-start time.
+# APK/ROM parity: versionName must match OTA publish tag (YYYYMMDD-HHMM or nightly-…) and About UI.
+# When changing: resolve-release-version.py; sync-gradle-version.sh; publish-ota-updates.sh tag shape.
+# Reversal: revert to git-commit-based versioning; OTA tags drift from APK About screen.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,6 +36,12 @@ BRANCH="${GITHUB_REF_NAME:-$(git -C "$REPO_ROOT" branch --show-current 2>/dev/nu
 SHORT_SHA="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
 [ "$BRANCH" = "nightly" ] || [ "$BRANCH" = "main" ] || die "releases only from main or nightly (branch: ${BRANCH:-unknown})"
+
+# ponytail: same commit on main/nightly gets identical YYYYMMDD-HHMM (only nightly- prefix differs).
+if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
+    SOURCE_DATE_EPOCH="$(date -u +%s)"
+    export SOURCE_DATE_EPOCH
+fi
 
 echo "== Resolve release version from git tags (branch: $BRANCH) =="
 eval "$(python3 "$RESOLVE" "$BRANCH" "$GRADLE")"

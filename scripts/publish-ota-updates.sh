@@ -34,30 +34,51 @@ out_dir, base = sys.argv[1], sys.argv[2]
 if not base.endswith("/"):
     base += "/"
 
+# Tag shapes: YYYYMMDD-HHMM (main), nightly-YYYYMMDD-HHMM, legacy nightly-N / vX.Y
+TS_RE = re.compile(r"^(?:nightly-)?(\d{8}-\d{4})$")
+LEGACY_NIGHTLY_RE = re.compile(r"^nightly-(\d+)$")
+SEMVER_RE = re.compile(r"^v(\d+\.\d+(?:\.\d+)?)$")
+
+def version_code_for_tag(tag: str) -> int:
+    m = TS_RE.match(tag)
+    if m:
+        body = m.group(1)
+        y, mo, d = int(body[0:4]), int(body[4:6]), int(body[6:8])
+        hh, mm = int(body[9:11]), int(body[11:13])
+        from datetime import datetime, timezone
+        dt = datetime(y, mo, d, hh, mm, tzinfo=timezone.utc)
+        epoch = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        return int((dt - epoch).total_seconds() // 60)
+    m = LEGACY_NIGHTLY_RE.match(tag)
+    if m:
+        return int(m.group(1))
+    return 0
+
 entries = []
 for path in sorted(glob.glob(os.path.join(out_dir, "solar-*.apk"))):
     name = os.path.basename(path)
-    m = re.match(r"solar-(v[\d.]+|nightly-\d+)\.apk$", name)
+    m = re.match(r"solar-(.+)\.apk$", name)
     if not m:
         continue
     tag = m.group(1)
+    if not (TS_RE.match(tag) or LEGACY_NIGHTLY_RE.match(tag) or SEMVER_RE.match(tag)):
+        continue
     nightly = tag.startswith("nightly-")
-    if nightly:
-        version_name = tag
-        version_code = int(tag.split("-", 1)[1])
-    else:
+    if SEMVER_RE.match(tag):
         version_name = tag[1:]
-        version_code = 0
+    else:
+        version_name = tag
+    version_code = version_code_for_tag(tag)
     entries.append((tag, version_name, version_code, nightly, name))
 
 def sort_key(item):
     tag, version_name, version_code, nightly, _ = item
-    if nightly:
-        return (0, version_code)
+    if nightly or TS_RE.match(tag):
+        return (0 if nightly else 1, version_code)
     parts = [int(x) for x in version_name.split(".") if x.isdigit()]
     while len(parts) < 3:
         parts.append(0)
-    return (1, tuple(parts))
+    return (2, tuple(parts))
 
 entries.sort(key=sort_key, reverse=True)
 

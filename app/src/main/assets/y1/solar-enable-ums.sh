@@ -180,28 +180,58 @@ block_for_volume() {
 }
 
 # Bind a block device to the first free mass-storage LUN sysfs node.
+# Y1 has lun (→lun0) + lun1; vdc share often does NOT write these — sysfs bind required.
 bind_block_to_lun() {
   blk="$1"
   for lun in \
       /sys/class/android_usb/android0/f_mass_storage/lun/file \
       /sys/class/android_usb/android0/f_mass_storage/lun0/file \
-      /sys/class/android_usb/android0/f_mass_storage/lun1/file; do
-    if [ -w "$lun" ]; then
+      /sys/class/android_usb/android0/f_mass_storage/lun1/file \
+      /sys/devices/platform/mt_usb/gadget/lun0/file \
+      /sys/devices/platform/mt_usb/gadget/lun1/file; do
+    if [ -e "$lun" ]; then
       cur="$(cat "$lun" 2>/dev/null)"
       if [ -n "$cur" ]; then
+        # Already bound to this block — count as success.
+        [ "$cur" = "$blk" ] && return 0
         continue
       fi
-      echo "$blk" >"$lun" 2>/dev/null && return 0
+      if echo "$blk" >"$lun" 2>/dev/null; then
+        # Verify write stuck (lun1 may be root-only on some builds).
+        got="$(cat "$lun" 2>/dev/null)"
+        [ "$got" = "$blk" ] && return 0
+      fi
     fi
   done
   return 1
 }
 
+# Count how many LUN file nodes currently have a backing path.
+count_bound_luns() {
+  n=0
+  for lun in \
+      /sys/class/android_usb/android0/f_mass_storage/lun/file \
+      /sys/class/android_usb/android0/f_mass_storage/lun1/file \
+      /sys/devices/platform/mt_usb/gadget/lun0/file \
+      /sys/devices/platform/mt_usb/gadget/lun1/file; do
+    if [ -r "$lun" ]; then
+      cur="$(cat "$lun" 2>/dev/null)"
+      if [ -n "$cur" ]; then
+        n=$((n + 1))
+      fi
+    fi
+  done
+  # de-dupe alias paths (lun vs lun0) — max 2 meaningful
+  [ "$n" -gt 2 ] && n=2
+  echo "$n"
+}
+
 # Share every export volume through vold once kernel is on mass_storage.
+# On Y1 API17, vdc often reports success but leaves lun/file empty — always follow with sysfs bind.
 share_all_volumes() {
   for vol in $VOLS; do
     vdc volume share "$vol" ums 2>/dev/null
-    sleep 1
+    sleep 0.5
   done
 }
 
@@ -225,18 +255,30 @@ wait_lun_bound() {
   return 1
 }
 
-# Direct LUN bind when vdc share never populated lun/file (Y1 API17 fallback).
-bind_fallback() {
+# Bind EVERY export volume to a free LUN (do not stop after the first).
+# 2026-07-16 — Y1 root cause: bind_fallback returned after first LUN so MicroSD never exported.
+bind_all_volumes_to_luns() {
+  bound=0
   for vol in $VOLS; do
     blk="$(block_for_volume "$vol")"
-    if [ -n "$blk" ] && bind_block_to_lun "$blk"; then
-      sleep 1
-      if wait_lun_bound; then
-        return 0
-      fi
+    if [ -z "$blk" ]; then
+      echo "UMS skip $vol (no block device)" >&2
+      continue
+    fi
+    if bind_block_to_lun "$blk"; then
+      bound=$((bound + 1))
+      echo "UMS bound $vol -> $blk"
+      sleep 0.3
+    else
+      echo "UMS bind failed $vol ($blk)" >&2
     fi
   done
-  return 1
+  [ "$bound" -gt 0 ]
+}
+
+# Direct LUN bind when vdc share never populated lun/file (Y1 API17 fallback).
+bind_fallback() {
+  bind_all_volumes_to_luns
 }
 
 # Resolve Solar APK for app_process — pm/data first; stale /system copy last (2026-07-05).
@@ -328,7 +370,9 @@ enable_y2_ums_enabler() {
   return 1
 }
 
-# Y1 / fallback: setprop sync + vdc share + sysfs bind fallback.
+# Y1 / fallback: setprop + vdc share + ALWAYS sysfs multi-LUN bind.
+# 2026-07-16 — vdc "success" often leaves lun/file empty; never treat vdc-only as done.
+# Only call this after the user confirms "Turn on USB Storage" (never on bare cable plug).
 enable_setprop_vdc() {
   dbg_705932 "solar-enable-ums.enable_setprop_vdc" "start" "H3" "\"model\":\"$MODEL\""
   recover_desync
@@ -338,12 +382,12 @@ enable_setprop_vdc() {
     return 2
   fi
   share_all_volumes
-  if wait_lun_bound; then
-    dbg_705932 "solar-enable-ums.enable_setprop_vdc" "ok" "H3" "\"model\":\"$MODEL\""
-    return 0
-  fi
-  if bind_fallback; then
-    dbg_705932 "solar-enable-ums.enable_setprop_vdc" "ok bind_fallback" "H3" "\"model\":\"$MODEL\""
+  # Always bind every volume to free LUNs (internal + MicroSD). Early return after first
+  # LUN was why PCs only saw Internal Storage.
+  if bind_all_volumes_to_luns && wait_lun_bound; then
+    n="$(count_bound_luns)"
+    echo "UMS multi-LUN bound count=$n vols=$VOLS"
+    dbg_705932 "solar-enable-ums.enable_setprop_vdc" "ok multi_bind" "H3" "\"bound\":$n"
     return 0
   fi
   dbg_705932 "solar-enable-ums.enable_setprop_vdc" "fail" "H3" "\"model\":\"$MODEL\""

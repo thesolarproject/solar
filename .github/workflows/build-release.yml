@@ -33,16 +33,21 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Record build start time (UTC)
+        run: echo "SOURCE_DATE_EPOCH=$(date -u +%s)" >> "$GITHUB_ENV"
+
       - name: Prepare release metadata
         id: meta
         env:
           GITHUB_REF_NAME: ${{ github.ref_name }}
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
+          SOURCE_DATE_EPOCH: ${{ env.SOURCE_DATE_EPOCH }}
         run: |
           chmod +x solar-rom/scripts/prepare-release.sh \
             solar-rom/scripts/bump-stable-version.sh \
             solar-rom/scripts/bump-nightly-version.sh \
             solar-rom/scripts/resolve-release-version.py
+          # Timestamp tags: YYYYMMDD-HHMM / nightly-YYYYMMDD-HHMM (not sequential nightly-N).
           python3 solar-rom/scripts/resolve-release-version.py --self-test
           ./solar-rom/scripts/prepare-release.sh
 

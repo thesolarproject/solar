@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# After a nightly release: bump app/build.gradle to the next nightly-N for local dev.
+# After a nightly release: bump app/build.gradle to the next nightly timestamp for local dev.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -11,6 +11,7 @@ GRADLE="$REPO_ROOT/app/build.gradle"
 python3 - "$GRADLE" <<'PY'
 import re
 import sys
+from datetime import datetime, timezone
 
 path = sys.argv[1]
 text = open(path, encoding="utf-8").read()
@@ -22,12 +23,10 @@ if not name_m or not code_m:
 name = name_m.group(1)
 code = int(code_m.group(1))
 if name.startswith("nightly-"):
-    try:
-        n = int(name.split("-", 1)[1])
-    except ValueError:
-        n = code
-    next_name = f"nightly-{n + 1}"
-    next_code = n + 1
+    dt = datetime.now(timezone.utc)
+    next_name = dt.strftime("nightly-%Y%m%d-%H%M")
+    epoch = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    next_code = max(code, int((dt - epoch).total_seconds() // 60))
 else:
     next_name = name
     next_code = code + 1
