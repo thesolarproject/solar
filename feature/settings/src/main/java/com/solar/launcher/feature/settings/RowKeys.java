@@ -22,6 +22,8 @@ public final class RowKeys {
     public static final String FULL_WIDTH = "settings.full_width";
     public static final String POWER_OFF = "settings.power_off";
     public static final String WEB_SERVER = "settings.web_server";
+    public static final String USB = "settings.usb";
+    public static final String USB_AUTO_CONNECT = "settings.usb_auto_connect";
     public static final String WIFI_SETUP = "settings.wifi_setup";
     public static final String SOULSEEK = "settings.soulseek";
     public static final String AUTO_FETCH = "settings.auto_fetch";

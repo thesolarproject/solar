@@ -152,6 +152,8 @@ public class MainActivity extends Activity {
     static final int STATE_SOULSEEK = 12;
     static final int STATE_APPS = 13;
     static final int STATE_MORE = 14;
+    /** Sticky full-screen USB mass-storage lock (eject instructions). */
+    static final int STATE_USB_STORAGE = 25;
     private static final int KEYBOARD_WIFI = 0;
     private static final int KEYBOARD_SOULSEEK_USER = 1;
     private static final int KEYBOARD_SOULSEEK_PASS = 2;
@@ -793,6 +795,36 @@ public class MainActivity extends Activity {
     private SolarWebServer webServer;
     private com.solar.launcher.scrobble.ScrobbleSettingsHost scrobbleSettingsHost;
     private String lastScrobbleIdentity = "";
+
+    // ── USB mass storage (consent + sticky lock screen) ─────────────────────
+    private boolean usbMassStorageLocked = false;
+    private boolean usbDialogShownThisConnection = false;
+    private boolean usbDialogDismissedThisConnection = false;
+    private boolean usbHostConnected = false;
+    private int usbReturnScreen = STATE_MENU;
+    private boolean cachedUmsExported = false;
+    private long lastUmsProbeMs = 0L;
+    private static final long UMS_PROBE_MIN_MS = 1500L;
+    private final Runnable usbStickyLockWatchdog = new Runnable() {
+        @Override
+        public void run() {
+            if (!usbMassStorageLocked) return;
+            // Re-assert sticky eject screen if something stole focus / left the state.
+            if (currentScreenState != STATE_USB_STORAGE) {
+                applyScreenChange(STATE_USB_STORAGE);
+            } else {
+                buildUsbStorageUI();
+            }
+            // Drop lock only when LUN gone and host gone (or user session cleared).
+            boolean exported = UsbMassStorageController.isMassStorageExported();
+            cachedUmsExported = exported;
+            if (!exported && !usbHostConnected && !UsbMassStorageController.isUserSessionActive()) {
+                exitUsbMassStorageLock("watchdog");
+                return;
+            }
+            clockHandler.postDelayed(this, 800);
+        }
+    };
     private boolean isServerRunning = false;
 
     private Handler clockHandler = new Handler();
@@ -975,6 +1007,12 @@ public class MainActivity extends Activity {
             } else if (Intent.ACTION_SCREEN_ON.equals(action)) {
                 isScreenSleeping = false;
                 lastScreenOnTime = System.currentTimeMillis();
+                if (usbMassStorageLocked) {
+                    clockHandler.removeCallbacks(usbStickyLockWatchdog);
+                    clockHandler.post(usbStickyLockWatchdog);
+                }
+            } else if ("android.hardware.usb.action.USB_STATE".equals(action)) {
+                onUsbStateIntent(intent);
             } else if (Intent.ACTION_BATTERY_CHANGED.equals(action)) {
                 updateBatteryUi(intent);
             } else if (Intent.ACTION_HEADSET_PLUG.equals(action)) {
@@ -1693,6 +1731,7 @@ public class MainActivity extends Activity {
         filter.addAction(WifiManager.RSSI_CHANGED_ACTION);
         filter.addAction(Intent.ACTION_SCREEN_OFF);
         filter.addAction(Intent.ACTION_SCREEN_ON);
+        filter.addAction("android.hardware.usb.action.USB_STATE");
         filter.setPriority(IntentFilter.SYSTEM_HIGH_PRIORITY);
         registerReceiver(systemStatusReceiver, filter);
 
@@ -4777,6 +4816,7 @@ public class MainActivity extends Activity {
             case STATE_WIFI_KEYBOARD: return getKeyboardStatusBarTitle();
             case STATE_BRIGHTNESS: return getString(R.string.status_brightness);
             case STATE_STORAGE: return getString(R.string.status_storage);
+            case STATE_USB_STORAGE: return getString(R.string.usb_storage_mode_title);
             case STATE_WEBSERVER: return getString(R.string.status_pc_upload);
             case STATE_PODCASTS: return getString(R.string.status_podcasts);
             case STATE_SOULSEEK: return getString(R.string.status_soulseek);
@@ -4865,6 +4905,13 @@ public class MainActivity extends Activity {
 
     void changeScreen(int state) {
         if (otaSystemReplaceInProgress) return;
+        // Sticky USB storage mode — block all navigation until eject/unplug or Turn Off.
+        if (isUsbMassStorageUiLocked() && state != STATE_USB_STORAGE) {
+            if (currentScreenState != STATE_USB_STORAGE) {
+                applyScreenChange(STATE_USB_STORAGE);
+            }
+            return;
+        }
         dismissThemedContextMenu();
         hideFastScrollLetter();
         if (currentScreenState == STATE_SOULSEEK && state != STATE_SOULSEEK && shouldConfirmReachDownloadLeave(state)) {
@@ -4921,16 +4968,23 @@ public class MainActivity extends Activity {
         }
         currentScreenState = state;
         updateSoulseekSharePolicy();
-        layoutMainMenu.setVisibility(state == STATE_MENU ? View.VISIBLE : View.GONE);
-        layoutBrowserMode.setVisibility((state == STATE_BROWSER || state == STATE_PODCASTS || state == STATE_SOULSEEK || state == STATE_APPS || state == STATE_MORE) ? View.VISIBLE : View.GONE);
-        layoutPlayerMode.setVisibility(state == STATE_PLAYER ? View.VISIBLE : View.GONE);
-        layoutSettingsMode.setVisibility(state == STATE_SETTINGS ? View.VISIBLE : View.GONE);
-        layoutBluetoothMode.setVisibility(state == STATE_BLUETOOTH ? View.VISIBLE : View.GONE);
-        layoutWifiMode.setVisibility(state == STATE_WIFI ? View.VISIBLE : View.GONE);
-        layoutWifiKeyboard.setVisibility(state == STATE_WIFI_KEYBOARD ? View.VISIBLE : View.GONE);
-        layoutBrightnessMode.setVisibility(state == STATE_BRIGHTNESS ? View.VISIBLE : View.GONE);
-        layoutStorageMode.setVisibility(state == STATE_STORAGE ? View.VISIBLE : View.GONE);
-        layoutWebServerMode.setVisibility(state == STATE_WEBSERVER ? View.VISIBLE : View.GONE);
+        boolean usbLock = state == STATE_USB_STORAGE;
+        layoutMainMenu.setVisibility(state == STATE_MENU && !usbLock ? View.VISIBLE : View.GONE);
+        layoutBrowserMode.setVisibility((!usbLock && (state == STATE_BROWSER || state == STATE_PODCASTS
+                || state == STATE_SOULSEEK || state == STATE_APPS || state == STATE_MORE
+                || state == STATE_USB_STORAGE)) ? View.VISIBLE : View.GONE);
+        // USB lock reuses browser host for the sticky eject notice.
+        if (usbLock) {
+            layoutBrowserMode.setVisibility(View.VISIBLE);
+        }
+        layoutPlayerMode.setVisibility(state == STATE_PLAYER && !usbLock ? View.VISIBLE : View.GONE);
+        layoutSettingsMode.setVisibility(state == STATE_SETTINGS && !usbLock ? View.VISIBLE : View.GONE);
+        layoutBluetoothMode.setVisibility(state == STATE_BLUETOOTH && !usbLock ? View.VISIBLE : View.GONE);
+        layoutWifiMode.setVisibility(state == STATE_WIFI && !usbLock ? View.VISIBLE : View.GONE);
+        layoutWifiKeyboard.setVisibility(state == STATE_WIFI_KEYBOARD && !usbLock ? View.VISIBLE : View.GONE);
+        layoutBrightnessMode.setVisibility(state == STATE_BRIGHTNESS && !usbLock ? View.VISIBLE : View.GONE);
+        layoutStorageMode.setVisibility(state == STATE_STORAGE && !usbLock ? View.VISIBLE : View.GONE);
+        layoutWebServerMode.setVisibility(state == STATE_WEBSERVER && !usbLock ? View.VISIBLE : View.GONE);
         layoutVolumeOverlay.setVisibility(View.GONE);
         applyStatusBarTheme();
         if (state == STATE_MENU) {
@@ -5014,6 +5068,8 @@ public class MainActivity extends Activity {
             updateWebServerUI();
             refreshY1ThemedActionButtons();
             btnServerToggle.requestFocus();
+        } else if (state == STATE_USB_STORAGE) {
+            buildUsbStorageUI();
         }
         updateNetworkRescanLoop();
     }
@@ -7038,6 +7094,9 @@ public class MainActivity extends Activity {
             if (lfm) return "Last.fm";
             if (lb) return "ListenBrainz";
             return "Off";
+        }
+        if (RowKeys.USB_AUTO_CONNECT.equals(rowKey) || RowKeys.USB.equals(rowKey)) {
+            return stateOnOff(UsbStorageSessionFlags.isAutoConnectEnabled(this));
         }
         return "";
     }
@@ -10742,6 +10801,14 @@ public class MainActivity extends Activity {
 
     private void handleBackShortPress() {
         if (otaSystemReplaceInProgress) return;
+        // Sticky USB eject screen — back must not leave until unplug / UMS off.
+        if (isUsbMassStorageUiLocked()) {
+            if (currentScreenState != STATE_USB_STORAGE) {
+                applyScreenChange(STATE_USB_STORAGE);
+            }
+            Toast.makeText(this, R.string.usb_storage_disconnect_first, Toast.LENGTH_SHORT).show();
+            return;
+        }
         if (currentScreenState == STATE_WIFI_KEYBOARD) {
             if (keyboardReturnState == STATE_SETTINGS && keyboardReturnSettingsSubKey != null) {
                 restoreSettingsAfterSoulseekAccount();
@@ -11277,6 +11344,16 @@ public class MainActivity extends Activity {
         if (ConnectivityHelper.shouldShowMenuItem(this, HomeMenuConfig.ID_PC_UPLOAD)) {
             containerSettingsItems.addView(btnServerMenu);
         }
+
+        LinearLayout btnUsb = createSettingsRow(RowKeys.USB, R.string.settings_usb, true);
+        btnUsb.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildUsbSettingsUI();
+            }
+        });
+        containerSettingsItems.addView(btnUsb);
 
         LinearLayout btnScrobbling = createSettingsRow(RowKeys.SCROBBLING, R.string.settings_scrobbling, true);
         btnScrobbling.setOnClickListener(new View.OnClickListener() {
@@ -21306,5 +21383,311 @@ public class MainActivity extends Activity {
     void setStatusBarTitleExternal(String title) {
         browserStatusTitle = title;
         updateStatusBarTitle();
+    }
+
+    // ── USB mass storage: prompt, auto-connect, sticky eject screen ─────────
+
+    private boolean isUsbAutoConnectEnabled() {
+        return UsbStorageSessionFlags.isAutoConnectEnabled(this);
+    }
+
+    private boolean isUsbMassStorageActive() {
+        if (usbMassStorageLocked || currentScreenState == STATE_USB_STORAGE) return true;
+        if (UsbMassStorageController.isMassStorageExported()) return true;
+        return cachedUmsExported;
+    }
+
+    private boolean isUsbMassStorageUiLocked() {
+        return isUsbMassStorageActive();
+    }
+
+    private void onUsbStateIntent(Intent intent) {
+        if (intent == null) return;
+        boolean connected = intent.getBooleanExtra("connected", false);
+        boolean was = usbHostConnected;
+        usbHostConnected = connected;
+        if (connected && !was) {
+            usbDialogShownThisConnection = false;
+            usbDialogDismissedThisConnection = false;
+            onUsbHostConnected();
+        } else if (!connected && was) {
+            onUsbHostDisconnected();
+        } else if (connected && isUsbMassStorageActive()) {
+            // Stay sticky while host re-enums during enable.
+            enterUsbMassStorageLock();
+        }
+    }
+
+    private void onUsbHostConnected() {
+        // Never mount disks on bare connect unless Auto-Connect is on.
+        if (isUsbMassStorageActive() && UsbMassStorageController.isMassStorageExported()) {
+            enterUsbMassStorageLock();
+            return;
+        }
+        if (isUsbAutoConnectEnabled()) {
+            enableUsbMassStorageAutoConnect();
+            return;
+        }
+        if (usbDialogDismissedThisConnection || usbDialogShownThisConnection) return;
+        if (UsbStorageSessionFlags.isSuppressPrompt(this)) return;
+        if (!UsbMassStorageExperiment.isEnabled(this)) return;
+        usbDialogShownThisConnection = true;
+        showUsbMassStorageDialog();
+    }
+
+    private void onUsbHostDisconnected() {
+        if (UsbMassStorageController.shouldIgnoreDisconnectDisable()) {
+            // USB re-enum during enable — keep lock painted.
+            if (usbMassStorageLocked) enterUsbMassStorageLock();
+            return;
+        }
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                UsbMassStorageController.disableIfExported(MainActivity.this);
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        cachedUmsExported = false;
+                        exitUsbMassStorageLock("disconnect");
+                    }
+                });
+            }
+        }, "UsbDisconnect").start();
+    }
+
+    private void showUsbMassStorageDialog() {
+        if (usbDialogDismissedThisConnection) return;
+        if (themedContextMenu == null) {
+            // Fallback AlertDialog if context menu unavailable.
+            new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                    .setTitle(R.string.usb_connection_title)
+                    .setMessage(R.string.settings_preview_usb_auto_connect)
+                    .setPositiveButton(R.string.usb_mass_storage_turn_on,
+                            new DialogInterface.OnClickListener() {
+                                @Override
+                                public void onClick(DialogInterface d, int w) {
+                                    enableUsbMassStorageFromUser();
+                                }
+                            })
+                    .setNegativeButton(R.string.common_dismiss,
+                            new DialogInterface.OnClickListener() {
+                                @Override
+                                public void onClick(DialogInterface d, int w) {
+                                    usbDialogDismissedThisConnection = true;
+                                }
+                            })
+                    .setCancelable(true)
+                    .setOnCancelListener(new DialogInterface.OnCancelListener() {
+                        @Override
+                        public void onCancel(DialogInterface dialog) {
+                            usbDialogDismissedThisConnection = true;
+                        }
+                    })
+                    .show();
+            return;
+        }
+        java.util.ArrayList<String> labels = new java.util.ArrayList<String>();
+        java.util.ArrayList<String> states = new java.util.ArrayList<String>();
+        java.util.ArrayList<Boolean> headers = new java.util.ArrayList<Boolean>();
+        java.util.ArrayList<Runnable> actions = new java.util.ArrayList<Runnable>();
+
+        labels.add(getString(R.string.usb_connection_title));
+        states.add(null);
+        headers.add(Boolean.TRUE);
+        actions.add(null);
+
+        labels.add(getString(R.string.usb_mass_storage_turn_on));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+                enableUsbMassStorageFromUser();
+            }
+        });
+
+        labels.add(getString(R.string.common_dismiss));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                usbDialogDismissedThisConnection = true;
+                dismissThemedContextMenu();
+            }
+        });
+
+        if (!themedContextMenu.isShowing()) {
+            showThemedContextMenu();
+        }
+        contextMenuTierStack.clear();
+        contextMenuTierStack.addLast("root");
+        pushContextMenuTier("usb_storage");
+        showContextMenuTierInPlace(getString(R.string.usb_connection_title),
+                labels, states, headers, actions, true);
+    }
+
+    /** Settings auto-connect path — paint lock first, then enable UMS. */
+    private void enableUsbMassStorageAutoConnect() {
+        if (!isUsbAutoConnectEnabled()) return;
+        enterUsbMassStorageLock();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final boolean ok = UsbMassStorageController.enable(MainActivity.this, "auto.main");
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        cachedUmsExported = UsbMassStorageController.isMassStorageExported();
+                        if (!ok && !cachedUmsExported) {
+                            exitUsbMassStorageLock("auto_fail");
+                            Toast.makeText(MainActivity.this, R.string.usb_storage_enable_failed,
+                                    Toast.LENGTH_LONG).show();
+                        } else {
+                            enterUsbMassStorageLock();
+                        }
+                    }
+                });
+            }
+        }, "UsbAutoConnect").start();
+    }
+
+    /** User confirmed "Turn on USB storage". */
+    private void enableUsbMassStorageFromUser() {
+        usbDialogDismissedThisConnection = false;
+        enterUsbMassStorageLock();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final boolean ok = UsbMassStorageController.enable(MainActivity.this, "user.prompt");
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        cachedUmsExported = UsbMassStorageController.isMassStorageExported();
+                        if (!ok && !cachedUmsExported) {
+                            exitUsbMassStorageLock("user_fail");
+                            Toast.makeText(MainActivity.this, R.string.usb_storage_enable_failed,
+                                    Toast.LENGTH_LONG).show();
+                        } else {
+                            enterUsbMassStorageLock();
+                        }
+                    }
+                });
+            }
+        }, "UsbUserEnable").start();
+    }
+
+    /**
+     * Sticky full-screen eject UI. Stays until cable unplug clears UMS or session ends.
+     * No Turn Off button — user ejects from the PC (matches stock Y1 copy).
+     */
+    private void enterUsbMassStorageLock() {
+        if (!usbMassStorageLocked && currentScreenState != STATE_USB_STORAGE) {
+            usbReturnScreen = currentScreenState;
+            if (usbReturnScreen == STATE_USB_STORAGE) usbReturnScreen = STATE_MENU;
+        }
+        usbMassStorageLocked = true;
+        UsbMassStorageController.markUserSessionActive();
+        if (currentScreenState != STATE_USB_STORAGE) {
+            // Bypass changeScreen gate by calling apply directly.
+            applyScreenChange(STATE_USB_STORAGE);
+        } else {
+            buildUsbStorageUI();
+        }
+        clockHandler.removeCallbacks(usbStickyLockWatchdog);
+        clockHandler.postDelayed(usbStickyLockWatchdog, 800);
+    }
+
+    private void exitUsbMassStorageLock(String reason) {
+        clockHandler.removeCallbacks(usbStickyLockWatchdog);
+        boolean was = usbMassStorageLocked || currentScreenState == STATE_USB_STORAGE;
+        usbMassStorageLocked = false;
+        cachedUmsExported = false;
+        UsbMassStorageController.clearUserSession();
+        if (!was) return;
+        int dest = usbReturnScreen;
+        if (dest == STATE_USB_STORAGE || dest < 0) dest = STATE_MENU;
+        usbReturnScreen = STATE_MENU;
+        applyScreenChange(dest);
+    }
+
+    private void buildUsbStorageUI() {
+        if (scrollViewBrowser != null) scrollViewBrowser.setVisibility(View.VISIBLE);
+        if (listVirtualSongs != null) listVirtualSongs.setVisibility(View.GONE);
+        if (containerBrowserItems == null) return;
+        containerBrowserItems.removeAllViews();
+        browserStatusTitle = getString(R.string.usb_storage_mode_title);
+        updateStatusBarTitle();
+        if (tvBrowserPath != null) {
+            tvBrowserPath.setVisibility(View.GONE);
+        }
+
+        int pad = (int) (20 * getResources().getDisplayMetrics().density);
+        View spacer = new View(this);
+        int spacerH = (int) (40 * getResources().getDisplayMetrics().density);
+        containerBrowserItems.addView(spacer, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, spacerH));
+
+        TextView notice = new TextView(this);
+        notice.setText(getString(R.string.usb_storage_mode_title));
+        notice.setGravity(android.view.Gravity.CENTER);
+        notice.setTypeface(ThemeManager.getCustomFont());
+        notice.setTextSize(18);
+        notice.setPadding(pad, pad, pad, pad);
+        notice.setFocusable(true);
+        notice.requestFocus();
+        ThemeManager.applyThemedTextStyle(notice, ThemeManager.getTextColorPrimary());
+        containerBrowserItems.addView(notice, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        TextView body = new TextView(this);
+        String model = android.os.Build.MODEL != null ? android.os.Build.MODEL : "Solar";
+        body.setText(getString(R.string.usb_storage_mode_body, model));
+        body.setGravity(android.view.Gravity.CENTER);
+        body.setTypeface(ThemeManager.getCustomFont());
+        body.setTextSize(15);
+        body.setPadding(pad, 0, pad, pad);
+        body.setFocusable(false);
+        ThemeManager.applyThemedTextStyle(body, ThemeManager.getTextColorSecondary());
+        containerBrowserItems.addView(body, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+    }
+
+    private void buildUsbSettingsUI() {
+        setSettingsSubScreen("settings.usb");
+        updateStatusBarTitle();
+        containerSettingsItems.removeAllViews();
+
+        Button back = createListButton(getString(R.string.common_cancel_back));
+        styleSecondaryLabel(back);
+        back.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                clickFeedback();
+                settingsSubScreenKey = null;
+                buildSettingsUI();
+            }
+        });
+        containerSettingsItems.addView(back);
+
+        final LinearLayout autoRow = createSettingsRow(RowKeys.USB_AUTO_CONNECT,
+                R.string.settings_usb_auto_connect, false);
+        autoRow.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                clickFeedback();
+                boolean next = !UsbStorageSessionFlags.isAutoConnectEnabled(MainActivity.this);
+                prefs.edit()
+                        .putBoolean(UsbStorageSessionFlags.PREF_AUTO_CONNECT, next)
+                        .putBoolean(UsbStorageSessionFlags.PREF_MANUAL_DISABLE, false)
+                        .apply();
+                refreshSettingsPreview(RowKeys.USB_AUTO_CONNECT);
+            }
+        });
+        containerSettingsItems.addView(autoRow);
+
+        if (containerSettingsItems.getChildCount() > 1) {
+            containerSettingsItems.getChildAt(1).requestFocus();
+        }
     }
 }

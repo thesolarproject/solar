@@ -774,4 +774,15 @@
     <string name="keyboard_lastfm_user">Last.fm Username</string>
     <string name="keyboard_lastfm_pass">Last.fm Password</string>
     <string name="keyboard_listenbrainz_token">ListenBrainz Token</string>
+    <string name="settings_usb">USB</string>
+    <string name="settings_usb_auto_connect">Connect automatically</string>
+    <string name="settings_preview_usb_auto_connect">Enable USB storage automatically when a PC connects. Off = prompt first.</string>
+    <string name="usb_connection_title">USB Connection</string>
+    <string name="usb_mass_storage_turn_on">Turn on USB storage</string>
+    <string name="usb_storage_mode_title">Device is in USB Storage mode</string>
+    <string name="usb_storage_mode_body">Please eject your %1$s from the computer and remove the USB cable when you\'re finished</string>
+    <string name="usb_storage_enable_failed">Could not turn on USB storage. Eject any open files on the player and try again.</string>
+    <string name="usb_storage_queue_blocked">Please disconnect the USB to view your playback queue.</string>
+    <string name="usb_storage_disconnect_first">Disconnect USB first</string>
+    <string name="common_dismiss">Dismiss</string>
 </resources>
