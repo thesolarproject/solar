@@ -1,27 +1,27 @@
 *.iml
 .gradle
 /local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
+/.idea/
 .DS_Store
-/build
 /captures
 .externalNativeBuild
 .cxx
 local.properties
 /reference/
-# Cursor — track rule stubs, ignore local secrets and debug logs
-/.cursor/*
-!/.cursor/rules/
-/.cursor/rules/*
-!/.cursor/rules/*.mdc
-/.cursor/rules/local/
-/.cursor/debug*.log
-# Local dev / adb / emulator scripts (not used by CI — see .github/workflows/build-release.yml)
+
+# Build outputs (root + multi-module / subprojects)
+/build/
+**/build/
+app/build/
+core/**/build/
+feature/**/build/
+keyboard-app/build/
+quickmenu-app/build/
+*.apk.idsig
+*.dex
+*.class
+
+# Local dev / adb / emulator scripts (not used by CI)
 /scripts/audit_strings.sh
 /scripts/clean_install_system.sh
 /scripts/ensure_emulator_network.sh
@@ -35,20 +35,38 @@ local.properties
 /scripts/test_podcast_emulator.sh
 /scripts/test_soulseek_device.sh
 
-# Stray docs / screenshots at repo root
+# Local docs / screenshots
 /docs/
 /*.md
-!AGENTS.md
-!CLAUDE.md
-!GEMINI.md
 !solar-rom/README.md
 *.logcat
 Screenshot_*.png
 /ci-keys/
 
-# ROM build outputs (local)
+# ROM / release local outputs
 /rom.zip
 /rom_type_b.zip
 /rom_y2.zip
+/rom_a5.zip
 /dist/
 /release.json
+RELEASE_NOTES.md
+
+# ---------------------------------------------------------------------------
+# LLM / agent rules & IDE assistant cruft — never publish to the public repo
+# ---------------------------------------------------------------------------
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.clinerules
+.cursorrules
+.windsurfrules
+.cursor/
+.kilo/
+.kilocode/
+.github/copilot-instructions.md
+.agents/
+**/.agents/
+**/GEMINI.md
+**/CLAUDE.md
+**/AGENTS.md

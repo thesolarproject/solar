@@ -1,6 +1,0 @@
----
-description: Solar project rules — full text in AGENTS.md at repo root
-alwaysApply: true
----
-
-All project rules live in **AGENTS.md** at the repository root. That file is the single source of truth for humans and AI assistants. Follow it completely.
