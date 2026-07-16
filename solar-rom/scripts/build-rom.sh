@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Build a Solar launcher ROM from Y1 type-A/B or Y2 ATA base firmware.
-# Usage: build-rom.sh <a|b|y2> --apk PATH [output.zip]
+# Build a Solar launcher ROM from y1-community ATA base firmware (not rockbox-y1).
+# Bases: y1-ata-rom (type A/B), y2-ata-rom, a5-ata-rom.
+# Usage: build-rom.sh <a|b|y2|a5> --apk PATH [output.zip]
 set -euo pipefail
 
 TYPE=""
@@ -24,22 +25,25 @@ source "$SCRIPT_DIR/solar-repo.sh"
 
 usage() {
     cat >&2 <<EOF
-usage: $0 <a|b|y2> (--apk PATH | [--solar-tag TAG] [--solar-apk-url URL]) [output.zip]
+usage: $0 <a|b|y2|a5> (--apk PATH | [--solar-tag TAG] [--solar-apk-url URL]) [output.zip]
 
-  a|b|y2              Y1 type A (2.0.0+), Y1 type B (pre-2.0.0), or Y2 ATA (MT6582)
+  a|b|y2|a5           Y1 type A/B (y1-ata-rom), Y2 ATA, or A5 ATA (a5-ata-rom)
   --apk PATH          Local signed app-release.apk (CI / local builds)
   --keyboard-apk PATH Optional signed keyboard APK (default: beside launcher apk)
   --quickmenu-apk PATH Optional signed quickmenu APK (default: beside launcher apk)
   --solar-tag         GitHub release tag on ${SOLAR_GITHUB_REPO} (default: latest)
   --solar-apk-url     Direct APK download URL (skips GitHub HTML lookup)
   output.zip          Output archive path
+  Local base overrides (skip GitHub download):
+    SOLAR_Y1A_BASE_ZIP / SOLAR_Y1B_BASE_ZIP / SOLAR_Y2_BASE_ZIP / SOLAR_A5_BASE_ZIP
+    SOLAR_ROM_BASE_ZIP — generic override for the type being built
 EOF
     exit 1
 }
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        a|b|y2)
+        a|b|y2|a5)
             TYPE="$1"
             shift
             ;;
@@ -157,23 +161,41 @@ require_cmd() {
 
 case "$TYPE" in
     a)
-        BASE_URL="https://github.com/rockbox-y1/rockbox/releases/download/type-a-base/rom.zip"
+        # Y1 type A ATA — y1-community/y1-ata-rom (NOT rockbox-y1 type-a-base).
+        BASE_URL="https://github.com/y1-community/y1-ata-rom/releases/download/0.1/rom.zip"
         OUTPUT="${OUTPUT:-$REPO_ROOT/rom.zip}"
         SCATTER_FILE="MT6572_Android_scatter.txt"
         ;;
     b)
-        BASE_URL="https://github.com/rockbox-y1/rockbox/releases/download/type-b-base/rom.zip"
+        # Y1 type B ATA — y1-community/y1-ata-rom (NOT rockbox-y1 type-b-base).
+        BASE_URL="https://github.com/y1-community/y1-ata-rom/releases/download/0.1/rom_type_b.zip"
         OUTPUT="${OUTPUT:-$REPO_ROOT/rom_type_b.zip}"
         SCATTER_FILE="MT6572_Android_scatter.txt"
         ;;
     y2)
-        BASE_URL="https://github.com/y1-community/y2-ata-rom/releases/download/y2-ata/rom.zip"
+        # Y2 ATA — asset is rom_y2.zip (rom.zip 404s after y1-community rename).
+        BASE_URL="https://github.com/y1-community/y2-ata-rom/releases/download/y2-ata/rom_y2.zip"
         OUTPUT="${OUTPUT:-$REPO_ROOT/rom_y2.zip}"
         SCATTER_FILE="MT6582_Android_scatter.txt"
+        ;;
+    a5)
+        # Timmkoo A5 ATA — y1-community/a5-ata-rom (MT6572, same scatter family as Y1).
+        BASE_URL="https://github.com/y1-community/a5-ata-rom/releases/download/0.1/rom_a5.zip"
+        OUTPUT="${OUTPUT:-$REPO_ROOT/rom_a5.zip}"
+        SCATTER_FILE="MT6572_Android_scatter.txt"
         ;;
     *)
         die "unknown type: $TYPE"
         ;;
+esac
+
+# Optional local base zip overrides (CI secrets / offline rebuilds).
+LOCAL_BASE_ZIP="${SOLAR_ROM_BASE_ZIP:-}"
+case "$TYPE" in
+    a)  [ -n "${SOLAR_Y1A_BASE_ZIP:-}" ] && LOCAL_BASE_ZIP="$SOLAR_Y1A_BASE_ZIP" ;;
+    b)  [ -n "${SOLAR_Y1B_BASE_ZIP:-}" ] && LOCAL_BASE_ZIP="$SOLAR_Y1B_BASE_ZIP" ;;
+    y2) [ -n "${SOLAR_Y2_BASE_ZIP:-}" ] && LOCAL_BASE_ZIP="$SOLAR_Y2_BASE_ZIP" ;;
+    a5) [ -n "${SOLAR_A5_BASE_ZIP:-}" ] && LOCAL_BASE_ZIP="$SOLAR_A5_BASE_ZIP" ;;
 esac
 
 require_cmd curl
@@ -344,8 +366,14 @@ if [ -z "$QUICKMENU_APK" ] && [ -n "$SOLAR_APK" ]; then
     [ -f "$_dir/quickmenu-app-release.apk" ] && QUICKMENU_APK="$_dir/quickmenu-app-release.apk"
 fi
 
-echo "==> Downloading type-${TYPE} base firmware"
-curl -fsSL -o "$BASE_DIR/rom.zip" "$BASE_URL"
+if [ -n "${LOCAL_BASE_ZIP:-}" ] && [ -f "$LOCAL_BASE_ZIP" ]; then
+    echo "==> Using local type-${TYPE} base firmware: $LOCAL_BASE_ZIP"
+    cp "$LOCAL_BASE_ZIP" "$BASE_DIR/rom.zip"
+else
+    echo "==> Downloading type-${TYPE} base firmware"
+    echo "    $BASE_URL"
+    curl -fsSL -o "$BASE_DIR/rom.zip" "$BASE_URL"
+fi
 unzip -q "$BASE_DIR/rom.zip" -d "$BASE_DIR"
 normalize_firmware_layout
 

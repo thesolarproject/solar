@@ -58,10 +58,12 @@ jobs:
 
       - name: Verify ROM base firmware URLs
         run: |
-          curl -fsSIL -o /dev/null "https://github.com/rockbox-y1/rockbox/releases/download/type-a-base/rom.zip"
-          curl -fsSIL -o /dev/null "https://github.com/rockbox-y1/rockbox/releases/download/type-b-base/rom.zip"
-          curl -fsSIL -o /dev/null "https://github.com/y1-community/y2-ata-rom/releases/download/y2-ata/rom.zip"
-          echo "ROM base sources OK (Y1 type A/B, Y2 ATA)"
+          # Solar ROM bases are y1-community ATA firmware — never rockbox-y1 type-a/b bases.
+          curl -fsSIL -o /dev/null "https://github.com/y1-community/y1-ata-rom/releases/download/0.1/rom.zip"
+          curl -fsSIL -o /dev/null "https://github.com/y1-community/y1-ata-rom/releases/download/0.1/rom_type_b.zip"
+          curl -fsSIL -o /dev/null "https://github.com/y1-community/y2-ata-rom/releases/download/y2-ata/rom_y2.zip"
+          curl -fsSIL -o /dev/null "https://github.com/y1-community/a5-ata-rom/releases/download/0.1/rom_a5.zip"
+          echo "ROM base sources OK (y1-ata-rom A/B, y2-ata-rom, a5-ata-rom)"
 
       - name: Decode platform signing keys
         env:
@@ -98,14 +100,16 @@ jobs:
           ./solar-rom/scripts/build-rom.sh a --apk "$APK" "$GITHUB_WORKSPACE/dist/rom.zip"
           ./solar-rom/scripts/build-rom.sh b --apk "$APK" "$GITHUB_WORKSPACE/dist/rom_type_b.zip"
           ./solar-rom/scripts/build-rom.sh y2 --apk "$APK" "$GITHUB_WORKSPACE/dist/rom_y2.zip"
+          ./solar-rom/scripts/build-rom.sh a5 --apk "$APK" "$GITHUB_WORKSPACE/dist/rom_a5.zip"
           ls -la dist/
-          for z in dist/rom.zip dist/rom_type_b.zip dist/rom_y2.zip; do
+          for z in dist/rom.zip dist/rom_type_b.zip dist/rom_y2.zip dist/rom_a5.zip; do
             test -s "$z" || { echo "::error::Missing or empty $z"; exit 1; }
           done
           unzip -l dist/rom.zip | grep -q MT6572_Android_scatter.txt
           unzip -l dist/rom_type_b.zip | grep -q MT6572_Android_scatter.txt
           unzip -l dist/rom_y2.zip | grep -q MT6582_Android_scatter.txt
-          echo "All three ROM zips built and verified"
+          unzip -l dist/rom_a5.zip | grep -q MT6572_Android_scatter.txt
+          echo "All four ROM zips built and verified (Y1 A/B + Y2 + A5, y1-community ATA bases)"
 
       - name: Prepare release notes
         run: ./solar-rom/scripts/format-release-notes.sh release.json > RELEASE_NOTES.md
@@ -123,6 +127,7 @@ jobs:
             dist/rom.zip
             dist/rom_type_b.zip
             dist/rom_y2.zip
+            dist/rom_a5.zip
           fail_on_unmatched_files: true
           make_latest: ${{ github.ref == 'refs/heads/main' }}
           prerelease: ${{ github.ref == 'refs/heads/nightly' }}
