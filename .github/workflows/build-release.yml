@@ -132,17 +132,20 @@ jobs:
       - name: Publish OTA catalog to solar-update
         env:
           SOLAR_GITHUB_PAT: ${{ secrets.SOLAR_GITHUB_PAT }}
+          # Catalog links to solar release assets — do not re-commit APK binaries into solar-update.
+          SOLAR_OTA_LINK_RELEASES: "1"
+          SOLAR_OTA_PUSH_RETRIES: "10"
         run: |
           chmod +x scripts/publish-ota-updates.sh
           NIGHTLY=false
           if [ "${{ github.ref }}" = "refs/heads/nightly" ]; then NIGHTLY=true; fi
+          # Requires GitHub release (previous step) so devices can download app-release.apk from solar.
           ./scripts/publish-ota-updates.sh add \
-            --apk app/build/outputs/apk/release/app-release.apk \
             --tag "${{ steps.meta.outputs.tag }}" \
             --version-name "${{ steps.meta.outputs.version_name }}" \
             --version-code "${{ steps.meta.outputs.version_code }}" \
             $([ "$NIGHTLY" = true ] && echo --nightly)
-          echo "OTA published to thesolarproject/solar-update (independent of ROM job)"
+          echo "OTA catalog updated on solar-update (APK served from solar release assets)"
 
       - name: Upload signed APK for ROM job
         uses: actions/upload-artifact@v4
