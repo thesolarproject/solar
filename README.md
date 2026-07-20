@@ -1,3 +1,6 @@
+# Join us in developing Solar for Innioasis Y1/Y2 and A5 [on Slack](https://join.slack.com/t/the-solar-project/shared_invite/zt-44s9cdlao-ncPTLYXTXKlw8yuvnfxdaw)
+
+
 <p align="center">
   <img src="app/src/main/assets/logo/square_full_logo_colour.png" alt="Solar logo" width="160">
 </p>
