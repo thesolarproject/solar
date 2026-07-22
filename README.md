@@ -98,10 +98,3 @@ Extract [rom.zip](https://github.com/thesolarproject/solar/releases/latest/downl
 # How to leave feedback and report issues.
 
 Please leave your feedback and issue reports in the [Issues Tracker](https://github.com/thesolarproject/solar/issues)
-
-## Developers
-
-Local **Solar Designer** (1:1 GUI simulator / agent bridge) lives at `solar-designer/` and is gitignored — clone the tree or create it locally, then `cd solar-designer && npm install && npm start`. See `solar-designer/README.md` when present.
-
-# solar-os
-# solar-os
