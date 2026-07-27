@@ -1,16 +1,16 @@
 -- Merging decision tree log ---
 manifest
-ADDED from /home/deck/Documents/Cursor Workspaces/TheSolarProject/solar/solar-ota-lib/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest10832309374252800314.xml:2:13-83
-INJECTED from /home/deck/Documents/Cursor Workspaces/TheSolarProject/solar/solar-ota-lib/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest10832309374252800314.xml:2:13-83
+ADDED from /app/solar-ota-lib/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest5015282670177186317.xml:2:13-83
+INJECTED from /app/solar-ota-lib/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest5015282670177186317.xml:2:13-83
 	package
-		INJECTED from /home/deck/Documents/Cursor Workspaces/TheSolarProject/solar/solar-ota-lib/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest10832309374252800314.xml
+		INJECTED from /app/solar-ota-lib/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest5015282670177186317.xml
 	xmlns:android
-		ADDED from /home/deck/Documents/Cursor Workspaces/TheSolarProject/solar/solar-ota-lib/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest10832309374252800314.xml:2:23-81
+		ADDED from /app/solar-ota-lib/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest5015282670177186317.xml:2:23-81
 uses-sdk
-INJECTED from /home/deck/Documents/Cursor Workspaces/TheSolarProject/solar/solar-ota-lib/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest10832309374252800314.xml reason: use-sdk injection requested
-INJECTED from /home/deck/Documents/Cursor Workspaces/TheSolarProject/solar/solar-ota-lib/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest10832309374252800314.xml
-INJECTED from /home/deck/Documents/Cursor Workspaces/TheSolarProject/solar/solar-ota-lib/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest10832309374252800314.xml
+INJECTED from /app/solar-ota-lib/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest5015282670177186317.xml reason: use-sdk injection requested
+INJECTED from /app/solar-ota-lib/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest5015282670177186317.xml
+INJECTED from /app/solar-ota-lib/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest5015282670177186317.xml
 	android:targetSdkVersion
-		INJECTED from /home/deck/Documents/Cursor Workspaces/TheSolarProject/solar/solar-ota-lib/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest10832309374252800314.xml
+		INJECTED from /app/solar-ota-lib/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest5015282670177186317.xml
 	android:minSdkVersion
-		INJECTED from /home/deck/Documents/Cursor Workspaces/TheSolarProject/solar/solar-ota-lib/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest10832309374252800314.xml
+		INJECTED from /app/solar-ota-lib/build/intermediates/tmp/ProcessLibraryManifest/debug/tempAndroidManifest5015282670177186317.xml
