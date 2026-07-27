@@ -739,7 +739,7 @@ public class MusicLibraryStore extends SolarDbHelper {
         legacyYearsMigrated = true;
         try {
             SQLiteDatabase db = getWritableDatabase();
-            db.execSQL("UPDATE tracks SET year = " + YEAR_UNKNOWN_SCANNED + " WHERE year = 0");
+            db.execSQL("UPDATE tracks SET year = ? WHERE year = 0", new Object[]{YEAR_UNKNOWN_SCANNED});
         } catch (Exception ignored) {}
     }
 
