@@ -83,7 +83,8 @@ public final class LauncherDiscovery {
         if (pm == null || packageName == null) return false;
         if (LauncherCompetitionPolicy.targetForPackage(packageName) != null) return true;
         List<String> pkgs = homeLauncherPackages(pm);
-        for (int i = 0; i < pkgs.size(); i++) {
+        int size = pkgs.size();
+        for (int i = 0; i < size; i++) {
             if (packageName.equals(pkgs.get(i))) return true;
         }
         return false;
