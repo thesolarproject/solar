@@ -328,6 +328,21 @@ public class MediaPlayerProxy implements IMediaPlayer {
     }
 
     @Override
+    public int getSelectedTrack(int trackType) {
+        return mBackEndMediaPlayer.getSelectedTrack(trackType);
+    }
+
+    @Override
+    public void selectTrack(int track) {
+        mBackEndMediaPlayer.selectTrack(track);
+    }
+
+    @Override
+    public void deselectTrack(int track) {
+        mBackEndMediaPlayer.deselectTrack(track);
+    }
+
+    @Override
     public void setLooping(boolean looping) {
         mBackEndMediaPlayer.setLooping(looping);
     }

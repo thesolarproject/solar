@@ -620,7 +620,7 @@ public final class IjkMediaPlayer extends AbstractMediaPlayer {
         return trackInfos.toArray(new IjkTrackInfo[trackInfos.size()]);
     }
 
-    // TODO: @Override
+    @Override
     public int getSelectedTrack(int trackType) {
         switch (trackType) {
             case ITrackInfo.MEDIA_TRACK_TYPE_VIDEO:
@@ -635,13 +635,13 @@ public final class IjkMediaPlayer extends AbstractMediaPlayer {
     }
 
     // experimental, should set DEFAULT_MIN_FRAMES and MAX_MIN_FRAMES to 25
-    // TODO: @Override
+    @Override
     public void selectTrack(int track) {
         _setStreamSelected(track, true);
     }
 
     // experimental, should set DEFAULT_MIN_FRAMES and MAX_MIN_FRAMES to 25
-    // TODO: @Override
+    @Override
     public void deselectTrack(int track) {
         _setStreamSelected(track, false);
     }

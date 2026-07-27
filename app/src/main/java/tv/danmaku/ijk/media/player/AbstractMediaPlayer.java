@@ -118,4 +118,16 @@ public abstract class AbstractMediaPlayer implements IMediaPlayer {
     public void setDataSource(IMediaDataSource mediaDataSource) {
         throw new UnsupportedOperationException();
     }
+
+    public int getSelectedTrack(int trackType) {
+        throw new UnsupportedOperationException();
+    }
+
+    public void selectTrack(int track) {
+        throw new UnsupportedOperationException();
+    }
+
+    public void deselectTrack(int track) {
+        throw new UnsupportedOperationException();
+    }
 }

@@ -203,6 +203,12 @@ public interface IMediaPlayer {
      */
     ITrackInfo[] getTrackInfo();
 
+    int getSelectedTrack(int trackType);
+
+    void selectTrack(int track);
+
+    void deselectTrack(int track);
+
     /*--------------------
      * AndroidMediaPlayer: ICE_CREAM_SANDWICH:
      */
