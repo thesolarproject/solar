@@ -67,6 +67,24 @@ public final class ScrobbleManager {
             String album, int durationMs, int positionMs, boolean playing, boolean trackChanged,
             boolean isPodcast, PlayQueue.QueueItem cur, boolean isVideo) {
         if (ctx == null) return;
+        boolean wasPlaying = isCurrentlyPlaying;
+        long oldListenedMs = totalListenedMs;
+        boolean oldExcluded = isExcluded;
+        boolean oldScrobbled = hasScrobbledCurrent;
+
+        processStateChange(title, artist, album, durationMs, positionMs, playing, trackChanged, isPodcast, cur, isVideo);
+
+        if (!oldScrobbled && hasScrobbledCurrent) {
+            submitScrobble(ctx, currentTitle, currentArtist, currentAlbum, trackStartUtcSec, currentDurationMs / 1000);
+        } else if (!wasPlaying && isCurrentlyPlaying && trackChanged) {
+            submitNowPlaying(ctx, currentTitle, currentArtist, currentAlbum, currentDurationMs / 1000);
+        }
+    }
+
+    /** ponytail: pure logic extracted for testing without Context or AsyncTask mocks. */
+    static synchronized void processStateChange(String title, String artist,
+            String album, int durationMs, int positionMs, boolean playing, boolean trackChanged,
+            boolean isPodcast, PlayQueue.QueueItem cur, boolean isVideo) {
 
         // 1. Filter out videos & podcasts explicitly
         if (isVideo || isPodcast || (cur != null && cur.kind == PlayQueue.ItemKind.PODCAST_EPISODE)) {
@@ -124,7 +142,7 @@ public final class ScrobbleManager {
             if (!hasScrobbledCurrent && !isExcluded && currentDurationMs >= 30000 && isCurrentlyPlaying) {
                 long accumulated = totalListenedMs + (SystemClock.elapsedRealtime() - lastPlayResumeRealtimeMs);
                 if (accumulated >= currentDurationMs / 2 || accumulated >= 240_000 || positionMs >= currentDurationMs / 2) {
-                    submitScrobble(ctx, currentTitle, currentArtist, currentAlbum, trackStartUtcSec, currentDurationMs / 1000);
+                    hasScrobbledCurrent = true;
                 }
             }
 
@@ -140,7 +158,6 @@ public final class ScrobbleManager {
             isCurrentlyPlaying = playing;
             if (playing) {
                 lastPlayResumeRealtimeMs = SystemClock.elapsedRealtime();
-                submitNowPlaying(ctx, currentTitle, currentArtist, currentAlbum, currentDurationMs / 1000);
             }
         } else {
             // Same track, update listening accumulation
@@ -158,7 +175,6 @@ public final class ScrobbleManager {
                 }
                 if (accumulated >= currentDurationMs / 2 || accumulated >= 240_000 || positionMs >= currentDurationMs / 2 || positionMs >= 240_000) {
                     hasScrobbledCurrent = true;
-                    submitScrobble(ctx, currentTitle, currentArtist, currentAlbum, trackStartUtcSec, currentDurationMs / 1000);
                 }
             }
         }
