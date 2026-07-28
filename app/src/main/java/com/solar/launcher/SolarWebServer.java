@@ -586,6 +586,7 @@ public class SolarWebServer extends Thread {
                         targetDir.setReadable(true, false);
                         targetDir.setWritable(true, false);
                         targetDir.setExecutable(true, false);
+
                     }
                     File outFile = new File(targetDir, name);
 
