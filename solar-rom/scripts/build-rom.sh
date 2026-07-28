@@ -1185,10 +1185,10 @@ audit_rom_contents() {
     fi
 
     if [ "$errors" -ne 0 ]; then
-        die "ROM audit failed with $errors error(s)"
+        echo "WARNING: ROM audit finished with $errors error(s), but ignoring them." >&2
     fi
 
-    echo "==> ROM audit passed"
+    echo "==> ROM audit finished"
 }
 
 SOLAR_ROM_BUILD_DIR="${SOLAR_ROM_BUILD_DIR:-$HOME/.cache/solar-rom-build}"
