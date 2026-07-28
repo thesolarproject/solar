@@ -211,14 +211,18 @@ public class SolarWebServer extends Thread {
                 else if (method.equals("GET") && path.startsWith("/create_folder")) {
                     String q = path.split("\\?")[1];
                     String name = URLDecoder.decode(q.split("=")[1], "UTF-8");
-                    File newDir = new File(rootFolder, name);
-                    newDir.mkdirs();
-                    newDir.setReadable(true, false);
-                    newDir.setWritable(true, false);
-                    newDir.setExecutable(true, false);
+                    File newDir = SolarWebPaths.resolveUnder(rootFolder, name);
+                    if (newDir == null) {
+                        os.write("HTTP/1.1 400 Bad Request\r\n\r\n".getBytes("UTF-8"));
+                    } else {
+                        newDir.mkdirs();
+                        newDir.setReadable(true, false);
+                        newDir.setWritable(true, false);
+                        newDir.setExecutable(true, false);
 
-                    String response = "HTTP/1.1 200 OK\r\n\r\nOK";
-                    os.write(response.getBytes("UTF-8"));
+                        String response = "HTTP/1.1 200 OK\r\n\r\nOK";
+                        os.write(response.getBytes("UTF-8"));
+                    }
                 }
                 else if (path.equals("/deezer") || path.startsWith("/deezer?")) {
                     if (method.equals("GET")) {
