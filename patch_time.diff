@@ -1,0 +1,65 @@
+--- global-context-modal/src/test/java/com/solar/launcher/globalcontext/RescueExecutorTest.java
++++ global-context-modal/src/test/java/com/solar/launcher/globalcontext/RescueExecutorTest.java
+@@ -112,7 +112,7 @@
+              MockedStatic<CompanionRescueHoldState> rescueStateMock = Mockito.mockStatic(CompanionRescueHoldState.class);
+              MockedStatic<Runtime> runtimeMock = Mockito.mockStatic(Runtime.class)) {
+
+-            clock.when(SystemClock::uptimeMillis).thenReturn(1000L);
++            clock.when(SystemClock::uptimeMillis).thenReturn(3000L);
+
+             Runtime runtime = mock(Runtime.class);
+             runtimeMock.when(Runtime::getRuntime).thenReturn(runtime);
+@@ -141,7 +141,7 @@
+             assertTrue(callsBefore > 0);
+
+             // Second execution immediately after, should be debounced
+-            clock.when(SystemClock::uptimeMillis).thenReturn(1500L); // Only 500ms passed
++            clock.when(SystemClock::uptimeMillis).thenReturn(3500L); // Only 500ms passed
+             RescueExecutor.execute(mockContext, "some.app");
+
+             // Should not call signalRestarting again
+@@ -157,7 +157,7 @@
+              MockedStatic<CompanionRescueHoldState> rescueStateMock = Mockito.mockStatic(CompanionRescueHoldState.class);
+              MockedStatic<Runtime> runtimeMock = Mockito.mockStatic(Runtime.class)) {
+
+-            clock.when(SystemClock::uptimeMillis).thenReturn(1000L);
++            clock.when(SystemClock::uptimeMillis).thenReturn(3000L);
+
+             Runtime runtime = mock(Runtime.class);
+             runtimeMock.when(Runtime::getRuntime).thenReturn(runtime);
+@@ -194,7 +194,7 @@
+              MockedStatic<CompanionRescueHoldState> rescueStateMock = Mockito.mockStatic(CompanionRescueHoldState.class);
+              MockedStatic<Runtime> runtimeMock = Mockito.mockStatic(Runtime.class)) {
+
+-            clock.when(SystemClock::uptimeMillis).thenReturn(1000L);
++            clock.when(SystemClock::uptimeMillis).thenReturn(3000L);
+
+             Runtime runtime = mock(Runtime.class);
+             runtimeMock.when(Runtime::getRuntime).thenReturn(runtime);
+@@ -234,7 +234,7 @@
+              MockedStatic<CompanionRescueHoldState> rescueStateMock = Mockito.mockStatic(CompanionRescueHoldState.class);
+              MockedStatic<Runtime> runtimeMock = Mockito.mockStatic(Runtime.class)) {
+
+-            clock.when(SystemClock::uptimeMillis).thenReturn(1000L);
++            clock.when(SystemClock::uptimeMillis).thenReturn(3000L);
+
+             Runtime runtime = mock(Runtime.class);
+             runtimeMock.when(Runtime::getRuntime).thenReturn(runtime);
+@@ -282,7 +282,7 @@
+              MockedStatic<CompanionRescueHoldState> rescueStateMock = Mockito.mockStatic(CompanionRescueHoldState.class);
+              MockedStatic<Runtime> runtimeMock = Mockito.mockStatic(Runtime.class)) {
+
+-            clock.when(SystemClock::uptimeMillis).thenReturn(1000L);
++            clock.when(SystemClock::uptimeMillis).thenReturn(3000L);
+
+             Runtime runtime = mock(Runtime.class);
+             runtimeMock.when(Runtime::getRuntime).thenReturn(runtime);
+@@ -334,7 +334,7 @@
+              MockedStatic<CompanionRescueHoldState> rescueStateMock = Mockito.mockStatic(CompanionRescueHoldState.class);
+              MockedStatic<Runtime> runtimeMock = Mockito.mockStatic(Runtime.class)) {
+
+-            clock.when(SystemClock::uptimeMillis).thenReturn(1000L);
++            clock.when(SystemClock::uptimeMillis).thenReturn(3000L);
+
+             Runtime runtime = mock(Runtime.class);
+             runtimeMock.when(Runtime::getRuntime).thenReturn(runtime);

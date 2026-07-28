@@ -1,0 +1,95 @@
+--- global-context-modal/src/test/java/com/solar/launcher/globalcontext/RescueExecutorTest.java
++++ global-context-modal/src/test/java/com/solar/launcher/globalcontext/RescueExecutorTest.java
+@@ -29,6 +29,10 @@
+ import static org.mockito.Mockito.verify;
+ import static org.mockito.Mockito.times;
+
++import org.mockito.invocation.InvocationOnMock;
++import org.mockito.stubbing.Answer;
++
+ public class RescueExecutorTest {
+
+     @Before
+@@ -107,7 +111,7 @@
+             clock.when(SystemClock::uptimeMillis).thenReturn(1000L);
+
+             Runtime runtime = mock(Runtime.class);
+             runtimeMock.when(Runtime::getRuntime).thenReturn(runtime);
+             Process process = mock(Process.class);
+             when(process.waitFor()).thenReturn(1); // Fail shell commands to proceed to APK fallback
+
+             final List<String[]> capturedArgs = new ArrayList<>();
+-            when(runtime.exec(any(String[].class))).thenAnswer(invocation -> {
++            when(runtime.exec(any(String[].class))).thenAnswer(new Answer<Process>() {
++                @Override
++                public Process answer(InvocationOnMock invocation) {
+                     capturedArgs.add(invocation.getArgument(0));
+                     return process;
++                }
+             });
+
+             Context mockContext = mock(Context.class);
+@@ -148,7 +152,9 @@
+             when(failProcess.waitFor()).thenReturn(1);
+
+             final List<String[]> capturedArgs = new ArrayList<>();
+-            when(runtime.exec(any(String[].class))).thenAnswer(invocation -> {
++            when(runtime.exec(any(String[].class))).thenAnswer(new Answer<Process>() {
++                @Override
++                public Process answer(InvocationOnMock invocation) {
+                     String[] args = invocation.getArgument(0);
+                     capturedArgs.add(args);
+                     if (args[2].equals("sh /system/etc/solar/solar-rescue-exec.sh")) {
+                         return successProcess;
+                     }
+                     return failProcess;
++                }
+             });
+
+             RescueExecutor.execute(null, null);
+@@ -183,7 +189,9 @@
+             when(failProcess.waitFor()).thenReturn(1);
+
+             final List<String[]> capturedArgs = new ArrayList<>();
+-            when(runtime.exec(any(String[].class))).thenAnswer(invocation -> {
++            when(runtime.exec(any(String[].class))).thenAnswer(new Answer<Process>() {
++                @Override
++                public Process answer(InvocationOnMock invocation) {
+                     String[] args = invocation.getArgument(0);
+                     capturedArgs.add(args);
+                     if (args[2].equals("sh /system/xbin/solar-rescue-exec.sh")) {
+                         return successProcess;
+                     }
+                     return failProcess;
++                }
+             });
+
+             RescueExecutor.execute(null, null);
+@@ -216,7 +224,9 @@
+             when(process.waitFor()).thenReturn(1); // Fail all commands
+
+             final List<String[]> capturedArgs = new ArrayList<>();
+-            when(runtime.exec(any(String[].class))).thenAnswer(invocation -> {
++            when(runtime.exec(any(String[].class))).thenAnswer(new Answer<Process>() {
++                @Override
++                public Process answer(InvocationOnMock invocation) {
+                     capturedArgs.add(invocation.getArgument(0));
+                     return process;
++                }
+             });
+
+             Context mockContext = mock(Context.class);
+@@ -262,7 +272,9 @@
+             when(process.waitFor()).thenReturn(1); // Fail all commands
+
+             final List<String[]> capturedArgs = new ArrayList<>();
+-            when(runtime.exec(any(String[].class))).thenAnswer(invocation -> {
++            when(runtime.exec(any(String[].class))).thenAnswer(new Answer<Process>() {
++                @Override
++                public Process answer(InvocationOnMock invocation) {
+                     capturedArgs.add(invocation.getArgument(0));
+                     return process;
++                }
+             });
+
+             Context mockContext = mock(Context.class);

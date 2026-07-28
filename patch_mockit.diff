@@ -1,0 +1,8 @@
+--- global-context-modal/build.gradle
++++ global-context-modal/build.gradle
+@@ -79,4 +79,6 @@
+     implementation project(':solar-overlay-ui')
+     testImplementation libs.junit
+     testImplementation 'org.mockito:mockito-core:5.12.0'
++    testImplementation "org.mockito:mockito-inline:5.2.0"
+ }

@@ -1,0 +1,11 @@
+--- global-context-modal/src/test/java/com/solar/launcher/globalcontext/RescueExecutorTest.java
++++ global-context-modal/src/test/java/com/solar/launcher/globalcontext/RescueExecutorTest.java
+@@ -62,7 +62,7 @@
+             when(process.waitFor()).thenReturn(0);
+
+             final List<String[]> capturedArgs = new ArrayList<>();
+-            when(runtime.exec(any(String[].class))).thenAnswer(new Answer<Process>() {
++            when(runtime.exec(any(String[].class))).thenAnswer(new Answer<Process>() {
+                 @Override
+                 public Process answer(InvocationOnMock invocation) {
+                     capturedArgs.add(invocation.getArgument(0));
