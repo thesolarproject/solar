@@ -46536,36 +46536,24 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
      */
     private void playSegmentedAllSongsAt(int dataIndex) {
         if (dataIndex < 0 || songListSegmentedCount <= 0) return;
-        int window = songBrowseSegments.blockSize();
-        int start = com.solar.launcher.library.SongBrowsePrefetch.playWindowStart(
-                dataIndex, window, songListSegmentedCount);
-        int end = com.solar.launcher.library.SongBrowsePrefetch.playWindowEndExclusive(
-                dataIndex, window, songListSegmentedCount);
-        // Await every block that intersects the play window (BG SQLite; never UI).
-        for (int i = start; i < end; i += window) {
-            awaitSongBrowseBlock(i);
-        }
-        awaitSongBrowseBlock(dataIndex);
-        if (end > start) awaitSongBrowseBlock(end - 1);
-        java.util.ArrayList<File> files = new java.util.ArrayList<File>();
-        int localPlay = 0;
-        for (int i = start; i < end; i++) {
-            SongItem s = songBrowseSegments.get(i);
-            if (s == null) {
-                ensureSongBrowseBlock(i);
-                s = songBrowseSegments.get(i);
-            }
-            if (s == null || s.file == null || !s.file.isFile()) continue;
-            if (i == dataIndex) localPlay = files.size();
-            files.add(s.file);
-        }
-        if (files.isEmpty()) {
+        // 2026-07-20 — Was: windowed play of ~2 blocks to prevent UI freeze and memory bloat.
+        // The play queue should show the full / true number of songs in the library.
+        // We use collectTracksForQuerySegmented to page through the DB and build the File list.
+        // This avoids Materializing all SongItem objects and OOMs, while creating a full queue.
+        final String qType = songListSegmentedQueryType != null ? songListSegmentedQueryType : "ALL";
+        final String qValue = songListSegmentedQueryValue != null ? songListSegmentedQueryValue : "";
+        final String qArtist = songListSegmentedQueryArtist != null ? songListSegmentedQueryArtist : "";
+
+        java.util.List<File> files = collectTracksForQuerySegmented(qType, qValue, qArtist);
+        if (files == null || files.isEmpty()) {
             SongItem s = songBrowseSegments.get(dataIndex);
             if (s != null && s.file != null) {
                 playTrackList(java.util.Collections.singletonList(s.file), 0, null);
             }
             return;
         }
+
+        int localPlay = Math.max(0, Math.min(dataIndex, files.size() - 1));
         playTrackList(files, localPlay, null);
     }
 
@@ -65023,6 +65011,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
         // Not the playing track — Play Instrumental / Play Acapella starts that variant. 2026-07-20
         // Routes through Stems master after play (retire stem_separator for NP). 2026-07-21
+        boolean canInstr = true;
+        boolean canAcap = true;
         if (canInstr) {
             addContextAction(getString(R.string.context_action_play_instrumental), new Runnable() {
                 @Override
