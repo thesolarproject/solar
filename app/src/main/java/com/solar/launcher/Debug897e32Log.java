@@ -28,7 +28,7 @@ public final class Debug897e32Log {
             "/home/deck/Documents/Cursor Workspaces/TheSolarProject/solar/.cursor/debug-897e32.log";
 
     /** Flip false after Stem DJ bugs verified. 2026-07-21 */
-    public static final boolean ENABLED = true;
+    public static final boolean ENABLED = false;
 
     private Debug897e32Log() {}
 
