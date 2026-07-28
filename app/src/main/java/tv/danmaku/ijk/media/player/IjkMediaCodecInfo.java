@@ -97,28 +97,6 @@ public class IjkMediaCodecInfo {
         sKnownCodecList.put("OMX.MARVELL.VIDEO.HW.CODA7542DECODER", RANK_TESTED);
         sKnownCodecList.put("OMX.MARVELL.VIDEO.H264DECODER", RANK_SOFTWARE);
 
-        // ----- TODO: need test -----
-        sKnownCodecList.remove("OMX.Action.Video.Decoder");
-        sKnownCodecList.remove("OMX.allwinner.video.decoder.avc");
-        sKnownCodecList.remove("OMX.BRCM.vc4.decoder.avc");
-        sKnownCodecList.remove("OMX.brcm.video.h264.hw.decoder");
-        sKnownCodecList.remove("OMX.brcm.video.h264.decoder");
-        sKnownCodecList.remove("OMX.cosmo.video.decoder.avc");
-        sKnownCodecList.remove("OMX.duos.h264.decoder");
-        sKnownCodecList.remove("OMX.hantro.81x0.video.decoder");
-        sKnownCodecList.remove("OMX.hantro.G1.video.decoder");
-        sKnownCodecList.remove("OMX.hisi.video.decoder");
-        sKnownCodecList.remove("OMX.LG.decoder.video.avc");
-        sKnownCodecList.remove("OMX.MS.AVC.Decoder");
-        sKnownCodecList.remove("OMX.RENESAS.VIDEO.DECODER.H264");
-        sKnownCodecList.remove("OMX.RTK.video.decoder");
-        sKnownCodecList.remove("OMX.sprd.h264.decoder");
-        sKnownCodecList.remove("OMX.ST.VFM.H264Dec");
-        sKnownCodecList.remove("OMX.vpu.video_decoder.avc");
-        sKnownCodecList.remove("OMX.WMT.decoder.avc");
-
-        // Really ?
-        sKnownCodecList.remove("OMX.bluestacks.hw.decoder");
 
         // ---------------
         // Useless codec
