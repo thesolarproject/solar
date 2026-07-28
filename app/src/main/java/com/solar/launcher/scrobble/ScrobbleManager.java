@@ -40,8 +40,8 @@ public final class ScrobbleManager {
     public static final String PREF_LISTENBRAINZ_ENABLED = "scrobble_listenbrainz_enabled";
     public static final String PREF_LISTENBRAINZ_TOKEN = "scrobble_listenbrainz_token";
 
-    public static final String DEFAULT_LASTFM_API_KEY = "c2fd5c517c27633e8ca770c06aefdebc";
-    public static final String DEFAULT_LASTFM_API_SECRET = "fbd1d34cddbb2aa6d53dc9a3b6807834";
+    public static final String DEFAULT_LASTFM_API_KEY = com.solar.launcher.BuildConfig.LASTFM_API_KEY;
+    public static final String DEFAULT_LASTFM_API_SECRET = com.solar.launcher.BuildConfig.LASTFM_API_SECRET;
 
     private static final String LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/";
     private static final String LISTENBRAINZ_API_URL = "https://api.listenbrainz.org/1/submit-listens";
