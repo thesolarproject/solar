@@ -39,6 +39,25 @@ public class UsbMassStorageControllerTest {
         if (!cmd.contains("solar-enable-ums.sh")) {
             throw new AssertionError("expected enable script in: " + cmd);
         }
+        if (cmd.contains("volume mount")) {
+            throw new AssertionError("enable must not remount: " + cmd);
+        }
+    }
+
+    @Test
+    public void disableShellCommandAlwaysRemountsExportVolumes() {
+        // Stale /system disable scripts only unshare → Idle-Unmounted (empty All Songs).
+        String cmd = UsbMassStorageController.buildUmsShellCommand(
+                "/system/etc/solar/solar-disable-ums.sh", false);
+        if (!cmd.contains("solar-disable-ums.sh")) {
+            throw new AssertionError("expected disable script in: " + cmd);
+        }
+        if (!cmd.contains("vdc volume mount /storage/sdcard0")) {
+            throw new AssertionError("expected sdcard0 remount in: " + cmd);
+        }
+        if (!cmd.contains("vdc volume mount /storage/sdcard1")) {
+            throw new AssertionError("expected sdcard1 remount in: " + cmd);
+        }
     }
 
     @Test

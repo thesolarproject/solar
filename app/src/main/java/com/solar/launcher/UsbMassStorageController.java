@@ -325,12 +325,28 @@ public final class UsbMassStorageController {
             }
             clearUserSession();
             clearStickyMassStoragePersist();
+            // Volumes may already be Idle-Unmounted after a prior unshare without remount.
+            remountExportVolumesAsync();
             return true;
         }
         boolean ok = runUmsToggle(context, false);
         clearUserSession();
         clearStickyMassStoragePersist();
+        // Script + command append remount; this covers async races and stale /system scripts.
+        remountExportVolumesAsync();
         return ok;
+    }
+
+    /**
+     * 2026-07-17 — After UMS unshare, volumes sit Idle-Unmounted until explicit vdc mount.
+     * Layman: turning disk mode off must put Music back on the player.
+     * Tech: never block the UI thread — RootShell async; MEDIA_MOUNTED will refresh library.
+     */
+    static void remountExportVolumesAsync() {
+        RootShell.runAsync(
+                "sleep 0.2; "
+                        + "vdc volume mount /storage/sdcard0 2>/dev/null; "
+                        + "vdc volume mount /storage/sdcard1 2>/dev/null");
     }
 
     /**
@@ -453,10 +469,20 @@ public final class UsbMassStorageController {
         return cmd.toString();
     }
 
-    /** Shell UMS toggle command — test hook without running root shell. */
+    /**
+     * Shell UMS toggle command — test hook without running root shell.
+     * 2026-07-17 — Disable always appends volume remount. Stale /system solar-disable-ums.sh
+     * often only unshares (Idle-Unmounted) so All Songs goes empty until reboot.
+     */
     static String buildUmsShellCommand(String scriptPath, boolean enable) {
         if (scriptPath == null || scriptPath.length() == 0) return "";
-        return "sh " + shellQuote(scriptPath);
+        String base = "sh " + shellQuote(scriptPath);
+        if (!enable) {
+            base += "; sleep 0.2"
+                    + "; vdc volume mount /storage/sdcard0 2>/dev/null"
+                    + "; vdc volume mount /storage/sdcard1 2>/dev/null";
+        }
+        return base;
     }
 
     /** Legacy alias for Y1 shell command tests. */
