@@ -479,8 +479,7 @@ public final class IjkMediaPlayer extends AbstractMediaPlayer {
      */
     private void setDataSource(FileDescriptor fd, long offset, long length)
             throws IOException, IllegalArgumentException, IllegalStateException {
-        // FIXME: handle offset, length
-        setDataSource(fd);
+        setDataSource(new tv.danmaku.ijk.media.player.misc.IjkFileMediaDataSource(fd, offset, length));
     }
 
     public void setDataSource(IMediaDataSource mediaDataSource)
