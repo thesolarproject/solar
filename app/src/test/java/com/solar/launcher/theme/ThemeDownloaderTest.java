@@ -4,9 +4,6 @@ import org.json.JSONObject;
 import org.junit.Test;
 
 import java.io.File;
-import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
 import java.util.Map;
 import java.util.Set;
 
@@ -64,20 +61,10 @@ public class ThemeDownloaderTest {
 
     @Test
     public void eddieVariantPlanLocalNames() throws Exception {
-        URL url = new URL("http://themes.innioasis.app/Stranger%20Things/Variants/Eddie/config.json");
-        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-        conn.setConnectTimeout(15000);
-        conn.setReadTimeout(15000);
-        InputStream in = conn.getInputStream();
-        byte[] buf = new byte[8192];
-        int n, total = 0;
-        byte[] all = new byte[65536];
-        while ((n = in.read(buf)) != -1 && total + n <= all.length) {
-            System.arraycopy(buf, 0, all, total, n);
-            total += n;
-        }
-        in.close();
-        JSONObject config = new JSONObject(new String(all, 0, total, "UTF-8"));
+        JSONObject config = new JSONObject(
+                "{\"solarConfig\":{\"assetDirs\":[\"images\"]},"
+                        + "\"background\":\"images/background.png\","
+                        + "\"icons\":[\"images/play.png\",\"images/pause.png\"]}");
         String catalog = "Stranger Things/Variants/Eddie";
         Set<String> assets = ThemeDownloader.collectAssetPaths(config, catalog);
         assets.remove(catalog + "/config.json");

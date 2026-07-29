@@ -105,8 +105,11 @@ import com.solar.launcher.ui.ScreenTransitionCoordinator;
 import com.solar.launcher.ui.ScreenTransitionMap;
 import com.solar.launcher.ui.UiBusy;
 import com.solar.launcher.media.FlowHoldHintPolicy;
+import com.solar.launcher.media.AuthorizedDirectDownload;
+import com.solar.launcher.media.AuthorizedMediaImporter;
 import com.solar.launcher.media.MediaSuiteHost;
 import com.solar.launcher.media.MediaSuiteHostAdapter;
+import com.solar.launcher.media.MediaCompatibilityService;
 import com.solar.launcher.media.MediaTransportBar;
 import com.solar.launcher.media.NowPlayingTipPolicy;
 import com.solar.launcher.media.StreamSeekBuffer;
@@ -119,6 +122,8 @@ import com.solar.launcher.podcast.PodcastLibrary;
 import com.solar.launcher.podcast.PodcastPlayedStore;
 import com.solar.launcher.podcast.PodcastResumeStore;
 import com.solar.launcher.podcast.PodcastSubscriptions;
+import com.solar.launcher.transfer.TransferJobStore;
+import com.solar.launcher.transfer.TransferNetworkPolicy;
 
 import org.json.JSONObject;
 
@@ -262,6 +267,10 @@ public class MainActivity extends Activity {
     static final int STATE_STEM_PLAYER = 33;
     /** 2026-07-19 — 3-deck Mix (full tracks; replaces NP while active). */
     static final int STATE_MIX = 34;
+    static final int STATE_DOWNLOADS = 35;
+    private static final int REQUEST_MEDIA_IMPORT = 0x5349;
+    private static final String PREF_SOULSEEK_USE_NOTICE =
+            "soulseek_authorized_use_notice_v1";
     private static final int KEYBOARD_WIFI = 0;
     private static final int KEYBOARD_SOULSEEK_USER = 1;
     private static final int KEYBOARD_SOULSEEK_PASS = 2;
@@ -293,6 +302,8 @@ public class MainActivity extends Activity {
     private static final int KEYBOARD_VIDEO_FILE_SEARCH = 53;
     /** 2026-07-20 — Online Radio station name search (wheel keyboard → Radio Browser). */
     private static final int KEYBOARD_RADIO_NET_SEARCH = 54;
+    /** Creator-provided direct audio URL; kept outside plugin keyboard ID ranges. */
+    private static final int KEYBOARD_DIRECT_AUDIO_URL = 55;
     /** ponytail: stock Y1 row art — home=itemConfig, settings/menu lists=menuConfig, file lists=itemConfig */
     private static final int Y1_ROW_HOME = 0;
     private static final int Y1_ROW_MENU = 1;
@@ -855,6 +866,38 @@ public class MainActivity extends Activity {
     private int activeLibraryScanGen = 0;
     private final PlaybackCoordinator playback = new PlaybackCoordinator();
     private MediaSuiteHost mediaSuite;
+    private TransferJobStore transferJobStore;
+    private String downloadsDetailJobId;
+    private String soulseekTransferJobId;
+    private boolean soulseekPausedForNetworkLoss;
+    private String podcastStreamTransferJobId;
+    private String podcastSaveTransferJobId;
+    private static final class DirectDownloadControl {
+        final String jobId;
+        final AuthorizedDirectDownload.Plan plan;
+        final java.util.concurrent.atomic.AtomicBoolean cancel =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
+        volatile boolean pauseRequested;
+
+        DirectDownloadControl(String jobId, AuthorizedDirectDownload.Plan plan) {
+            this.jobId = jobId;
+            this.plan = plan;
+        }
+    }
+    private volatile DirectDownloadControl directDownloadControl;
+    private volatile String directDownloadNetworkPausedJobId;
+    private long downloadsLastUiRefreshMs;
+    private final Runnable downloadsUiRefreshRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (currentScreenState != STATE_DOWNLOADS) return;
+            downloadsLastUiRefreshMs = android.os.SystemClock.uptimeMillis();
+            TransferJobStore.Job detail = transferJobStore != null
+                    ? transferJobStore.get(downloadsDetailJobId) : null;
+            if (detail != null) buildDownloadJobDetailUI(detail);
+            else buildDownloadsUI();
+        }
+    };
     private int podcastLoadGeneration = 0;
     private boolean podcastEpisodeLoading = false;
     private volatile boolean podcastPartialPlaybackStarted = false;
@@ -864,6 +907,7 @@ public class MainActivity extends Activity {
     private File podcastGrowingCacheFinal = null;
     private volatile boolean podcastDownloadInProgress = false;
     private volatile boolean podcastDownloadPaused = false;
+    private volatile boolean podcastPausedForNetworkLoss = false;
     private volatile long podcastDownloadBytesRead = 0;
     private volatile long podcastDownloadBytesTotal = 0;
     private long podcastGrowingPreparedBytes = 0;
@@ -2095,17 +2139,15 @@ public class MainActivity extends Activity {
     private TextView tvKeyboardSsid, tvKeyboardInput;
     private TextView tvKeyPprev, tvKeyPrev, tvKeyCurrent, tvKeyNext, tvKeyNnext;
 
-    private final String[] KEYBOARD_CHARS = {
-            "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u",
-            "v", "w", "x", "y", "z",
-            "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U",
-            "V", "W", "X", "Y", "Z",
-            "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
-            "!", "@", "#", "$", "%", "^", "&", "*", "-", "_", "+", "=", ".", "?",
-            "[SPC]", "[DEL]", "[CONN]"
-    };
+    private String[] keyboardChars = SolarWheelKeyboardController.CHARSET;
     private int keyboardIndex = 0;
+    private int keyboardCursor = 0;
     private boolean keyboardPpLongDoCase = true;
+    private boolean keyboardPasswordVisible = false;
+    private boolean keyboardGrouped = true;
+    private int keyboardPage = WheelKeyboardLayout.PAGE_LOWER;
+    private List<String> keyboardSuggestionCandidates = new ArrayList<String>();
+    private String keyboardSuggestion = "";
     private long keyboardMediaSkipDownAt = 0;
     private long keyboardPpDownAt = 0;
     private boolean keyboardPpLongHandled = false;
@@ -2621,6 +2663,9 @@ public class MainActivity extends Activity {
     private boolean isPickingBackground = false;
     /** Apps → Install: folder browse for .apk only; Back returns to Apps. */
     private boolean isPickingApk = false;
+    /** Get Music → Import: wheel-friendly browse for audio on Solar storage. */
+    private boolean isPickingMediaImport = false;
+    private int mediaImportReturnScreen = STATE_SOULSEEK;
 
     // 💡 마지막으로 재생된 앨범 아트를 기억하는 변수
     private byte[] lastAlbumArtBytes = null;
@@ -2647,6 +2692,8 @@ public class MainActivity extends Activity {
     private List<String> foundWifiNetworks = new ArrayList<String>();
     private String pairingDeviceAddress;
     private BluetoothA2dp bluetoothA2dp;
+    private boolean a2dpProfileRequested;
+    private boolean a2dpProfileClosing;
     private BluetoothDevice pendingA2dpDevice;
     private String connectedA2dpAddress;
     /** User tapped Connect on a paired device — start queue on A2DP when link comes up. */
@@ -2662,9 +2709,10 @@ public class MainActivity extends Activity {
     private static final String TAG_BT_ROW_SPIN = "bt_row_spin";
     private final Runnable btConnectTimeoutRunnable = new Runnable() {
         @Override public void run() {
-            // 2026-07-19 — Escalate silent PIN to overlay if still negotiating this address.
+            // Record a stalled connection row; pairing prompts are already shown immediately.
             String addr = btConnectingAddress;
             if (addr != null) {
+                BluetoothDiagnostics.recordConnectionTimeout(MainActivity.this, addr);
                 BluetoothPairingCoordinator.onNegotiationTimeout(MainActivity.this, addr);
             }
             endBtConnect();
@@ -2693,6 +2741,7 @@ public class MainActivity extends Activity {
         @Override
         public void onServiceConnected(int profile, BluetoothProfile proxy) {
             if (profile != BluetoothProfile.A2DP) return;
+            a2dpProfileRequested = false;
             bluetoothA2dp = (BluetoothA2dp) proxy;
             if (pendingA2dpDevice != null) {
                 connectA2dpNow(pendingA2dpDevice);
@@ -2704,7 +2753,18 @@ public class MainActivity extends Activity {
 
         @Override
         public void onServiceDisconnected(int profile) {
-            if (profile == BluetoothProfile.A2DP) bluetoothA2dp = null;
+            if (profile != BluetoothProfile.A2DP) return;
+            bluetoothA2dp = null;
+            a2dpProfileRequested = false;
+            if (a2dpProfileClosing || isFinishing()) return;
+            BluetoothDiagnostics.recordProfileFailure(MainActivity.this);
+            BluetoothAudioRepair.requestAutoRepair(MainActivity.this, pendingA2dpDevice);
+            progressHandler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    if (!a2dpProfileClosing && !isFinishing()) ensureA2dpProfile();
+                }
+            }, 750L);
         }
     };
 
@@ -3379,6 +3439,7 @@ public class MainActivity extends Activity {
             @Override
             public void run() {
                 registerDeferredSystemReceivers();
+                onWifiConnectivityChanged();
                 triggerAutoReconnect();
                 if (consumePendingAlbumArtCacheRebuild()) {
                     if (!customLibrary.isEmpty()) {
@@ -3523,11 +3584,569 @@ public class MainActivity extends Activity {
      */
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == REQUEST_MEDIA_IMPORT) {
+            isIntentionalFocusLoss = false;
+            endExternalInputHandoff();
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+                closeMediaImportPicker();
+                importSelectedMedia(data.getData());
+            }
+            return;
+        }
         if (phoneChromeHost != null
                 && phoneChromeHost.onActivityResult(requestCode, resultCode, data)) {
             return;
         }
         super.onActivityResult(requestCode, resultCode, data);
+    }
+
+    private void requestAuthorizedMediaImport() {
+        mediaImportReturnScreen = currentScreenState;
+        isPickingMediaImport = true;
+        currentFolder = getStorageRoot();
+        currentBrowserMode = BROWSER_FOLDER;
+        changeScreen(STATE_BROWSER);
+    }
+
+    private void requestExternalMediaImport() {
+        Intent pick = new Intent(Intent.ACTION_GET_CONTENT);
+        pick.setType("audio/*");
+        pick.addCategory(Intent.CATEGORY_OPENABLE);
+        try {
+            isIntentionalFocusLoss = true;
+            beginExternalInputHandoff();
+            startActivityForResult(Intent.createChooser(
+                    pick, getString(R.string.get_music_import_picker_title)),
+                    REQUEST_MEDIA_IMPORT);
+        } catch (android.content.ActivityNotFoundException e) {
+            isIntentionalFocusLoss = false;
+            endExternalInputHandoff();
+            Toast.makeText(this, getString(R.string.get_music_import_picker_unavailable),
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void closeMediaImportPicker() {
+        if (!isPickingMediaImport) return;
+        int returnScreen = mediaImportReturnScreen;
+        isPickingMediaImport = false;
+        currentBrowserMode = BROWSER_ROOT;
+        currentFolder = rootFolder;
+        changeScreen(returnScreen >= 0 ? returnScreen : STATE_SOULSEEK, true);
+    }
+
+    private static final class SelectedImport {
+        final String displayName;
+        final long size;
+
+        SelectedImport(String displayName, long size) {
+            this.displayName = displayName;
+            this.size = size;
+        }
+    }
+
+    private interface SelectedImportInput {
+        java.io.InputStream open() throws Exception;
+    }
+
+    private SelectedImport describeSelectedImport(Uri uri) {
+        String displayName = null;
+        long size = -1L;
+        android.database.Cursor cursor = null;
+        try {
+            cursor = getContentResolver().query(uri,
+                    new String[] {
+                            android.provider.OpenableColumns.DISPLAY_NAME,
+                            android.provider.OpenableColumns.SIZE
+                    },
+                    null, null, null);
+            if (cursor != null && cursor.moveToFirst()) {
+                int nameColumn = cursor.getColumnIndex(
+                        android.provider.OpenableColumns.DISPLAY_NAME);
+                if (nameColumn >= 0 && !cursor.isNull(nameColumn)) {
+                    displayName = cursor.getString(nameColumn);
+                }
+                int sizeColumn = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE);
+                if (sizeColumn >= 0 && !cursor.isNull(sizeColumn)) {
+                    size = Math.max(0L, cursor.getLong(sizeColumn));
+                }
+            }
+        } catch (Exception ignored) {
+            // Providers are allowed to omit metadata; URI and MIME fallbacks remain usable.
+        } finally {
+            if (cursor != null) try { cursor.close(); } catch (Exception ignored) {}
+        }
+        if (displayName == null || displayName.trim().length() == 0) {
+            displayName = Uri.decode(uri.getLastPathSegment());
+        }
+        String mime = null;
+        try {
+            mime = getContentResolver().getType(uri);
+        } catch (Exception ignored) {}
+        return new SelectedImport(compatibleImportName(displayName, mime), size);
+    }
+
+    private static String compatibleImportName(String displayName, String mimeType) {
+        String safeName = AuthorizedMediaImporter.safeBasename(displayName);
+        if (MediaCompatibilityService.isSupportedAudioName(safeName)) return safeName;
+        String extension = extensionForAudioMime(mimeType);
+        if (extension.length() == 0) return safeName;
+        int dot = safeName.lastIndexOf('.');
+        String stem = dot > 0 ? safeName.substring(0, dot) : safeName;
+        return stem + "." + extension;
+    }
+
+    private static String extensionForAudioMime(String mimeType) {
+        if (mimeType == null) return "";
+        String mime = mimeType.toLowerCase(Locale.US);
+        int semicolon = mime.indexOf(';');
+        if (semicolon >= 0) mime = mime.substring(0, semicolon).trim();
+        if ("audio/mpeg".equals(mime) || "audio/mp3".equals(mime)) return "mp3";
+        if ("audio/flac".equals(mime) || "audio/x-flac".equals(mime)) return "flac";
+        if ("audio/wav".equals(mime) || "audio/x-wav".equals(mime)
+                || "audio/wave".equals(mime)) return "wav";
+        if ("audio/ogg".equals(mime)) return "ogg";
+        if ("audio/mp4".equals(mime) || "audio/x-m4a".equals(mime)) return "m4a";
+        if ("audio/aac".equals(mime)) return "aac";
+        if ("audio/opus".equals(mime)) return "opus";
+        if ("audio/webm".equals(mime)) return "webm";
+        if ("audio/ape".equals(mime) || "audio/x-ape".equals(mime)) return "ape";
+        if ("audio/x-ms-wma".equals(mime)) return "wma";
+        return "";
+    }
+
+    private void importSelectedMedia(final Uri uri) {
+        final SelectedImport selected = describeSelectedImport(uri);
+        startSelectedImport(selected, uri.toString(), new SelectedImportInput() {
+            @Override
+            public java.io.InputStream open() throws Exception {
+                return getContentResolver().openInputStream(uri);
+            }
+        });
+    }
+
+    private void importSelectedFile(final File source) {
+        if (source == null || !source.isFile()) return;
+        final SelectedImport selected = new SelectedImport(
+                AuthorizedMediaImporter.safeBasename(source.getName()), source.length());
+        startSelectedImport(selected, "file:" + source.getAbsolutePath(),
+                new SelectedImportInput() {
+            @Override
+            public java.io.InputStream open() throws Exception {
+                return new java.io.FileInputStream(source);
+            }
+        });
+    }
+
+    private void startSelectedImport(final SelectedImport selected, final String sourceId,
+            final SelectedImportInput selectedInput) {
+        final MediaCompatibilityService.Decision compatibility =
+                MediaCompatibilityService.analyzeName(selected.displayName);
+        if (!compatibility.canImportWithoutConversion) {
+            Toast.makeText(this,
+                    getString(R.string.get_music_import_unsupported, selected.displayName),
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        File mediaRoot = DeviceFeatures.getNewMediaRoot(this);
+        if (mediaRoot == null) {
+            Toast.makeText(this, getString(R.string.get_music_import_no_storage),
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        final File importDirectory = new File(new File(mediaRoot, "Music"), "Imports");
+        final File expectedTarget = new File(importDirectory, selected.displayName);
+        final String transferId = beginTransferJob(null, TransferJobStore.Provider.IMPORT,
+                selected.displayName, getString(R.string.get_music_import_source),
+                sourceId, expectedTarget.getAbsolutePath(), false, 1);
+        Toast.makeText(this,
+                getString(R.string.get_music_import_started, selected.displayName),
+                Toast.LENGTH_SHORT).show();
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                java.io.InputStream input = null;
+                try {
+                    input = selectedInput.open();
+                    if (input == null) throw new IOException("The selected file could not be opened");
+                    final long[] lastProgress = new long[] {0L, 0L};
+                    final AuthorizedMediaImporter.Result result =
+                            AuthorizedMediaImporter.copyToLibrary(
+                                    input, selected.displayName, selected.size, importDirectory,
+                                    new AuthorizedMediaImporter.Progress() {
+                                @Override
+                                public void onProgress(long copiedBytes, long totalBytes) {
+                                    long now = android.os.SystemClock.elapsedRealtime();
+                                    if (lastProgress[1] == 0L
+                                            || copiedBytes - lastProgress[0] >= 512L * 1024L
+                                            || now - lastProgress[1] >= 500L
+                                            || (totalBytes > 0L && copiedBytes >= totalBytes)) {
+                                        lastProgress[0] = copiedBytes;
+                                        lastProgress[1] = now;
+                                        progressTransferJob(
+                                                transferId, copiedBytes, totalBytes);
+                                    }
+                                }
+                            });
+                    finishTransferJob(transferId, result.file, true);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            scanMediaLibraryAsync();
+                            requestSoulseekShareRescan();
+                            Toast.makeText(MainActivity.this,
+                                    getString(result.duplicate
+                                                    ? R.string.get_music_import_duplicate
+                                                    : R.string.get_music_import_done,
+                                            result.file.getName()),
+                                    Toast.LENGTH_LONG).show();
+                        }
+                    });
+                } catch (final Exception e) {
+                    final String message = e.getMessage() != null
+                            ? e.getMessage() : getString(R.string.get_music_import_failed_unknown);
+                    failTransferJob(transferId, message);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            Toast.makeText(MainActivity.this,
+                                    getString(R.string.get_music_import_failed, message),
+                                    Toast.LENGTH_LONG).show();
+                        }
+                    });
+                } finally {
+                    if (input != null) try { input.close(); } catch (IOException ignored) {}
+                }
+            }
+        }, "SolarMediaImport").start();
+    }
+
+    private File directAudioDownloadDirectory() {
+        File mediaRoot = DeviceFeatures.getNewMediaRoot(this);
+        return mediaRoot != null
+                ? new File(new File(mediaRoot, "Music"), "Downloads") : null;
+    }
+
+    private void openAuthorizedDirectDownloadKeyboard() {
+        if (!requireInternet(R.string.toast_internet_required)) return;
+        if (directDownloadControl != null) {
+            Toast.makeText(this, getString(R.string.get_music_direct_audio_busy),
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        keyboardPurpose = KEYBOARD_DIRECT_AUDIO_URL;
+        keyboardReturnState = STATE_SOULSEEK;
+        keyboardPrefill = "https://";
+        changeScreen(STATE_WIFI_KEYBOARD);
+    }
+
+    private void finishAuthorizedDirectDownloadUrlEntry() {
+        final String suppliedUrl = typedPassword != null ? typedPassword.trim() : "";
+        changeScreen(STATE_SOULSEEK);
+        offerAuthorizedDirectDownload(suppliedUrl);
+    }
+
+    private void offerAuthorizedDirectDownload(String suppliedUrl) {
+        if (!requireInternet(R.string.toast_internet_required)) return;
+        if (directDownloadControl != null) {
+            Toast.makeText(this, getString(R.string.get_music_direct_audio_busy),
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (transferJobStore == null) {
+            Toast.makeText(this, getString(R.string.get_music_direct_audio_unavailable),
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        final AuthorizedDirectDownload.Plan plan;
+        try {
+            plan = AuthorizedDirectDownload.prepare(
+                    suppliedUrl, directAudioDownloadDirectory());
+        } catch (IOException e) {
+            Toast.makeText(this, e.getMessage(), Toast.LENGTH_LONG).show();
+            return;
+        }
+        showThemedConfirm(
+                getString(R.string.get_music_direct_audio_confirm_title, plan.displayName),
+                getString(R.string.get_music_direct_audio_confirm, plan.host),
+                getString(R.string.get_music_direct_audio_confirm_action),
+                getString(R.string.common_cancel),
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        startAuthorizedDirectDownload(plan);
+                    }
+                },
+                null);
+    }
+
+    public void mediaOpenAuthorizedDirectAudioUrl(String url) {
+        offerAuthorizedDirectDownload(url);
+    }
+
+    private void startAuthorizedDirectDownload(AuthorizedDirectDownload.Plan plan) {
+        if (plan == null) return;
+        if (TransferNetworkPolicy.shouldPause(
+                true,
+                ConnectivityHelper.isOnline(this),
+                ConnectivityHelper.isWifiAssociated(this))) {
+            Toast.makeText(this, getString(R.string.toast_wifi_unavailable),
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (directDownloadControl != null) {
+            Toast.makeText(this, getString(R.string.get_music_direct_audio_busy),
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        String transferId = beginTransferJob(null, TransferJobStore.Provider.DIRECT,
+                plan.displayName,
+                getString(R.string.get_music_direct_audio_source, plan.host),
+                plan.url, plan.target.getAbsolutePath(), true, 3);
+        if (transferId == null) {
+            Toast.makeText(this, getString(R.string.get_music_direct_audio_unavailable),
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        directDownloadNetworkPausedJobId = null;
+        DirectDownloadControl control = new DirectDownloadControl(transferId, plan);
+        directDownloadControl = control;
+        Toast.makeText(this,
+                getString(R.string.get_music_direct_audio_started, plan.displayName),
+                Toast.LENGTH_SHORT).show();
+        runAuthorizedDirectDownload(control);
+    }
+
+    private void runAuthorizedDirectDownload(final DirectDownloadControl control) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    final long[] lastProgress = new long[] {0L, 0L};
+                    final AuthorizedDirectDownload.Result result =
+                            AuthorizedDirectDownload.download(
+                                    control.plan,
+                                    new com.solar.launcher.net.SolarHttp.DownloadProgress() {
+                                @Override
+                                public void onProgress(long done, long total) {
+                                    long now = android.os.SystemClock.elapsedRealtime();
+                                    if (lastProgress[1] == 0L
+                                            || done - lastProgress[0] >= 512L * 1024L
+                                            || now - lastProgress[1] >= 500L
+                                            || (total > 0L && done >= total)) {
+                                        lastProgress[0] = done;
+                                        lastProgress[1] = now;
+                                        progressTransferJob(control.jobId, done, total);
+                                    }
+                                }
+                            },
+                                    control.cancel);
+                    finishTransferJob(control.jobId, result.file, true);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            scanMediaLibraryAsync();
+                            requestSoulseekShareRescan();
+                            Toast.makeText(MainActivity.this,
+                                    getString(result.duplicate
+                                                    ? R.string.get_music_direct_audio_duplicate
+                                                    : R.string.get_music_direct_audio_done,
+                                            result.file.getName()),
+                                    Toast.LENGTH_LONG).show();
+                        }
+                    });
+                } catch (final Exception e) {
+                    if (control.cancel.get()) {
+                        if (!control.pauseRequested) {
+                            AuthorizedDirectDownload.deletePartial(control.plan);
+                        }
+                    } else {
+                        final String message = e.getMessage() != null
+                                ? e.getMessage()
+                                : getString(R.string.get_music_import_failed_unknown);
+                        failTransferJob(control.jobId, message);
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                Toast.makeText(MainActivity.this,
+                                        getString(R.string.get_music_direct_audio_failed, message),
+                                        Toast.LENGTH_LONG).show();
+                            }
+                        });
+                    }
+                } finally {
+                    if (directDownloadControl == control) {
+                        directDownloadControl = null;
+                    }
+                    scheduleDownloadsUiRefresh();
+                    if (control.jobId.equals(directDownloadNetworkPausedJobId)) {
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                maybeResumeDirectDownloadAfterNetworkLoss();
+                            }
+                        });
+                    }
+                }
+            }
+        }, "SolarDirectAudio").start();
+    }
+
+    private AuthorizedDirectDownload.Plan directPlanForJob(TransferJobStore.Job job)
+            throws IOException {
+        if (job == null || job.provider != TransferJobStore.Provider.DIRECT) {
+            throw new IOException("This is not a direct audio transfer");
+        }
+        if (job.remoteId == null || job.remoteId.length() == 0
+                || job.targetPath == null || job.targetPath.length() == 0) {
+            throw new IOException("The saved direct download is incomplete");
+        }
+        return AuthorizedDirectDownload.resume(
+                job.remoteId, new File(job.targetPath), directAudioDownloadDirectory());
+    }
+
+    private void pauseDirectDownloadForResume(TransferJobStore.Job job) {
+        DirectDownloadControl control = directDownloadControl;
+        if (control == null || job == null || !job.id.equals(control.jobId)) return;
+        clearDirectDownloadNetworkPause(job.id);
+        control.pauseRequested = true;
+        control.cancel.set(true);
+        transitionTransferJob(job.id, TransferJobStore.State.PAUSED, "Paused", "");
+    }
+
+    private void cancelDirectDownload(TransferJobStore.Job job) {
+        if (job != null) clearDirectDownloadNetworkPause(job.id);
+        DirectDownloadControl control = directDownloadControl;
+        if (control != null && job != null && job.id.equals(control.jobId)) {
+            control.pauseRequested = false;
+            control.cancel.set(true);
+            return;
+        }
+        try {
+            AuthorizedDirectDownload.deletePartial(directPlanForJob(job));
+        } catch (Exception ignored) {}
+    }
+
+    private void resumeDirectDownload(final TransferJobStore.Job original) {
+        if (original == null || transferJobStore == null) return;
+        if (TransferNetworkPolicy.shouldPause(
+                original.wifiOnly,
+                ConnectivityHelper.isOnline(this),
+                ConnectivityHelper.isWifiAssociated(this))) {
+            Toast.makeText(this, getString(R.string.toast_wifi_unavailable),
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (directDownloadControl != null) {
+            Toast.makeText(this, getString(R.string.get_music_direct_audio_busy),
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        final AuthorizedDirectDownload.Plan plan;
+        try {
+            plan = directPlanForJob(original);
+            TransferJobStore.Job job = transferJobStore.get(original.id);
+            if (job == null) return;
+            if (job.state == TransferJobStore.State.FAILED) {
+                job = transferJobStore.retry(job.id);
+            }
+            if (job.state == TransferJobStore.State.PAUSED
+                    || job.state == TransferJobStore.State.RETRYING
+                    || job.state == TransferJobStore.State.QUEUED) {
+                transferJobStore.transition(
+                        job.id, TransferJobStore.State.CONNECTING, "Connecting", "");
+            }
+        } catch (Exception e) {
+            Toast.makeText(this,
+                    getString(R.string.get_music_direct_audio_failed,
+                            e.getMessage() != null ? e.getMessage()
+                                    : getString(R.string.downloads_retry_unavailable)),
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        clearDirectDownloadNetworkPause(original.id);
+        DirectDownloadControl control = new DirectDownloadControl(original.id, plan);
+        directDownloadControl = control;
+        if (currentScreenState == STATE_DOWNLOADS) {
+            TransferJobStore.Job resumed = transferJobStore.get(original.id);
+            if (resumed != null && original.id.equals(downloadsDetailJobId)) {
+                buildDownloadJobDetailUI(resumed);
+            } else {
+                scheduleDownloadsUiRefresh();
+            }
+        }
+        runAuthorizedDirectDownload(control);
+    }
+
+    private void clearDirectDownloadNetworkPause(String jobId) {
+        if (jobId != null && jobId.equals(directDownloadNetworkPausedJobId)) {
+            directDownloadNetworkPausedJobId = null;
+        }
+    }
+
+    private boolean isDownloadAutoResumeWifiEnabled() {
+        return prefs == null || prefs.getBoolean(
+                TransferNetworkPolicy.PREF_AUTO_RESUME_WIFI, true);
+    }
+
+    private void pauseDirectDownloadForNetworkLoss(
+            boolean internetAvailable, boolean wifiAssociated) {
+        DirectDownloadControl control = directDownloadControl;
+        if (control == null || transferJobStore == null) return;
+        TransferJobStore.Job job = transferJobStore.get(control.jobId);
+        if (job == null || job.provider != TransferJobStore.Provider.DIRECT
+                || !job.state.isRunning()
+                || !TransferNetworkPolicy.shouldPause(
+                        job.wifiOnly, internetAvailable, wifiAssociated)
+                || !TransferJobStore.canTransition(
+                        job.state, TransferJobStore.State.PAUSED)) {
+            return;
+        }
+        directDownloadNetworkPausedJobId = job.id;
+        control.pauseRequested = true;
+        control.cancel.set(true);
+        transitionTransferJob(
+                job.id,
+                TransferJobStore.State.PAUSED,
+                "Paused - Wi-Fi unavailable",
+                "");
+    }
+
+    private void maybeResumeDirectDownloadAfterNetworkLoss() {
+        String jobId = directDownloadNetworkPausedJobId;
+        if (jobId == null || directDownloadControl != null || transferJobStore == null) return;
+        TransferJobStore.Job job = transferJobStore.get(jobId);
+        if (job == null || job.provider != TransferJobStore.Provider.DIRECT
+                || job.state != TransferJobStore.State.PAUSED) {
+            clearDirectDownloadNetworkPause(jobId);
+            return;
+        }
+        if (!TransferNetworkPolicy.shouldAutoResume(
+                isDownloadAutoResumeWifiEnabled(),
+                job.wifiOnly,
+                ConnectivityHelper.isOnline(this),
+                ConnectivityHelper.isWifiAssociated(this))) {
+            return;
+        }
+        clearDirectDownloadNetworkPause(jobId);
+        resumeDirectDownload(job);
+    }
+
+    private void armRecoveredDirectDownloadAutoResume() {
+        if (transferJobStore == null || directDownloadNetworkPausedJobId != null) return;
+        for (TransferJobStore.Job job : transferJobStore.list()) {
+            if (!TransferNetworkPolicy.isSafeRestartAutoResumeCandidate(job)) continue;
+            directDownloadNetworkPausedJobId = job.id;
+            return;
+        }
+    }
+
+    private void deleteDirectPartialForJob(TransferJobStore.Job job) {
+        if (job == null || job.provider != TransferJobStore.Provider.DIRECT) return;
+        try {
+            AuthorizedDirectDownload.deletePartial(directPlanForJob(job));
+        } catch (Exception ignored) {}
     }
 
     /**
@@ -4077,6 +4696,13 @@ public class MainActivity extends Activity {
 
         migrateLegacyPrefs();
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        try {
+            transferJobStore = TransferJobStore.get(this);
+            armRecoveredDirectDownloadAutoResume();
+        } catch (RuntimeException e) {
+            android.util.Log.w("Solar", "Transfer journal unavailable", e);
+            transferJobStore = null;
+        }
         prefs.registerOnSharedPreferenceChangeListener(solarConfigWritebackListener);
         applyMediaRootPreference();
         playbackSpeed = prefs.getFloat("playback_speed", 1.0f);
@@ -9624,10 +10250,23 @@ public class MainActivity extends Activity {
 
     /** NTP / geo / Reach probes — disk+network; must not run mid-scroll. */
     private void runDeferredInternetAvailabilityHooks() {
-        if (hasInternetConnection() && soulseekReachEnabled) {
+        boolean internetAvailable = hasInternetConnection();
+        boolean wifiAssociated = ConnectivityHelper.isWifiAssociated(this);
+        boolean transferNetworkUnavailable = TransferNetworkPolicy.shouldPause(
+                true, internetAvailable, wifiAssociated);
+        if (transferNetworkUnavailable) {
+            pausePodcastBackgroundDownload(true);
+            pauseSoulseekDownloadForNetworkLoss();
+            pauseDirectDownloadForNetworkLoss(internetAvailable, wifiAssociated);
+        } else {
+            maybeResumePodcastDownload();
+            maybeResumeSoulseekDownloadAfterNetworkLoss();
+            maybeResumeDirectDownloadAfterNetworkLoss();
+        }
+        if (internetAvailable && soulseekReachEnabled) {
             SolarDiagnosticReporter.onReachInternetAvailable(this, prefs);
         }
-        if (hasInternetConnection()) {
+        if (internetAvailable) {
             SolarAutoTime.onInternetAvailable(this);
             SolarGeoRegion.onInternetAvailable(this);
         }
@@ -9744,7 +10383,10 @@ public class MainActivity extends Activity {
     private void triggerAutoReconnect() {
         try {
             WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
-            if (wm != null && wm.isWifiEnabled()) {
+            boolean enabled = prefs == null
+                    || prefs.getBoolean(WifiAutoConnectPolicy.PREF_ENABLED, true);
+            if (wm != null && WifiAutoConnectPolicy.shouldRequestReconnect(
+                    enabled, wm.isWifiEnabled())) {
                 wm.reconnect();
             }
             BluetoothAdapter ba = BluetoothAdapter.getDefaultAdapter();
@@ -10879,6 +11521,7 @@ public class MainActivity extends Activity {
                 || isSettingsFullWidthSubScreen(settingsSubScreenKey)
                 || currentScreenState == STATE_DEEZER
                 || currentScreenState == STATE_SOULSEEK
+                || currentScreenState == STATE_DOWNLOADS
                 || MediaSuiteHost.isMediaSuiteState(currentScreenState);
         applyFullWidthMenusLayout();
     }
@@ -12519,6 +13162,9 @@ public class MainActivity extends Activity {
         } else if (HomeMenuConfig.ID_SOULSEEK.equals(id)) {
             if (!requireInternet(R.string.toast_internet_required)) return;
             openGetMusicScreen();
+        } else if (HomeMenuConfig.ID_DOWNLOADS.equals(id)) {
+            downloadsDetailJobId = null;
+            changeScreen(STATE_DOWNLOADS);
         } else if (HomeMenuConfig.ID_THEMES.equals(id) || HomeMenuConfig.ID_GET_THEMES.equals(id)) {
             openThemesScreen(null);
         } else if (HomeMenuConfig.ID_MORE.equals(id)) {
@@ -12932,6 +13578,7 @@ public class MainActivity extends Activity {
             case STATE_STORAGE: return getString(R.string.status_storage);
             case STATE_WEBSERVER: return getString(R.string.status_pc_upload);
             case STATE_PODCASTS: return getString(R.string.status_podcasts);
+            case STATE_DOWNLOADS: return getString(R.string.status_downloads);
             case STATE_FLOW: return getString(R.string.status_flow);
             case STATE_SOULSEEK:
                 return browserStatusTitle != null && isGetMusicUnifiedUi()
@@ -13008,6 +13655,9 @@ public class MainActivity extends Activity {
         }
         if (keyboardPurpose == KEYBOARD_YOUTUBE_SEARCH) {
             return getString(R.string.youtube_search_title);
+        }
+        if (keyboardPurpose == KEYBOARD_DIRECT_AUDIO_URL) {
+            return getString(R.string.get_music_direct_audio_title);
         }
         if (keyboardPurpose == KEYBOARD_RADIO_NET_SEARCH) {
             return getString(R.string.radio_net_search_title);
@@ -14291,7 +14941,7 @@ public class MainActivity extends Activity {
         if (state != STATE_MENU && layoutMainMenu != null) {
             layoutMainMenu.setVisibility(View.GONE);
         }
-        layoutBrowserMode.setVisibility((state == STATE_BROWSER || state == STATE_PODCASTS || state == STATE_SOULSEEK || state == STATE_DEEZER || state == STATE_APPS || state == STATE_MORE
+        layoutBrowserMode.setVisibility((state == STATE_BROWSER || state == STATE_PODCASTS || state == STATE_SOULSEEK || state == STATE_DEEZER || state == STATE_APPS || state == STATE_MORE || state == STATE_DOWNLOADS
                 || state == STATE_USB_STORAGE || state == STATE_NAVIDROME || state == STATE_PLEX || state == STATE_JELLYFIN
                 || state == MediaSuiteHost.STATE_RADIO || state == MediaSuiteHost.STATE_RADIO_FM_BROWSE
                 || state == MediaSuiteHost.STATE_RADIO_FM_PLAYER
@@ -14300,7 +14950,7 @@ public class MainActivity extends Activity {
                 || state == MediaSuiteHost.STATE_YOUTUBE_DETAIL
                 || state == MediaSuiteHost.STATE_PHOTOS) ? View.VISIBLE : View.GONE);
         if (state == STATE_BROWSER || state == STATE_PODCASTS || state == STATE_SOULSEEK || state == STATE_DEEZER
-                || state == STATE_APPS || state == STATE_MORE || state == STATE_USB_STORAGE
+                || state == STATE_APPS || state == STATE_MORE || state == STATE_DOWNLOADS || state == STATE_USB_STORAGE
                 || state == STATE_NAVIDROME || state == STATE_PLEX || state == STATE_JELLYFIN
                 || state == MediaSuiteHost.STATE_RADIO || state == MediaSuiteHost.STATE_RADIO_FM_BROWSE
                 || state == MediaSuiteHost.STATE_RADIO_FM_PLAYER
@@ -14527,6 +15177,7 @@ public class MainActivity extends Activity {
         if (state == STATE_MENU) {
             isPickingBackground = false;
             isPickingApk = false;
+            isPickingMediaImport = false;
             settingsBrowseFullWidth = false;
             applyFullWidthMenusLayout();
             applyPodcastBrowserLayout();
@@ -14657,6 +15308,11 @@ public class MainActivity extends Activity {
             buildAppsLauncherUI();
         } else if (state == STATE_MORE) {
             buildMoreMenuUI();
+        } else if (state == STATE_DOWNLOADS) {
+            TransferJobStore.Job detail = transferJobStore != null
+                    ? transferJobStore.get(downloadsDetailJobId) : null;
+            if (detail != null) buildDownloadJobDetailUI(detail);
+            else buildDownloadsUI();
         } else if (state == STATE_NAVIDROME) {
             if (!NavidromePrefs.isConfigured(prefs)) {
                 if (hasInternetConnection()) {
@@ -14690,6 +15346,7 @@ public class MainActivity extends Activity {
         // 2026-07-15 — Media suite (YouTube/radio/videos/photos) also needs host width on enter.
         if (state == STATE_BROWSER || state == STATE_SOULSEEK || state == STATE_DEEZER
                 || state == STATE_PODCASTS || state == STATE_APPS || state == STATE_MORE
+                || state == STATE_DOWNLOADS
                 || state == STATE_NAVIDROME || state == STATE_PLEX || state == STATE_JELLYFIN
                 || MediaSuiteHost.isMediaSuiteState(state)) {
             applyPodcastBrowserLayout();
@@ -17173,8 +17830,15 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     private void openKeyboard() {
         typedPassword = keyboardPrefill != null ? keyboardPrefill : "";
         keyboardPrefill = null;
+        keyboardGrouped = WheelKeyboardLayout.isGrouped(prefs);
+        keyboardPage = WheelKeyboardLayout.PAGE_LOWER;
+        keyboardSuggestionCandidates = loadKeyboardSuggestionCandidates();
+        refreshKeyboardSuggestion();
+        keyboardChars = keyboardCharsetForPurpose();
         keyboardIndex = 0;
+        keyboardCursor = typedPassword.length();
         keyboardPpLongDoCase = true;
+        keyboardPasswordVisible = false;
         // 2026-07-15 — Reset paint caches so first frame styles input + current key.
         keyboardLastInputShown = null;
         keyboardLastPlaceholder = !keyboardInputIsPlaceholder(); // force style once
@@ -17260,12 +17924,12 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
                     @Override
                     public int charsetLength() {
-                        return KEYBOARD_CHARS.length;
+                        return keyboardChars.length;
                     }
 
                     @Override
                     public void setIndex(int idx) {
-                        if (idx < 0 || idx >= KEYBOARD_CHARS.length) return;
+                        if (idx < 0 || idx >= keyboardChars.length) return;
                         keyboardIndex = idx;
                         // 2026-07-15 — Wheel only: letters strip, not full theme restyle.
                         updateKeyboardKeyStripTexts();
@@ -17278,7 +17942,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
                     @Override
                     public void wheelBy(int steps) {
-                        int len = KEYBOARD_CHARS.length;
+                        int len = keyboardChars.length;
                         if (len <= 0) return;
                         keyboardIndex = (keyboardIndex + steps % len + len) % len;
                         updateKeyboardKeyStripTexts();
@@ -17288,7 +17952,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     private void openWifiKeyboard(String ssid) {
         keyboardPurpose = KEYBOARD_WIFI;
-        keyboardReturnState = STATE_WIFI;
+        keyboardReturnState = currentScreenState != STATE_WIFI_KEYBOARD
+                ? currentScreenState : STATE_WIFI;
         targetWifiSsid = ssid;
         changeScreen(STATE_WIFI_KEYBOARD);
     }
@@ -17339,12 +18004,74 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                 || keyboardPurpose == KEYBOARD_BT_PAIRING_PIN
                 || keyboardPurpose == KEYBOARD_LIBRARY_SEARCH
                 || keyboardPurpose == KEYBOARD_REPORT_ISSUE
-                || keyboardPurpose == KEYBOARD_LALAL_KEY;
+                || keyboardPurpose == KEYBOARD_LALAL_KEY
+                || keyboardPurpose == KEYBOARD_DIRECT_AUDIO_URL;
+    }
+
+    private String[] keyboardCharsetForPurpose() {
+        String[] charset = WheelKeyboardLayout.charset(keyboardGrouped, keyboardPage,
+                keyboardIsSensitivePurpose(),
+                keyboardPurpose == KEYBOARD_BT_PAIRING_PIN);
+        return keyboardSupportsPrediction()
+                ? WheelKeyboardSuggestions.appendToken(charset) : charset;
+    }
+
+    private boolean keyboardIsSensitivePurpose() {
+        return keyboardPurpose == KEYBOARD_WIFI && !isTargetWifiOpen
+                || keyboardPurpose == KEYBOARD_SOULSEEK_PASS
+                || keyboardPurpose == KEYBOARD_BT_PAIRING_PIN
+                || keyboardPurpose == KEYBOARD_LALAL_KEY
+                || keyboardPurpose == NavidromeSettingsHost.KEYBOARD_PASS
+                || keyboardPurpose == PlexSettingsHost.KEYBOARD_TOKEN
+                || keyboardPurpose
+                        == com.solar.launcher.jellyfin.JellyfinSettingsHost.KEYBOARD_PASS
+                || keyboardPurpose
+                        == com.solar.launcher.scrobble.ScrobbleSettingsHost
+                        .KEYBOARD_LISTENBRAINZ_TOKEN;
+    }
+
+    private boolean keyboardSupportsPrediction() {
+        if (keyboardIsSensitivePurpose()) return false;
+        return keyboardPurpose == KEYBOARD_SOULSEEK_SEARCH
+                || keyboardPurpose == KEYBOARD_DEEZER_SEARCH
+                || keyboardPurpose == KEYBOARD_PODCAST_SEARCH
+                || keyboardPurpose == KEYBOARD_YOUTUBE_SEARCH
+                || keyboardPurpose == KEYBOARD_LIBRARY_SEARCH;
+    }
+
+    private List<String> loadKeyboardSuggestionCandidates() {
+        List<String> recent = new ArrayList<String>();
+        if (!keyboardSupportsPrediction()) return recent;
+        if (keyboardPurpose == KEYBOARD_SOULSEEK_SEARCH) {
+            recent.addAll(getMusicFromEntryPoint
+                    ? GetMusicSearchHistory.load(prefs)
+                    : SoulseekSearchHistory.load(prefs));
+        } else if (keyboardPurpose == KEYBOARD_DEEZER_SEARCH) {
+            recent.addAll(com.solar.launcher.deezer.DeezerSearchHistory.load(prefs));
+        } else if (keyboardPurpose == KEYBOARD_YOUTUBE_SEARCH) {
+            recent.addAll(com.solar.launcher.youtube.YouTubeRecentSearches.get(this));
+        } else if (keyboardPurpose == KEYBOARD_PODCAST_SEARCH) {
+            if (podcastLastQuery != null && !podcastLastQuery.trim().isEmpty()) {
+                recent.add(podcastLastQuery.trim());
+            }
+        } else if (keyboardPurpose == KEYBOARD_LIBRARY_SEARCH) {
+            if (librarySearchQuery != null && !librarySearchQuery.trim().isEmpty()) {
+                recent.add(librarySearchQuery.trim());
+            }
+        }
+        return recent;
+    }
+
+    private void refreshKeyboardSuggestion() {
+        keyboardSuggestion = keyboardSupportsPrediction()
+                ? WheelKeyboardSuggestions.bestCompletion(
+                        typedPassword, keyboardSuggestionCandidates)
+                : "";
     }
 
     private String keyboardDisplayChar(String ch) {
-        if ("[CONN]".equals(ch)) return getString(R.string.keyboard_enter);
-        return ch;
+        return SolarWheelKeyboardController.displayChar(ch,
+                getString(R.string.keyboard_enter), keyboardPasswordVisible);
     }
 
     private void openPodcastSearchKeyboard() {
@@ -17395,18 +18122,11 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     }
 
     private void openGetMusicScreen(boolean preserveReturnState) {
-        if (!hasInternetConnection()) {
-            Toast.makeText(this, getString(R.string.toast_internet_required), Toast.LENGTH_SHORT).show();
-            return;
-        }
-        if (!GetMusicSources.anyAvailable(prefs, soulseekActive(), deezerActive())) {
-            Toast.makeText(this, getString(R.string.get_music_unavailable), Toast.LENGTH_LONG).show();
-            return;
-        }
         getMusicMode = GetMusicSources.resolveMode(prefs, soulseekActive(), deezerActive());
         getMusicFromEntryPoint = true;
         getMusicEmbeddedInDeezer = false;
-        if (GetMusicSources.deezerConfiguredForGetMusic(prefs, deezerActive())
+        if (hasInternetConnection()
+                && GetMusicSources.deezerConfiguredForGetMusic(prefs, deezerActive())
                 && !ConnectivityHelper.isDeezerLoginOk()) {
             refreshDeezerSessionFromPrefs(false);
         }
@@ -17422,6 +18142,34 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             }
         }
         changeScreen(STATE_SOULSEEK);
+    }
+
+    /**
+     * First-use acknowledgement required before a Soulseek search or transfer.
+     * Browsing settings/account state remains available without accepting it.
+     */
+    private boolean ensureSoulseekUseNotice(final Runnable continueAfterAcceptance) {
+        if (prefs != null && prefs.getBoolean(PREF_SOULSEEK_USE_NOTICE, false)) {
+            return true;
+        }
+        showThemedConfirm(
+                getString(R.string.soulseek_use_notice_title),
+                getString(R.string.soulseek_use_notice_message),
+                getString(R.string.soulseek_use_notice_accept),
+                getString(R.string.common_cancel),
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        if (prefs != null) {
+                            prefs.edit().putBoolean(PREF_SOULSEEK_USE_NOTICE, true).commit();
+                        }
+                        if (continueAfterAcceptance != null) {
+                            continueAfterAcceptance.run();
+                        }
+                    }
+                },
+                null);
+        return false;
     }
 
     private void openSoulseekScreen() {
@@ -18098,7 +18846,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             return;
         }
         if (keyboardPurpose == KEYBOARD_WIFI && isTargetWifiOpen) {
-            keyboardIndex = KEYBOARD_CHARS.length - 1;
+            keyboardIndex = keyboardChars.length - 1;
         }
         updateKeyboardKeyStripTexts();
         updateKeyboardInputDisplay();
@@ -18113,14 +18861,14 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                 || tvKeyNext == null || tvKeyNnext == null) {
             return;
         }
-        int len = KEYBOARD_CHARS.length;
+        int len = keyboardChars.length;
         if (len <= 0) return;
         int idx = keyboardIndex;
-        tvKeyPprev.setText(keyboardDisplayChar(KEYBOARD_CHARS[(idx - 2 + len) % len]));
-        tvKeyPrev.setText(keyboardDisplayChar(KEYBOARD_CHARS[(idx - 1 + len) % len]));
-        tvKeyCurrent.setText(keyboardDisplayChar(KEYBOARD_CHARS[idx]));
-        tvKeyNext.setText(keyboardDisplayChar(KEYBOARD_CHARS[(idx + 1) % len]));
-        tvKeyNnext.setText(keyboardDisplayChar(KEYBOARD_CHARS[(idx + 2) % len]));
+        tvKeyPprev.setText(keyboardDisplayChar(keyboardChars[(idx - 2 + len) % len]));
+        tvKeyPrev.setText(keyboardDisplayChar(keyboardChars[(idx - 1 + len) % len]));
+        tvKeyCurrent.setText(keyboardDisplayChar(keyboardChars[idx]));
+        tvKeyNext.setText(keyboardDisplayChar(keyboardChars[(idx + 1) % len]));
+        tvKeyNnext.setText(keyboardDisplayChar(keyboardChars[(idx + 2) % len]));
         // Restyle current-key chrome only when the focused letter changes.
         if (keyboardLastStyledIndex != idx) {
             styleKeyboardCurrentKey();
@@ -18159,7 +18907,12 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             return getString(R.string.wifi_open_network);
         }
         if (typedPassword.length() > 0) {
-            return typedPassword;
+            String rendered = WheelTextEditor.render(typedPassword, keyboardCursor,
+                    keyboardIsSensitivePurpose() && !keyboardPasswordVisible, true);
+            if (keyboardSuggestion != null && !keyboardSuggestion.isEmpty()) {
+                rendered += "  > " + keyboardSuggestion;
+            }
+            return rendered;
         }
         // 2026-07-20 — Only purposeful empty-field hints (no repeat of screen/status title).
         // Layman: blank box unless the hint actually helps type (password, optional note, PIN).
@@ -18182,6 +18935,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         }
         if (keyboardPurpose == KEYBOARD_LALAL_KEY) {
             return getString(R.string.lalal_key_prompt);
+        }
+        if (keyboardPurpose == KEYBOARD_DIRECT_AUDIO_URL) {
+            return getString(R.string.get_music_direct_audio_placeholder);
         }
         if (keyboardPurpose == KEYBOARD_SOULSEEK_SEARCH) {
             return getString(getMusicFromEntryPoint
@@ -18206,46 +18962,93 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     }
 
     private void handleKeyboardInput() {
-        String selectedChar = KEYBOARD_CHARS[keyboardIndex];
+        String selectedChar = keyboardChars[keyboardIndex];
         // 2026-07-15 — Haptic already throttled (30ms) in clickFeedback — keep for key feel.
-        boolean isConn = selectedChar.equals("[CONN]");
+        boolean isConn = SolarWheelKeyboardController.TOKEN_CONN.equals(selectedChar);
         clickFeedback();
-        if (selectedChar.equals("[DEL]")) {
+        if (SolarWheelKeyboardController.TOKEN_DEL.equals(selectedChar)) {
             applySoulseekUsernameDel();
             updateKeyboardInputDisplay();
+            return;
+        }
+        if (SolarWheelKeyboardController.TOKEN_LEFT.equals(selectedChar)) {
+            applyKeyboardEdit(WheelTextEditor.moveCursor(
+                    typedPassword, keyboardCursor, -1));
+            return;
+        }
+        if (SolarWheelKeyboardController.TOKEN_RIGHT.equals(selectedChar)) {
+            applyKeyboardEdit(WheelTextEditor.moveCursor(
+                    typedPassword, keyboardCursor, 1));
+            return;
+        }
+        if (SolarWheelKeyboardController.TOKEN_WORD.equals(selectedChar)) {
+            applyKeyboardEdit(WheelTextEditor.deleteWordBeforeCursor(
+                    typedPassword, keyboardCursor));
+            return;
+        }
+        if (SolarWheelKeyboardController.TOKEN_VISIBILITY.equals(selectedChar)) {
+            keyboardPasswordVisible = !keyboardPasswordVisible;
+            updateKeyboardUI();
+            return;
+        }
+        if (WheelKeyboardSuggestions.TOKEN_SUGGEST.equals(selectedChar)) {
+            if (keyboardSuggestion != null && !keyboardSuggestion.isEmpty()) {
+                typedPassword = keyboardSuggestion;
+                keyboardCursor = typedPassword.length();
+                refreshKeyboardSuggestion();
+                updateKeyboardInputDisplay();
+            }
             return;
         }
         if (isConn) {
             handleKeyboardEnter();
             return;
         }
-        if (selectedChar.equals("[SPC]")) {
-            typedPassword += " ";
+        if (SolarWheelKeyboardController.TOKEN_SPC.equals(selectedChar)) {
+            applyKeyboardEdit(WheelTextEditor.insert(
+                    typedPassword, keyboardCursor, " "));
             if (keyboardPurpose == KEYBOARD_SOULSEEK_USER) soulseekUsernameAutoPhase = false;
-            updateKeyboardInputDisplay();
             return;
         }
-        typedPassword += selectedChar;
+        applyKeyboardEdit(WheelTextEditor.insert(
+                typedPassword, keyboardCursor, selectedChar));
         if (keyboardPurpose == KEYBOARD_SOULSEEK_USER) soulseekUsernameAutoPhase = false;
         if (selectedChar.length() == 1) {
             char ch = selectedChar.charAt(0);
             if (ch >= 'A' && ch <= 'Z') {
-                keyboardIndex = KeyboardCharset.lowercaseIndexForChar(ch);
+                int lowerIndex = KeyboardCharset.lowercaseIndexForChar(ch);
+                if (keyboardGrouped) {
+                    keyboardPage = WheelKeyboardLayout.PAGE_LOWER;
+                    keyboardChars = keyboardCharsetForPurpose();
+                }
+                keyboardIndex = Math.min(lowerIndex, keyboardChars.length - 1);
                 keyboardPpLongDoCase = true;
                 updateKeyboardKeyStripTexts();
             }
         }
-        updateKeyboardInputDisplay();
     }
 
     /** One DEL/prevtrack clears prefilled auto username; per-char delete after user types. */
     private void applySoulseekUsernameDel() {
         if (keyboardPurpose == KEYBOARD_SOULSEEK_USER && soulseekUsernameAutoPhase) {
             typedPassword = "";
+            keyboardCursor = 0;
             soulseekUsernameAutoPhase = false;
-        } else if (typedPassword.length() > 0) {
-            typedPassword = typedPassword.substring(0, typedPassword.length() - 1);
+        } else {
+            WheelTextEditor.State edit =
+                    WheelTextEditor.deleteBeforeCursor(typedPassword, keyboardCursor);
+            typedPassword = edit.text;
+            keyboardCursor = edit.cursor;
         }
+        refreshKeyboardSuggestion();
+    }
+
+    private void applyKeyboardEdit(WheelTextEditor.State edit) {
+        if (edit == null) return;
+        typedPassword = edit.text;
+        keyboardCursor = edit.cursor;
+        refreshKeyboardSuggestion();
+        updateKeyboardInputDisplay();
     }
 
     private void handleKeyboardMediaDel() {
@@ -18269,17 +19072,21 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         if (vibrate) clickFeedback();
         if (keyboardPurpose == KEYBOARD_SOULSEEK_USER) {
             applySoulseekUsernameDel();
-        } else if (typedPassword.length() > 0) {
-            typedPassword = typedPassword.substring(0, typedPassword.length() - 1);
+        } else {
+            WheelTextEditor.State edit =
+                    WheelTextEditor.deleteBeforeCursor(typedPassword, keyboardCursor);
+            typedPassword = edit.text;
+            keyboardCursor = edit.cursor;
         }
+        refreshKeyboardSuggestion();
         // 2026-07-15 — Input-only paint (was full strip restyle every delete).
         updateKeyboardInputDisplay();
     }
 
     private void handleKeyboardMediaSpace() {
         clickFeedback();
-        typedPassword += " ";
-        updateKeyboardInputDisplay();
+        applyKeyboardEdit(WheelTextEditor.insert(
+                typedPassword, keyboardCursor, " "));
     }
 
     private void handleKeyboardEnter() {
@@ -18304,6 +19111,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         else if (keyboardPurpose == KEYBOARD_VIDEO_FILE_SEARCH) finishVideoFileSearchEntry();
         else if (keyboardPurpose == KEYBOARD_LALAL_KEY) finishLalalKeyEntry();
         else if (keyboardPurpose == KEYBOARD_REPORT_ISSUE) finishReportIssueEntry();
+        else if (keyboardPurpose == KEYBOARD_DIRECT_AUDIO_URL) {
+            finishAuthorizedDirectDownloadUrlEntry();
+        }
         else if (keyboardPurpose == NavidromeSettingsHost.KEYBOARD_URL
                 || keyboardPurpose == NavidromeSettingsHost.KEYBOARD_USER
                 || keyboardPurpose == NavidromeSettingsHost.KEYBOARD_PASS) {
@@ -18369,6 +19179,17 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         } catch (Exception ignored) {}
         // #endregion
         clickFeedback();
+        if (keyboardPurpose == KEYBOARD_BT_PAIRING_PIN) return;
+        if (keyboardGrouped) {
+            String[] oldCharset = keyboardChars;
+            int oldPage = keyboardPage;
+            keyboardPage = WheelKeyboardLayout.nextPage(keyboardPage);
+            keyboardChars = keyboardCharsetForPurpose();
+            keyboardIndex = WheelKeyboardLayout.mapIndexToPage(
+                    oldCharset, keyboardIndex, oldPage, keyboardChars, keyboardPage);
+            updateKeyboardUI();
+            return;
+        }
         if (keyboardPpLongDoCase) {
             int flipped = keyboardFlipCaseIndex(keyboardIndex);
             keyboardIndex = flipped != keyboardIndex ? flipped : keyboardMapToNextCharset(keyboardIndex);
@@ -18385,14 +19206,12 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         final boolean open = isTargetWifiOpen;
         Toast.makeText(this, getString(R.string.toast_wifi_connecting, ssid), Toast.LENGTH_SHORT).show();
         beginWifiConnect();
-        WifiConnector.connect(this, ssid, password, open, new WifiConnector.Callback() {
+        WifiConnector.connectDetailed(this, ssid, password, open,
+                new WifiConnector.DetailedCallback() {
             @Override
-            public void onComplete(boolean success) {
+            public void onComplete(WifiConnector.ConnectionResult result) {
                 endWifiConnect();
-                if (!success) {
-                    Toast.makeText(MainActivity.this, getString(R.string.toast_wifi_connect_failed),
-                            Toast.LENGTH_SHORT).show();
-                }
+                showWifiConnectionFailure(result);
                 prefetchWifiConfiguredNetworksAsync();
                 changeScreen(STATE_WIFI);
             }
@@ -18402,7 +19221,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     private void performWifiConnection(String ssid, String password, boolean open) {
         Toast.makeText(this, getString(R.string.toast_wifi_connecting, ssid), Toast.LENGTH_SHORT).show();
         beginWifiConnect();
-        WifiConnector.connect(this, ssid, password, open, wrapWifiConnectCallback(wifiConnectResultCallback()));
+        WifiConnector.connectDetailed(this, ssid, password, open,
+                wrapWifiConnectCallback(wifiConnectResultCallback()));
     }
 
     private void beginWifiConnect() {
@@ -18432,22 +19252,21 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         // #endregion
     }
 
-    private WifiConnector.Callback wrapWifiConnectCallback(final WifiConnector.Callback inner) {
-        return new WifiConnector.Callback() {
+    private WifiConnector.DetailedCallback wrapWifiConnectCallback(
+            final WifiConnector.DetailedCallback inner) {
+        return new WifiConnector.DetailedCallback() {
             @Override
-            public void onComplete(boolean success) {
+            public void onComplete(WifiConnector.ConnectionResult result) {
                 endWifiConnect();
                 prefetchWifiConfiguredNetworksAsync();
-                if (inner != null) inner.onComplete(success);
+                if (inner != null) inner.onComplete(result);
             }
         };
     }
 
     private boolean isWifiNetworkOpen(String capabilities) {
-        if (capabilities == null || capabilities.isEmpty()) return true;
-        String caps = capabilities.toUpperCase(Locale.US);
-        return !caps.contains("WPA") && !caps.contains("WEP") && !caps.contains("PSK")
-                && !caps.contains("EAP");
+        return WifiConnector.securityForCapabilities(capabilities)
+                == WifiConnector.Security.OPEN;
     }
 
     private boolean isWifiSsidConnected(String ssid) {
@@ -18455,7 +19274,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         try {
             WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
             WifiInfo info = wm != null ? wm.getConnectionInfo() : null;
-            String connected = info != null && info.getSSID() != null ? info.getSSID().replace("\"", "") : "";
+            String connected = info != null
+                    ? WifiScanFilter.displayableConnectedSsid(info.getSSID()) : "";
             return ssid.equals(connected);
         } catch (Exception ignored) {
             return false;
@@ -18576,6 +19396,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             }
         }
 
+        addBluetoothDiagnosticsRow();
+
         if (!isOn) {
             restoreBluetoothListFocus(restoreFocusAddress, requestFocus);
             updateNetworkRescanLoop();
@@ -18599,6 +19421,71 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
         triggerBluetoothDiscovery(false);
         updateNetworkRescanLoop();
+    }
+
+    private void addBluetoothDiagnosticsRow() {
+        Button details = createListButton(getString(R.string.bluetooth_diagnostics));
+        details.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                showBluetoothDiagnostics();
+            }
+        });
+        containerBtItems.addView(details);
+    }
+
+    private void showBluetoothDiagnostics() {
+        final BluetoothDiagnostics.Snapshot snapshot =
+                BluetoothDiagnostics.capture(this, connectedA2dpAddress);
+        String body = getString(R.string.bluetooth_diagnostics_body,
+                snapshot.adapterState,
+                snapshot.deviceName,
+                snapshot.bondState,
+                snapshot.a2dpState,
+                snapshot.activeRoute,
+                snapshot.supportedProfiles,
+                snapshot.codec,
+                snapshot.lastDisconnect,
+                snapshot.reconnectSummary,
+                snapshot.lastEvent);
+        boolean canRetry = snapshot.lastAddress != null && !snapshot.lastAddress.isEmpty();
+        showThemedConfirm(getString(R.string.bluetooth_diagnostics_title), body,
+                getString(canRetry
+                        ? R.string.bluetooth_diagnostics_reconnect
+                        : R.string.bluetooth_diagnostics_refresh),
+                getString(R.string.wifi_diagnostics_close),
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        if (snapshot.lastAddress == null || snapshot.lastAddress.isEmpty()) {
+                            showBluetoothDiagnostics();
+                        } else {
+                            retryBluetoothFromDiagnostics(snapshot.lastAddress);
+                        }
+                    }
+                });
+    }
+
+    private void retryBluetoothFromDiagnostics(String address) {
+        BluetoothDevice device = bluetoothDeviceByAddress(address);
+        if (device == null) {
+            Toast.makeText(this, getString(R.string.bluetooth_diagnostics_no_bond),
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        try {
+            if (device.getBondState() != BluetoothDevice.BOND_BONDED) {
+                Toast.makeText(this, getString(R.string.bluetooth_diagnostics_no_bond),
+                        Toast.LENGTH_LONG).show();
+                return;
+            }
+            beginBtConnect(device);
+            connectBluetoothAudio(device, true);
+        } catch (SecurityException denied) {
+            Toast.makeText(this, getString(R.string.bluetooth_diagnostics_no_bond),
+                    Toast.LENGTH_LONG).show();
+        }
     }
 
     @android.annotation.SuppressLint("MissingPermission")
@@ -18930,14 +19817,21 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     @android.annotation.SuppressLint("MissingPermission")
     private void ensureA2dpProfile() {
-        if (bluetoothA2dp != null) return;
+        if (bluetoothA2dp != null || a2dpProfileRequested || a2dpProfileClosing) return;
         BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
         if (adapter == null || !adapter.isEnabled()) return;
-        adapter.getProfileProxy(this, a2dpProfileListener, BluetoothProfile.A2DP);
+        try {
+            a2dpProfileRequested =
+                    adapter.getProfileProxy(this, a2dpProfileListener, BluetoothProfile.A2DP);
+        } catch (Exception e) {
+            a2dpProfileRequested = false;
+            BluetoothDiagnostics.recordProfileFailure(this);
+        }
     }
 
     @android.annotation.SuppressLint("MissingPermission")
     private void reconnectLastBluetoothAudio() {
+        if (!BluetoothAudioRepair.isAutoReconnectEnabled(this)) return;
         String addr = prefs.getString(PREF_LAST_BT_AUDIO, null);
         if (addr == null) return;
         BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
@@ -19032,6 +19926,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     private void connectA2dpNow(BluetoothDevice device) {
         try {
             boolean ok = BluetoothAudioRepair.connectA2dp(this, bluetoothA2dp, device, true);
+            BluetoothDiagnostics.recordReconnectAttempt(this, device, 1, ok,
+                    BluetoothAudioRepair.isA2dpConnected(bluetoothA2dp, device));
             // #region agent log
             try {
                 org.json.JSONObject d = new org.json.JSONObject();
@@ -19301,6 +20197,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             }
         }
 
+        addWifiDiagnosticsRow();
+
         if (!isOn)
             return;
 
@@ -19311,7 +20209,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             WifiInfo wifiInfo = manager.getConnectionInfo();
             String connectedSSID = "";
             if (wifiInfo != null && wifiInfo.getSSID() != null) {
-                connectedSSID = wifiInfo.getSSID().replace("\"", "");
+                connectedSSID = WifiScanFilter.displayableConnectedSsid(wifiInfo.getSSID());
             }
 
             // 🚀 1순위: 현재 연결된 와이파이를 가장 먼저 찾아서 최상단에 배치!
@@ -19338,15 +20236,90 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         }
     }
 
+    private void addWifiDiagnosticsRow() {
+        Button details = createListButton(getString(R.string.wifi_diagnostics));
+        details.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                showWifiDiagnostics();
+            }
+        });
+        containerWifiItems.addView(details);
+    }
+
+    private void showWifiDiagnostics() {
+        WifiDiagnostics.Snapshot snapshot = WifiDiagnostics.capture(this);
+        String state = getString(snapshot.associated
+                ? R.string.wifi_diagnostics_connected
+                : R.string.wifi_diagnostics_not_connected);
+        String link = snapshot.linkSpeedMbps >= 0
+                ? getString(R.string.wifi_diagnostics_link_speed, snapshot.linkSpeedMbps)
+                : "—";
+        String dns = getString(R.string.wifi_diagnostics_dns_pair,
+                snapshot.dns1, snapshot.dns2);
+        String body = getString(R.string.wifi_diagnostics_body,
+                state,
+                snapshot.ssid,
+                snapshot.supplicant,
+                WifiDiagnostics.signalLabel(snapshot.rssi),
+                snapshot.rssi,
+                link,
+                snapshot.ip,
+                snapshot.gateway,
+                dns,
+                WifiDiagnostics.leaseLabel(snapshot.leaseSeconds));
+        showThemedConfirm(getString(R.string.wifi_diagnostics_title), body,
+                getString(R.string.wifi_diagnostics_test),
+                getString(R.string.wifi_diagnostics_close),
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        runWifiConnectionTest();
+                    }
+                });
+    }
+
+    private void runWifiConnectionTest() {
+        showPleaseWaitOverlay(getString(R.string.wifi_diagnostics_testing));
+        WifiDiagnostics.runConnectionTest(this, new WifiDiagnostics.Callback() {
+            @Override
+            public void onComplete(final WifiDiagnostics.TestResult result) {
+                dismissPleaseWaitOverlay();
+                String ok = getString(R.string.wifi_test_ok);
+                String failed = getString(R.string.wifi_test_failed);
+                String body = getString(R.string.wifi_test_body,
+                        result.associated ? ok : failed,
+                        result.internetReachable ? ok : failed,
+                        result.solarServiceReachable ? ok : failed,
+                        result.googleApiReachable ? ok : failed,
+                        String.format(Locale.US, "%.1fs", result.elapsedMs / 1000f));
+                showThemedConfirm(getString(R.string.wifi_test_title), body,
+                        getString(R.string.wifi_test_run_again),
+                        getString(R.string.wifi_diagnostics_close),
+                        new Runnable() {
+                            @Override
+                            public void run() {
+                                runWifiConnectionTest();
+                            }
+                        });
+            }
+        });
+    }
+
     // 💡 연결 상태(isConnected)를 파라미터로 직접 전달받도록 개조된 함수
-    private void addWifiItemToUI(final String ssid, String capabilities, final boolean isConnected) {
-        final boolean isOpen = !capabilities.contains("WPA") && !capabilities.contains("WEP");
+    private void addWifiItemToUI(final String ssid, final String capabilities,
+            final boolean isConnected) {
+        final boolean isOpen = isWifiNetworkOpen(capabilities);
+        final boolean isSaved = isWifiNetworkSaved(ssid);
         String lockIcon = isOpen ? "📶 " : "🔒 ";
 
         // 연결된 기기 앞에는 투박한 글씨 대신 애플처럼 예쁜 체크마크(✔) 부여!
         String prefix = isConnected ? "✔ " : "";
+        String suffix = !isConnected && isSaved
+                ? " · " + getString(R.string.wifi_saved_state) : "";
 
-        Button btnWifi = createListButton(prefix + lockIcon + ssid);
+        Button btnWifi = createListButton(prefix + lockIcon + ssid + suffix);
 
         if (isConnected) {
             btnWifi.setTextColor(0xFF00FF00); // 눈에 확 띄는 초록색!
@@ -19366,8 +20339,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                 Toast.makeText(MainActivity.this, getString(R.string.toast_wifi_connecting, ssid),
                         Toast.LENGTH_SHORT).show();
                 beginWifiConnect();
-                WifiConnector.connectFromMenu(MainActivity.this, ssid, isOpen, null,
-                        new WifiConnector.MenuCallback() {
+                WifiConnector.connectFromMenuDetailed(MainActivity.this, ssid, capabilities, null,
+                        new WifiConnector.DetailedMenuCallback() {
                             @Override
                             public void onNeedPassword() {
                                 endWifiConnect();
@@ -19376,8 +20349,11 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                             }
 
                             @Override
-                            public void onComplete(boolean success) {
-                                wrapWifiConnectCallback(wifiConnectResultCallback()).onComplete(success);
+                            public void onComplete(WifiConnector.ConnectionResult result) {
+                                if (openWifiPasswordAfterAuthenticationFailure(
+                                        ssid, result, false)) return;
+                                wrapWifiConnectCallback(wifiConnectResultCallback())
+                                        .onComplete(result);
                             }
                         });
             }
@@ -19993,6 +20969,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                 || currentScreenState == STATE_BROWSER
                 || currentScreenState == STATE_SOULSEEK
                 || currentScreenState == STATE_DEEZER
+                || currentScreenState == STATE_DOWNLOADS
                 || currentScreenState == STATE_USB_STORAGE
                 || mediaSuiteWide
                 || (currentScreenState == STATE_NAVIDROME && !navidromeDual)
@@ -20012,7 +20989,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             blp.leftMargin = 0;
             if (!isFullWidthMenus && (currentScreenState == STATE_PODCASTS
                     || currentScreenState == STATE_BROWSER || currentScreenState == STATE_SOULSEEK
-                    || currentScreenState == STATE_DEEZER || currentScreenState == STATE_USB_STORAGE
+                    || currentScreenState == STATE_DEEZER || currentScreenState == STATE_DOWNLOADS
+                    || currentScreenState == STATE_USB_STORAGE
                     || currentScreenState == STATE_NAVIDROME || currentScreenState == STATE_PLEX
                     || currentScreenState == STATE_JELLYFIN
                     || mediaSuiteWide)) {
@@ -20744,6 +21722,12 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         if (RowKeys.BLUETOOTH_PAIRING_PIN.equals(rowKey)) {
             return BluetoothAudioRepair.pairingPinForAddress(this, null);
         }
+        if (RowKeys.BLUETOOTH_AUTO_RECONNECT.equals(rowKey)) {
+            return stateOnOff(BluetoothAudioRepair.isAutoReconnectEnabled(this));
+        }
+        if (RowKeys.KEYBOARD_LAYOUT.equals(rowKey)) {
+            return getString(WheelKeyboardLayout.labelRes(prefs));
+        }
         if (RowKeys.DEBUG_RADIO_EXPERIMENT.equals(rowKey)) {
             return stateOnOff(com.solar.launcher.radio.RadioExperiment.isEnabled(prefs));
         }
@@ -20821,6 +21805,13 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         if (RowKeys.WIFI_SLEEP_POWER_OFF.equals(rowKey)) {
             return stateOnOff(prefs != null && prefs.getBoolean(WifiSleepPolicy.PREF_ENABLED, true));
         }
+        if (RowKeys.WIFI_AUTO_CONNECT.equals(rowKey)) {
+            return stateOnOff(prefs == null
+                    || prefs.getBoolean(WifiAutoConnectPolicy.PREF_ENABLED, true));
+        }
+        if (RowKeys.DOWNLOAD_AUTO_RESUME_WIFI.equals(rowKey)) {
+            return stateOnOff(isDownloadAutoResumeWifiEnabled());
+        }
         if (RowKeys.FULL_WIDTH.equals(rowKey)) return stateOnOff(isFullWidthMenus);
         if (RowKeys.MENU_ITEM_PADDING.equals(rowKey)) {
             return stateOnOff(ThemeManager.isMenuItemPaddingEnabled(prefs, false));
@@ -20878,6 +21869,37 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         }
         if (RowKeys.SOULSEEK_ACCOUNT.equals(rowKey) && SettingsScreens.isSoulseek(settingsSubScreenKey)) {
             return SoulseekAccount.displayLabel(SoulseekAccount.load(prefs));
+        }
+        if (RowKeys.YOUTUBE_REGION.equals(rowKey)) {
+            String configured = com.solar.launcher.youtube.YouTubeDiscoverSettings
+                    .configuredRegion(prefs);
+            String effective = com.solar.launcher.youtube.YouTubeDiscoverSettings
+                    .effectiveRegion(prefs, Locale.getDefault().getCountry());
+            return configured.length() > 0
+                    ? configured
+                    : getString(R.string.settings_youtube_region_auto, effective);
+        }
+        if (RowKeys.YOUTUBE_DISCOVER_DURATION.equals(rowKey)) {
+            int preset = com.solar.launcher.youtube.YouTubeDiscoverSettings
+                    .durationPreset(
+                            prefs.getInt(com.solar.launcher.youtube.YouTubeDiscoverRanker
+                                    .PREF_MIN_DURATION_SECONDS, 0),
+                            prefs.getInt(com.solar.launcher.youtube.YouTubeDiscoverRanker
+                                    .PREF_MAX_DURATION_SECONDS, 0));
+            if (preset == 1) return getString(R.string.settings_youtube_duration_one_plus);
+            if (preset == 2) return getString(R.string.settings_youtube_duration_two_twenty);
+            if (preset == 3) return getString(R.string.settings_youtube_duration_long);
+            return getString(R.string.settings_youtube_duration_all);
+        }
+        if (RowKeys.YOUTUBE_CACHE_SIZE.equals(rowKey)) {
+            return formatBytes(com.solar.launcher.youtube.YouTubeDiscoverSettings
+                    .cacheBytes(prefs));
+        }
+        if (RowKeys.YOUTUBE_CLEAR_CACHE.equals(rowKey)) {
+            return getString(R.string.settings_youtube_clear_cache_hint);
+        }
+        if (RowKeys.YOUTUBE_CLEAR_HISTORY.equals(rowKey)) {
+            return getString(R.string.settings_youtube_clear_history_hint);
         }
         if (RowKeys.STEM_FEATURES.equals(rowKey)) {
             // 2026-07-19 — Plain On/Off for inline ✓ (hint lives in dual-pane via resolveMediaStemPreview).
@@ -21449,6 +22471,14 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             stateText = getString(R.string.settings_preview_wifi_sleep_power_off) + "\n\n"
                     + (stateText != null ? stateText : "");
         }
+        if (RowKeys.WIFI_AUTO_CONNECT.equals(rowKey)) {
+            stateText = getString(R.string.settings_wifi_auto_connect_hint) + "\n\n"
+                    + (stateText != null ? stateText : "");
+        }
+        if (RowKeys.DOWNLOAD_AUTO_RESUME_WIFI.equals(rowKey)) {
+            stateText = getString(R.string.settings_download_auto_resume_wifi_hint) + "\n\n"
+                    + (stateText != null ? stateText : "");
+        }
         if (RowKeys.USB_TURN_ON.equals(rowKey)) {
             stateText = getString(R.string.settings_preview_usb_turn_on);
         }
@@ -21739,8 +22769,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     private boolean isKeyboardDelSelected() {
         return currentScreenState == STATE_WIFI_KEYBOARD
-                && keyboardIndex >= 0 && keyboardIndex < KEYBOARD_CHARS.length
-                && "[DEL]".equals(KEYBOARD_CHARS[keyboardIndex]);
+                && keyboardIndex >= 0 && keyboardIndex < keyboardChars.length
+                && SolarWheelKeyboardController.TOKEN_DEL.equals(
+                        keyboardChars[keyboardIndex]);
     }
 
     /** Queue list rows — not quick bar / title / slider while queue tier is open. */
@@ -22272,6 +23303,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             case STATE_DEEZER:
             case STATE_APPS:
             case STATE_MORE:
+            case STATE_DOWNLOADS:
             case STATE_USB_STORAGE:
             case STATE_NAVIDROME:
             case STATE_PLEX:
@@ -22385,6 +23417,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                 || currentScreenState == STATE_DEEZER
                 || currentScreenState == STATE_APPS
                 || currentScreenState == STATE_MORE
+                || currentScreenState == STATE_DOWNLOADS
                 || currentScreenState == STATE_NAVIDROME
                 || currentScreenState == STATE_PLEX
                 || currentScreenState == STATE_JELLYFIN
@@ -22690,6 +23723,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                     case STATE_PODCASTS:
                     case STATE_APPS:
                     case STATE_MORE:
+                    case STATE_DOWNLOADS:
                     case STATE_USB_STORAGE:
                         ensureBrowserListFocus();
                         break;
@@ -24106,6 +25140,17 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             }
         });
 
+        headers.add(Boolean.FALSE);
+        labels.add(getString(R.string.wifi_diagnostics));
+        states.add(null);
+        iconKeys.add(null);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                showWifiDiagnostics();
+            }
+        });
+
         if (isWifiContextExpanded() && connected.isEmpty() && scanned.isEmpty()
                 && (isWifiPowerOn() || wifiContextPendingEnable) && !wifiContextScanActive) {
             headers.add(Boolean.FALSE);
@@ -24214,15 +25259,16 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         if (label.equals(getString(R.string.context_wifi_connected))) return null;
         if (label.equals(getString(R.string.context_action_forget_wifi))) return null;
         if (label.equals(getString(R.string.context_wifi_scanning))) return null;
+        if (label.equals(getString(R.string.wifi_diagnostics))) return null;
         return label;
     }
 
     private void connectWifiFromContextMenu(final String ssid) {
         final String caps = wifiCapabilitiesForSsid(ssid);
-        final boolean open = isWifiNetworkOpen(caps);
         Toast.makeText(this, getString(R.string.toast_wifi_connecting, ssid), Toast.LENGTH_SHORT).show();
         beginWifiConnect();
-        WifiConnector.connectFromMenu(this, ssid, open, null, new WifiConnector.MenuCallback() {
+        WifiConnector.connectFromMenuDetailed(this, ssid, caps, null,
+                new WifiConnector.DetailedMenuCallback() {
             @Override
             public void onNeedPassword() {
                 endWifiConnect();
@@ -24233,8 +25279,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             }
 
             @Override
-            public void onComplete(boolean success) {
-                wrapWifiConnectCallback(wifiConnectResultCallback()).onComplete(success);
+            public void onComplete(WifiConnector.ConnectionResult result) {
+                if (openWifiPasswordAfterAuthenticationFailure(ssid, result, true)) return;
+                wrapWifiConnectCallback(wifiConnectResultCallback()).onComplete(result);
             }
         });
     }
@@ -24266,20 +25313,45 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         return wifiConfiguredNetworksCache;
     }
 
-    private WifiConnector.Callback wifiConnectResultCallback() {
-        return new WifiConnector.Callback() {
+    private WifiConnector.DetailedCallback wifiConnectResultCallback() {
+        return new WifiConnector.DetailedCallback() {
             @Override
-            public void onComplete(boolean success) {
-                if (!success) {
-                    Toast.makeText(MainActivity.this, getString(R.string.toast_wifi_connect_failed),
-                            Toast.LENGTH_SHORT).show();
-                }
+            public void onComplete(WifiConnector.ConnectionResult result) {
+                showWifiConnectionFailure(result);
                 if (currentScreenState == STATE_WIFI) {
                     startWifiScan();
                 }
                 scheduleContextWifiRefresh(false);
             }
         };
+    }
+
+    private void showWifiConnectionFailure(WifiConnector.ConnectionResult result) {
+        if (result == null || result.success
+                || result.failure == WifiConnector.Failure.CANCELED) {
+            return;
+        }
+        Toast.makeText(this, getString(WifiConnector.failureMessageResId(result.failure)),
+                Toast.LENGTH_LONG).show();
+    }
+
+    /**
+     * An explicit supplicant auth error means the saved key is stale. Keep the scan context,
+     * return to the existing wheel password keyboard, and let the user replace it in-place.
+     */
+    private boolean openWifiPasswordAfterAuthenticationFailure(String ssid,
+            WifiConnector.ConnectionResult result, boolean dismissContext) {
+        if (result == null
+                || result.failure != WifiConnector.Failure.AUTHENTICATION_FAILED) {
+            return false;
+        }
+        endWifiConnect();
+        showWifiConnectionFailure(result);
+        if (dismissContext) dismissThemedContextMenu();
+        isTargetWifiOpen = false;
+        keyboardReturnState = currentScreenState;
+        openWifiKeyboard(ssid);
+        return true;
     }
 
     @android.annotation.SuppressLint("MissingPermission")
@@ -24296,7 +25368,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             WifiInfo wifiInfo = wm.getConnectionInfo();
             String connectedSSID = "";
             if (wifiInfo != null && wifiInfo.getSSID() != null) {
-                connectedSSID = wifiInfo.getSSID().replace("\"", "");
+                connectedSSID = WifiScanFilter.displayableConnectedSsid(wifiInfo.getSSID());
             }
             java.util.TreeSet<String> connectedSet = new java.util.TreeSet<String>(
                     String.CASE_INSENSITIVE_ORDER);
@@ -24431,6 +25503,17 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         actions.add(new Runnable() {
             @Override public void run() {
                 toggleBluetoothFromContextMenu();
+            }
+        });
+
+        headers.add(Boolean.FALSE);
+        labels.add(getString(R.string.bluetooth_diagnostics));
+        states.add(null);
+        iconKeys.add(null);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                showBluetoothDiagnostics();
             }
         });
 
@@ -24627,6 +25710,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         if (label.equals(getString(R.string.context_action_forget_bluetooth))) return null;
         if (label.equals(getString(R.string.context_bluetooth_scanning))) return null;
         if (label.equals(getString(R.string.status_bluetooth_scan))) return null;
+        if (label.equals(getString(R.string.bluetooth_diagnostics))) return null;
         for (String addr : foundBtDevices) {
             BluetoothDevice d = bluetoothDeviceByAddress(addr);
             if (d == null) continue;
@@ -27985,9 +29069,11 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         try {
             WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
             WifiInfo info = wm != null ? wm.getConnectionInfo() : null;
-            String connected = info != null && info.getSSID() != null ? info.getSSID().replace("\"", "") : "";
+            String connected = info != null
+                    ? WifiScanFilter.displayableConnectedSsid(info.getSSID()) : "";
             if (ssid != null && ssid.equals(connected)) return "ON";
         } catch (Exception ignored) {}
+        if (isWifiNetworkSaved(ssid)) return getString(R.string.wifi_saved_state);
         return "";
     }
 
@@ -29597,6 +30683,14 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                         openGetMusicScreen();
                     }
                 });
+            } else if (HomeMenuConfig.ID_DOWNLOADS.equals(homeId)) {
+                addContextAction(getString(R.string.home_menu_downloads), new Runnable() {
+                    @Override
+                    public void run() {
+                        downloadsDetailJobId = null;
+                        changeScreen(STATE_DOWNLOADS);
+                    }
+                });
             } else if (HomeMenuConfig.ID_APPS.equals(homeId)) {
                 addContextAction(getString(R.string.context_action_open_apps), new Runnable() {
                     @Override
@@ -29951,6 +31045,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         }
         if (currentScreenState == STATE_BROWSER && currentBrowserMode == BROWSER_ROOT && !isPickingBackground
                 && !isPickingApk
+                && !isPickingMediaImport
                 && isFlowEnabled()) {
             addContextAction(getString(R.string.flow_open), new Runnable() {
                 @Override
@@ -29966,7 +31061,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             });
         }
         if (currentScreenState == STATE_BROWSER && currentBrowserMode == BROWSER_FOLDER && !isPickingBackground
-                && !isPickingApk) {
+                && !isPickingApk && !isPickingMediaImport) {
             final File audio = browserFocusedAudioFile();
             if (audio != null) {
                 addContextAction(getString(R.string.context_action_play_now), new Runnable() {
@@ -30634,6 +31729,19 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             });
             final String wifiSsid = wifiFocusedSsid();
             if (wifiSsid != null && isWifiNetworkSaved(wifiSsid)) {
+                final String wifiCapabilities = wifiCapabilitiesForSsid(wifiSsid);
+                if (WifiConnector.securityForCapabilities(wifiCapabilities)
+                        == WifiConnector.Security.WPA_PERSONAL) {
+                    addContextAction(getString(R.string.context_action_update_wifi_password),
+                            new Runnable() {
+                        @Override
+                        public void run() {
+                            dismissThemedContextMenu();
+                            isTargetWifiOpen = false;
+                            openWifiKeyboard(wifiSsid);
+                        }
+                    });
+                }
                 addContextAction(getString(R.string.context_action_forget_wifi), new Runnable() {
                     @Override
                     public void run() {
@@ -32930,7 +34038,20 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             return;
         }
         if (currentScreenState == STATE_BROWSER) {
-            if (isPickingApk) {
+            if (isPickingMediaImport) {
+                if (com.solar.launcher.DeviceFeatures.isStorageVolumeRoot(currentFolder)) {
+                    closeMediaImportPicker();
+                } else {
+                    final File parent = currentFolder.getParentFile();
+                    drillBrowserBack(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (parent != null) currentFolder = parent;
+                            buildFileBrowserUI();
+                        }
+                    });
+                }
+            } else if (isPickingApk) {
                 if (currentFolder.getAbsolutePath().equals(getStorageRoot().getAbsolutePath())) {
                     isPickingApk = false;
                     changeScreen(STATE_APPS, true);
@@ -33139,6 +34260,15 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             changeScreen(STATE_MENU, true);
             return;
         }
+        if (currentScreenState == STATE_DOWNLOADS) {
+            if (downloadsDetailJobId != null) {
+                downloadsDetailJobId = null;
+                buildDownloadsUI();
+            } else {
+                changeScreen(STATE_MENU, true);
+            }
+            return;
+        }
         if (currentScreenState == STATE_BLUETOOTH || currentScreenState == STATE_WIFI) {
             returnFromAuxScreen();
             return;
@@ -33227,6 +34357,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             if (currentScreenState != STATE_BROWSER && currentScreenState != STATE_PODCASTS
                     && currentScreenState != STATE_SOULSEEK && currentScreenState != STATE_DEEZER
                     && currentScreenState != STATE_APPS && currentScreenState != STATE_MORE
+                    && currentScreenState != STATE_DOWNLOADS
                     && currentScreenState != STATE_USB_STORAGE
                     && currentScreenState != STATE_NAVIDROME && currentScreenState != STATE_PLEX
                     && currentScreenState != STATE_JELLYFIN
@@ -34295,6 +35426,19 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         });
         containerSettingsItems.addView(btnVibrate);
 
+        final LinearLayout btnKeyboardLayout = createSettingsRow(
+                RowKeys.KEYBOARD_LAYOUT, R.string.settings_keyboard_layout, false);
+        btnKeyboardLayout.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                prefs.edit().putString(WheelKeyboardLayout.PREF_LAYOUT,
+                        WheelKeyboardLayout.toggledMode(prefs)).apply();
+                refreshSettingsPreview(RowKeys.KEYBOARD_LAYOUT);
+            }
+        });
+        containerSettingsItems.addView(btnKeyboardLayout);
+
         final LinearLayout btnScreenOffCtrl = createSettingsRow(RowKeys.SCREEN_OFF_CTRL,
                 R.string.settings_screen_off_control, false);
         btnScreenOffCtrl.setOnClickListener(new View.OnClickListener() {
@@ -34848,6 +35992,149 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             }
         });
         containerSettingsItems.addView(btnVideo);
+
+        LinearLayout btnDownloadAutoResume = createSettingsRow(
+                RowKeys.DOWNLOAD_AUTO_RESUME_WIFI,
+                R.string.settings_download_auto_resume_wifi,
+                false);
+        btnDownloadAutoResume.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                boolean enabled = !isDownloadAutoResumeWifiEnabled();
+                prefs.edit().putBoolean(
+                        TransferNetworkPolicy.PREF_AUTO_RESUME_WIFI, enabled).commit();
+                refreshSettingsPreview(RowKeys.DOWNLOAD_AUTO_RESUME_WIFI);
+                if (enabled) {
+                    maybeResumePodcastDownload();
+                    maybeResumeSoulseekDownloadAfterNetworkLoss();
+                    maybeResumeDirectDownloadAfterNetworkLoss();
+                }
+            }
+        });
+        containerSettingsItems.addView(btnDownloadAutoResume);
+
+        LinearLayout btnYouTubeRegion = createSettingsRow(
+                RowKeys.YOUTUBE_REGION, R.string.settings_youtube_region, false);
+        btnYouTubeRegion.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                String current = com.solar.launcher.youtube.YouTubeDiscoverSettings
+                        .configuredRegion(prefs);
+                String next = com.solar.launcher.youtube.YouTubeDiscoverSettings
+                        .nextRegion(current);
+                prefs.edit().putString(
+                        com.solar.launcher.youtube.YouTubeDiscoverSettings.PREF_REGION,
+                        next).commit();
+                com.solar.launcher.youtube.YouTubeClient.getInstance(MainActivity.this)
+                        .clearMetadataCache();
+                refreshSettingsPreview(RowKeys.YOUTUBE_REGION);
+            }
+        });
+        containerSettingsItems.addView(btnYouTubeRegion);
+
+        LinearLayout btnDiscoverDuration = createSettingsRow(
+                RowKeys.YOUTUBE_DISCOVER_DURATION,
+                R.string.settings_youtube_discover_duration, false);
+        btnDiscoverDuration.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                int min = prefs.getInt(
+                        com.solar.launcher.youtube.YouTubeDiscoverRanker
+                                .PREF_MIN_DURATION_SECONDS, 0);
+                int max = prefs.getInt(
+                        com.solar.launcher.youtube.YouTubeDiscoverRanker
+                                .PREF_MAX_DURATION_SECONDS, 0);
+                int preset = com.solar.launcher.youtube.YouTubeDiscoverSettings
+                        .nextDurationPreset(
+                                com.solar.launcher.youtube.YouTubeDiscoverSettings
+                                        .durationPreset(min, max));
+                prefs.edit()
+                        .putInt(com.solar.launcher.youtube.YouTubeDiscoverRanker
+                                        .PREF_MIN_DURATION_SECONDS,
+                                com.solar.launcher.youtube.YouTubeDiscoverSettings
+                                        .minDurationSeconds(preset))
+                        .putInt(com.solar.launcher.youtube.YouTubeDiscoverRanker
+                                        .PREF_MAX_DURATION_SECONDS,
+                                com.solar.launcher.youtube.YouTubeDiscoverSettings
+                                        .maxDurationSeconds(preset))
+                        .commit();
+                refreshSettingsPreview(RowKeys.YOUTUBE_DISCOVER_DURATION);
+            }
+        });
+        containerSettingsItems.addView(btnDiscoverDuration);
+
+        LinearLayout btnYouTubeCacheSize = createSettingsRow(
+                RowKeys.YOUTUBE_CACHE_SIZE,
+                R.string.settings_youtube_cache_size, false);
+        btnYouTubeCacheSize.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                long next = com.solar.launcher.youtube.YouTubeDiscoverSettings
+                        .nextCacheBytes(
+                                com.solar.launcher.youtube.YouTubeDiscoverSettings
+                                        .cacheBytes(prefs));
+                prefs.edit().putLong(
+                        com.solar.launcher.youtube.YouTubeDiscoverSettings.PREF_CACHE_BYTES,
+                        next).commit();
+                com.solar.launcher.youtube.YouTubeClient.getInstance(MainActivity.this)
+                        .setMetadataCacheBytes(next);
+                refreshSettingsPreview(RowKeys.YOUTUBE_CACHE_SIZE);
+            }
+        });
+        containerSettingsItems.addView(btnYouTubeCacheSize);
+
+        LinearLayout btnClearYouTubeCache = createSettingsRow(
+                RowKeys.YOUTUBE_CLEAR_CACHE,
+                R.string.settings_youtube_clear_cache, true);
+        btnClearYouTubeCache.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                com.solar.launcher.youtube.YouTubeClient.getInstance(MainActivity.this)
+                        .clearMetadataCache();
+                Toast.makeText(MainActivity.this,
+                        R.string.settings_youtube_cache_cleared,
+                        Toast.LENGTH_SHORT).show();
+            }
+        });
+        containerSettingsItems.addView(btnClearYouTubeCache);
+
+        LinearLayout btnClearYouTubeHistory = createSettingsRow(
+                RowKeys.YOUTUBE_CLEAR_HISTORY,
+                R.string.settings_youtube_clear_history, true);
+        btnClearYouTubeHistory.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                showThemedConfirm(
+                        getString(R.string.settings_youtube_clear_history),
+                        getString(R.string.settings_youtube_clear_history_confirm),
+                        getString(R.string.dialog_clear_cache_confirm),
+                        getString(R.string.common_cancel),
+                        new Runnable() {
+                            @Override
+                            public void run() {
+                                com.solar.launcher.youtube.YouTubeRecentSearches
+                                        .clear(MainActivity.this);
+                                new com.solar.launcher.youtube.YouTubeDiscoverFeedback(
+                                        MainActivity.this).clear();
+                                GetMusicSearchHistory.clear(prefs);
+                                SoulseekSearchHistory.clear(prefs);
+                                com.solar.launcher.deezer.DeezerSearchHistory.clear(prefs);
+                                SoulseekDownloadHistory.clear(prefs);
+                                Toast.makeText(MainActivity.this,
+                                        R.string.settings_youtube_history_cleared,
+                                        Toast.LENGTH_SHORT).show();
+                            }
+                        },
+                        null);
+            }
+        });
+        containerSettingsItems.addView(btnClearYouTubeHistory);
 
         // 2026-07-19 — Enable Stem features: boolean toggle like Deezer Enable (not a submenu drill).
         // Was: createSettingsRow(..., true) → chevron, no ✓. Reversal: submenu=true.
@@ -36386,6 +37673,24 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         });
         containerSettingsItems.addView(btnWifiMenu);
 
+        LinearLayout btnWifiAutoConnect = createSettingsRow(
+                RowKeys.WIFI_AUTO_CONNECT,
+                R.string.settings_wifi_auto_connect,
+                false);
+        btnWifiAutoConnect.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                boolean enabled = prefs == null
+                        || prefs.getBoolean(WifiAutoConnectPolicy.PREF_ENABLED, true);
+                prefs.edit().putBoolean(
+                        WifiAutoConnectPolicy.PREF_ENABLED, !enabled).commit();
+                refreshSettingsPreview(RowKeys.WIFI_AUTO_CONNECT);
+                if (!enabled) triggerAutoReconnect();
+            }
+        });
+        containerSettingsItems.addView(btnWifiAutoConnect);
+
         if (ConnectivityHelper.shouldShowMenuItem(this, HomeMenuConfig.ID_PC_UPLOAD)) {
             LinearLayout btnServerMenu = createSettingsRow(RowKeys.WEB_SERVER, R.string.settings_web_server, true);
             btnServerMenu.setOnClickListener(new View.OnClickListener() {
@@ -36411,6 +37716,24 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             }
         });
         containerSettingsItems.addView(btnBtMenu);
+
+        LinearLayout btnBtAutoReconnect = createSettingsRow(
+                RowKeys.BLUETOOTH_AUTO_RECONNECT,
+                R.string.settings_bluetooth_auto_reconnect, false);
+        btnBtAutoReconnect.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                boolean enabled = !BluetoothAudioRepair.isAutoReconnectEnabled(
+                        MainActivity.this);
+                prefs.edit()
+                        .putBoolean(BluetoothAudioRepair.PREF_AUTO_RECONNECT, enabled)
+                        .apply();
+                refreshSettingsPreview(RowKeys.BLUETOOTH_AUTO_RECONNECT);
+                if (enabled) reconnectLastBluetoothAudio();
+            }
+        });
+        containerSettingsItems.addView(btnBtAutoReconnect);
 
         if (DeviceFeatures.isY1()) {
             LinearLayout btnBtPin = createSettingsRow(RowKeys.BLUETOOTH_PAIRING_PIN, R.string.settings_bluetooth_pairing_pin, false);
@@ -41542,15 +42865,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         }
     }
     static boolean isAudioFile(File f) {
-        if (f == null || !f.isFile())
-            return false;
-        String name = f.getName().toLowerCase();
-        // 2026-07-15 — Include opus/webm so Piped YouTube saves still index into Songs.
-        // Had: only mp3/m4a/… — .opus under Music/YouTube never appeared for play.
-        return name.endsWith(".mp3") || name.endsWith(".flac") || name.endsWith(".wav") || name.endsWith(".ogg")
-                || name.endsWith(".m4a") || name.endsWith(".m4b") || name.endsWith(".aac")
-                || name.endsWith(".ape") || name.endsWith(".wma")
-                || name.endsWith(".opus") || name.endsWith(".webm");
+        return f != null && f.isFile()
+                && MediaCompatibilityService.isSupportedAudioName(f.getName());
     }
 
     /**
@@ -41561,9 +42877,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
      */
     static boolean prefersIjkLocalDecode(File track) {
         if (track == null) return false;
-        String name = track.getName().toLowerCase(java.util.Locale.US);
-        if (name.endsWith(".opus") || name.endsWith(".webm")) return true;
-        String path = track.getAbsolutePath().toLowerCase(java.util.Locale.US);
+        if (MediaCompatibilityService.prefersIjk(track.getName())) return true;
+        String path = track.getAbsolutePath().replace('\\', '/')
+                .toLowerCase(java.util.Locale.US);
         // App-cache Play buffers — same AAC quirks as Music/YouTube saves. 2026-07-20
         String playDir = "/" + com.solar.launcher.youtube.YouTubePlayCache.DIR_NAME.toLowerCase(
                 java.util.Locale.US);
@@ -42673,8 +43989,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         if (userInitiated) {
             // #region agent log
             // 2026-07-20 — 0b8f80 H1: toast used customLibrary.size() (0 under SEGMENTED) vs resident count.
-            int toastShown = customLibrary.size();
             int resident = libraryResidentTrackCount();
+            int toastShown = resident;
             try {
                 Debug0b8f80Log.log("MainActivity.finishLibraryScan", "toast counts", "H1",
                         "{\"toastShown\":" + toastShown
@@ -42855,6 +44171,10 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         if (isPickingApk) {
             String pathLabel = cleanPathLabel(currentFolder.getAbsolutePath());
             return getString(R.string.path_apk_install, pathLabel);
+        }
+        if (isPickingMediaImport) {
+            String pathLabel = cleanPathLabel(currentFolder.getAbsolutePath());
+            return getString(R.string.path_media_import, pathLabel);
         }
         if (isPickingBackground) {
             String pathLabel = cleanPathLabel(currentFolder.getAbsolutePath());
@@ -43049,6 +44369,593 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
         if (containerBrowserItems.getChildCount() > 0) {
             containerBrowserItems.getChildAt(0).requestFocus();
+        }
+    }
+
+    private void buildDownloadsUI() {
+        applyReachBrowseLayoutMode();
+        downloadsDetailJobId = null;
+        if (scrollViewBrowser != null) scrollViewBrowser.setVisibility(View.VISIBLE);
+        if (listVirtualSongs != null) listVirtualSongs.setVisibility(View.GONE);
+        containerBrowserItems.removeAllViews();
+        browserStatusTitle = getString(R.string.status_downloads);
+        updateStatusBarTitle();
+        if (tvBrowserPath != null) {
+            tvBrowserPath.setText(getString(R.string.path_downloads));
+            setBrowserPathBreadcrumbVisible(true);
+        }
+
+        Button back = createListButton(getString(R.string.common_back));
+        styleSecondaryLabel(back);
+        back.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                changeScreen(STATE_MENU);
+            }
+        });
+        containerBrowserItems.addView(back);
+
+        if (transferJobStore == null) {
+            Button unavailable = createListButton(getString(R.string.downloads_empty));
+            unavailable.setEnabled(false);
+            containerBrowserItems.addView(unavailable);
+            back.requestFocus();
+            return;
+        }
+
+        TransferJobStore.Aggregate aggregate = transferJobStore.aggregate();
+        Button summary = createListButton(getString(R.string.downloads_summary,
+                aggregate.activeCount, aggregate.pausedCount, aggregate.failedCount));
+        summary.setEnabled(false);
+        containerBrowserItems.addView(summary);
+
+        List<TransferJobStore.Job> jobs = transferJobStore.list();
+        boolean hasFinished = false;
+        if (jobs.isEmpty()) {
+            Button empty = createListButton(getString(R.string.downloads_empty));
+            empty.setEnabled(false);
+            containerBrowserItems.addView(empty);
+        } else {
+            for (final TransferJobStore.Job job : jobs) {
+                Button row = createListButton(formatTransferJobRow(job));
+                row.setTag(job.id);
+                row.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        clickFeedback();
+                        downloadsDetailJobId = job.id;
+                        buildDownloadJobDetailUI(job);
+                    }
+                });
+                containerBrowserItems.addView(row);
+                if (job.state.isTerminal()) hasFinished = true;
+            }
+        }
+
+        if (hasFinished) {
+            Button clear = createListButton(getString(R.string.downloads_clear_finished));
+            clear.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    if (transferJobStore != null) {
+                        try {
+                            for (TransferJobStore.Job finished : transferJobStore.list()) {
+                                if (!finished.state.isTerminal()) continue;
+                                DirectDownloadControl directControl = directDownloadControl;
+                                if (directControl != null
+                                        && finished.id.equals(directControl.jobId)) {
+                                    continue;
+                                }
+                                if (finished.state != TransferJobStore.State.COMPLETED) {
+                                    deleteDirectPartialForJob(finished);
+                                }
+                                transferJobStore.remove(finished.id);
+                            }
+                        } catch (RuntimeException e) {
+                            android.util.Log.w("Solar", "Could not clear transfer history", e);
+                        }
+                    }
+                    buildDownloadsUI();
+                }
+            });
+            containerBrowserItems.addView(clear);
+        }
+        back.requestFocus();
+    }
+
+    private void buildDownloadJobDetailUI(final TransferJobStore.Job job) {
+        if (job == null || transferJobStore == null) {
+            buildDownloadsUI();
+            return;
+        }
+        applyReachBrowseLayoutMode();
+        downloadsDetailJobId = job.id;
+        if (scrollViewBrowser != null) scrollViewBrowser.setVisibility(View.VISIBLE);
+        if (listVirtualSongs != null) listVirtualSongs.setVisibility(View.GONE);
+        containerBrowserItems.removeAllViews();
+        browserStatusTitle = getString(R.string.status_downloads);
+        updateStatusBarTitle();
+        if (tvBrowserPath != null) {
+            tvBrowserPath.setText(getString(R.string.path_downloads));
+            setBrowserPathBreadcrumbVisible(true);
+        }
+
+        Button back = createListButton(getString(R.string.common_back));
+        styleSecondaryLabel(back);
+        back.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                downloadsDetailJobId = null;
+                buildDownloadsUI();
+            }
+        });
+        containerBrowserItems.addView(back);
+
+        Button title = createListButton(job.title);
+        title.setEnabled(false);
+        containerBrowserItems.addView(title);
+
+        Button state = createListButton(transferProviderLabel(job.provider) + " - "
+                + transferStateLabel(job.state));
+        state.setEnabled(false);
+        containerBrowserItems.addView(state);
+
+        Button progress = createListButton(formatTransferProgress(job));
+        progress.setEnabled(false);
+        containerBrowserItems.addView(progress);
+
+        if (job.detail != null && job.detail.length() > 0) {
+            Button detail = createListButton(job.detail);
+            detail.setEnabled(false);
+            containerBrowserItems.addView(detail);
+        }
+        if (job.error != null && job.error.length() > 0) {
+            Button error = createListButton(job.error);
+            error.setEnabled(false);
+            containerBrowserItems.addView(error);
+        }
+
+        boolean activeSoulseek = job.provider == TransferJobStore.Provider.SOULSEEK
+                && job.id.equals(soulseekTransferJobId) && isSoulseekTransferInProgress();
+        boolean activePodcast = job.provider == TransferJobStore.Provider.PODCAST
+                && job.id.equals(podcastStreamTransferJobId) && podcastDownloadInProgress;
+        DirectDownloadControl directControl = directDownloadControl;
+        boolean activeDirect = job.provider == TransferJobStore.Provider.DIRECT
+                && directControl != null && job.id.equals(directControl.jobId)
+                && job.state.isRunning();
+        if (activeSoulseek || activePodcast || activeDirect) {
+            Button pause = createListButton(getString(R.string.downloads_pause));
+            pause.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    pauseTransferFromDownloads(job);
+                }
+            });
+            containerBrowserItems.addView(pause);
+
+            Button cancel = createListButton(getString(R.string.downloads_cancel));
+            cancel.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    cancelTransferFromDownloads(job);
+                }
+            });
+            containerBrowserItems.addView(cancel);
+        } else if ((job.state == TransferJobStore.State.PAUSED
+                || job.state == TransferJobStore.State.FAILED)
+                && canResumeTransferJob(job)) {
+            Button resume = createListButton(getString(job.state == TransferJobStore.State.FAILED
+                    ? R.string.downloads_retry : R.string.downloads_resume));
+            resume.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    resumeTransferJob(job);
+                }
+            });
+            containerBrowserItems.addView(resume);
+        }
+
+        boolean directWorkerStopping = directControl != null
+                && job.id.equals(directControl.jobId);
+        if ((job.state.isTerminal() || job.state == TransferJobStore.State.PAUSED)
+                && !directWorkerStopping) {
+            Button remove = createListButton(getString(R.string.downloads_remove));
+            remove.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    removeTransferHistory(job);
+                }
+            });
+            containerBrowserItems.addView(remove);
+        }
+        back.requestFocus();
+    }
+
+    private String formatTransferJobRow(TransferJobStore.Job job) {
+        StringBuilder line = new StringBuilder(job.title != null ? job.title : "");
+        line.append('\n').append(transferProviderLabel(job.provider)).append(" - ")
+                .append(transferStateLabel(job.state));
+        int percent = job.percent();
+        if (percent >= 0) line.append(" - ").append(percent).append('%');
+        if (job.speedBytesPerSecond > 0 && job.state.isRunning()) {
+            line.append(" - ").append(formatSoulseekSpeed(job.speedBytesPerSecond));
+        }
+        return line.toString();
+    }
+
+    private String formatTransferProgress(TransferJobStore.Job job) {
+        String done = formatSoulseekSize(job.doneBytes);
+        String total = job.totalBytes > 0 ? formatSoulseekSize(job.totalBytes) : "?";
+        StringBuilder line = new StringBuilder(done).append(" / ").append(total);
+        if (job.speedBytesPerSecond > 0 && job.state.isRunning()) {
+            line.append(" - ").append(formatSoulseekSpeed(job.speedBytesPerSecond));
+        }
+        if (job.etaSeconds >= 0 && job.state.isRunning()) {
+            long minutes = job.etaSeconds / 60L;
+            line.append(" - ");
+            if (minutes > 0) line.append(minutes).append('m');
+            else line.append(job.etaSeconds).append('s');
+            line.append(" left");
+        }
+        if (job.attempt > 0) {
+            line.append(" - attempt ").append(job.attempt).append('/').append(job.maxAttempts);
+        }
+        return line.toString();
+    }
+
+    private static String transferProviderLabel(TransferJobStore.Provider provider) {
+        if (provider == null) return "Transfer";
+        switch (provider) {
+            case SOULSEEK: return "Soulseek";
+            case PODCAST: return "Podcast";
+            case DIRECT: return "Direct";
+            case IMPORT: return "Import";
+            case CONVERSION: return "Conversion";
+            case DEEZER: return "Deezer";
+            default: return "Transfer";
+        }
+    }
+
+    private static String transferStateLabel(TransferJobStore.State state) {
+        if (state == null) return "Unknown";
+        String raw = state.name().toLowerCase(Locale.US).replace('_', ' ');
+        return raw.length() == 0 ? raw
+                : Character.toUpperCase(raw.charAt(0)) + raw.substring(1);
+    }
+
+    private void scheduleDownloadsUiRefresh() {
+        if (currentScreenState != STATE_DOWNLOADS) return;
+        long now = android.os.SystemClock.uptimeMillis();
+        long delay = Math.max(0L, 350L - (now - downloadsLastUiRefreshMs));
+        progressHandler.removeCallbacks(downloadsUiRefreshRunnable);
+        progressHandler.postDelayed(downloadsUiRefreshRunnable, delay);
+    }
+
+    private TransferJobStore.Job transitionTransferJob(String id, TransferJobStore.State state,
+            String detail, String error) {
+        if (transferJobStore == null || id == null || state == null) return null;
+        try {
+            TransferJobStore.Job current = transferJobStore.get(id);
+            if (current == null) return null;
+            if (current.state != state
+                    && !TransferJobStore.canTransition(current.state, state)) {
+                return current;
+            }
+            TransferJobStore.Job changed = transferJobStore.transition(
+                    id, state, detail != null ? detail : "", safeTransferError(error));
+            scheduleDownloadsUiRefresh();
+            return changed;
+        } catch (RuntimeException e) {
+            android.util.Log.w("Solar", "Could not update transfer state", e);
+            return null;
+        }
+    }
+
+    private void progressTransferJob(String id, long done, long total) {
+        if (transferJobStore == null || id == null) return;
+        try {
+            TransferJobStore.Job current = transferJobStore.get(id);
+            if (current == null || current.state.isTerminal()
+                    || current.state == TransferJobStore.State.PAUSED) return;
+            transferJobStore.progress(id, done, total);
+            scheduleDownloadsUiRefresh();
+        } catch (RuntimeException e) {
+            android.util.Log.w("Solar", "Could not persist transfer progress", e);
+        }
+    }
+
+    private String beginTransferJob(String preferredId, TransferJobStore.Provider provider,
+            String title, String sourceName, String remoteId, String targetPath, int maxAttempts) {
+        return beginTransferJob(preferredId, provider, title, sourceName, remoteId,
+                targetPath, true, maxAttempts);
+    }
+
+    private String beginTransferJob(String preferredId, TransferJobStore.Provider provider,
+            String title, String sourceName, String remoteId, String targetPath,
+            boolean wifiOnly, int maxAttempts) {
+        if (transferJobStore == null || provider == null) return null;
+        try {
+            TransferJobStore.Job job = transferJobStore.get(preferredId);
+            if (!transferJobMatches(job, provider, sourceName, remoteId, targetPath)
+                    || job.state == TransferJobStore.State.COMPLETED
+                    || job.state == TransferJobStore.State.CANCELED
+                    || (job.state == TransferJobStore.State.FAILED
+                            && job.attempt >= job.maxAttempts)) {
+                job = findReusableTransferJob(provider, sourceName, remoteId, targetPath);
+            }
+            if (job == null) {
+                job = transferJobStore.create(provider, title, sourceName, remoteId, targetPath,
+                        wifiOnly, maxAttempts);
+            }
+            if (job.state == TransferJobStore.State.FAILED) {
+                job = transferJobStore.retry(job.id);
+            }
+            if (job.state == TransferJobStore.State.PAUSED
+                    || job.state == TransferJobStore.State.RETRYING
+                    || job.state == TransferJobStore.State.QUEUED) {
+                job = transferJobStore.transition(
+                        job.id, TransferJobStore.State.CONNECTING, "Connecting", "");
+            }
+            scheduleDownloadsUiRefresh();
+            return job.id;
+        } catch (RuntimeException e) {
+            android.util.Log.w("Solar", "Could not start transfer journal", e);
+            return null;
+        }
+    }
+
+    private TransferJobStore.Job findReusableTransferJob(TransferJobStore.Provider provider,
+            String sourceName, String remoteId, String targetPath) {
+        if (transferJobStore == null) return null;
+        for (TransferJobStore.Job job : transferJobStore.list()) {
+            if (!transferJobMatches(job, provider, sourceName, remoteId, targetPath)) continue;
+            if (job.state == TransferJobStore.State.PAUSED
+                    || job.state == TransferJobStore.State.QUEUED
+                    || (job.state == TransferJobStore.State.FAILED
+                            && job.attempt < job.maxAttempts)) {
+                return job;
+            }
+        }
+        return null;
+    }
+
+    private static boolean transferJobMatches(TransferJobStore.Job job,
+            TransferJobStore.Provider provider, String sourceName, String remoteId,
+            String targetPath) {
+        return job != null && job.provider == provider
+                && safeEquals(job.sourceName, sourceName)
+                && safeEquals(job.remoteId, remoteId)
+                && safeEquals(job.targetPath, targetPath);
+    }
+
+    private static boolean safeEquals(String left, String right) {
+        return left == null ? right == null : left.equals(right);
+    }
+
+    private static String safeTransferError(String error) {
+        if (error == null) return "";
+        return error.replaceAll("(?i)https?://\\S+", "network source");
+    }
+
+    private void finishTransferJob(String id, File file, boolean index) {
+        if (transferJobStore == null || id == null) return;
+        try {
+            TransferJobStore.Job job = transferJobStore.get(id);
+            if (job == null || job.state.isTerminal()
+                    || job.state == TransferJobStore.State.PAUSED) return;
+            long length = file != null && file.isFile() ? file.length() : job.doneBytes;
+            long total = job.totalBytes > 0 ? job.totalBytes : length;
+            if (job.state == TransferJobStore.State.QUEUED
+                    || job.state == TransferJobStore.State.CONNECTING
+                    || job.state == TransferJobStore.State.RETRYING) {
+                job = transferJobStore.progress(id, length, total);
+            }
+            if (job.state == TransferJobStore.State.DOWNLOADING) {
+                job = transferJobStore.transition(
+                        id, TransferJobStore.State.VERIFYING, "Verifying", "");
+            }
+            if (index && job.state == TransferJobStore.State.VERIFYING) {
+                job = transferJobStore.transition(
+                        id, TransferJobStore.State.INDEXING, "Indexing", "");
+            }
+            if (job.state == TransferJobStore.State.VERIFYING
+                    || job.state == TransferJobStore.State.INDEXING) {
+                transferJobStore.transition(
+                        id, TransferJobStore.State.COMPLETED, "Complete", "");
+            }
+            scheduleDownloadsUiRefresh();
+        } catch (RuntimeException e) {
+            android.util.Log.w("Solar", "Could not finish transfer journal", e);
+        }
+    }
+
+    private void failTransferJob(String id, String error) {
+        if (transferJobStore == null || id == null) return;
+        try {
+            TransferJobStore.Job job = transferJobStore.get(id);
+            if (job == null || job.state.isTerminal()
+                    || job.state == TransferJobStore.State.PAUSED) return;
+            transferJobStore.transition(id, TransferJobStore.State.FAILED,
+                    "Failed", safeTransferError(error));
+            scheduleDownloadsUiRefresh();
+        } catch (RuntimeException e) {
+            android.util.Log.w("Solar", "Could not record transfer failure", e);
+        }
+    }
+
+    private boolean canResumeTransferJob(TransferJobStore.Job job) {
+        if (job == null || job.remoteId == null || job.remoteId.length() == 0
+                || job.targetPath == null || job.targetPath.length() == 0) return false;
+        DirectDownloadControl directControl = directDownloadControl;
+        if (job.provider == TransferJobStore.Provider.DIRECT
+                && directControl != null && job.id.equals(directControl.jobId)) {
+            return false;
+        }
+        return job.provider == TransferJobStore.Provider.SOULSEEK
+                || job.provider == TransferJobStore.Provider.PODCAST
+                || job.provider == TransferJobStore.Provider.DIRECT;
+    }
+
+    private void pauseTransferFromDownloads(TransferJobStore.Job job) {
+        if (job.provider == TransferJobStore.Provider.SOULSEEK
+                && job.id.equals(soulseekTransferJobId)) {
+            pauseSoulseekDownloadForResume();
+        } else if (job.provider == TransferJobStore.Provider.PODCAST
+                && job.id.equals(podcastStreamTransferJobId)) {
+            pausePodcastBackgroundDownload();
+        } else if (job.provider == TransferJobStore.Provider.DIRECT) {
+            pauseDirectDownloadForResume(job);
+        }
+        TransferJobStore.Job refreshed = transferJobStore != null
+                ? transferJobStore.get(job.id) : null;
+        if (refreshed != null) buildDownloadJobDetailUI(refreshed);
+    }
+
+    private void cancelTransferFromDownloads(TransferJobStore.Job job) {
+        if (job.provider == TransferJobStore.Provider.DIRECT) {
+            cancelDirectDownload(job);
+        }
+        transitionTransferJob(job.id, TransferJobStore.State.CANCELED, "Canceled", "");
+        if (job.provider == TransferJobStore.Provider.SOULSEEK
+                && job.id.equals(soulseekTransferJobId)) {
+            cancelSoulseekDownloadSilent();
+        } else if (job.provider == TransferJobStore.Provider.PODCAST
+                && job.id.equals(podcastStreamTransferJobId)) {
+            stopPodcastDownloadFully();
+        }
+        TransferJobStore.Job refreshed = transferJobStore != null
+                ? transferJobStore.get(job.id) : null;
+        if (refreshed != null) buildDownloadJobDetailUI(refreshed);
+    }
+
+    private void resumeTransferJob(TransferJobStore.Job job) {
+        if (job == null || TransferNetworkPolicy.shouldPause(
+                job.wifiOnly,
+                ConnectivityHelper.isOnline(this),
+                ConnectivityHelper.isWifiAssociated(this))) {
+            Toast.makeText(this, getString(R.string.toast_wifi_unavailable),
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (job.provider == TransferJobStore.Provider.SOULSEEK) {
+            soulseekPausedForNetworkLoss = false;
+            SoulseekClient.Result result = new SoulseekClient.Result(
+                    job.sourceName, job.remoteId, job.totalBytes, 0, 0,
+                    true, false, 0, 0);
+            soulseekTransferJobId = job.id;
+            int action = rootFolder != null
+                    && rootFolder.getAbsolutePath().equals(job.targetPath)
+                    ? SOULSEEK_ACTION_SAVE : SOULSEEK_ACTION_PLAY;
+            changeScreen(STATE_SOULSEEK);
+            startSoulseekTransfer(result, action);
+            return;
+        }
+        if (job.provider == TransferJobStore.Provider.PODCAST) {
+            podcastPausedForNetworkLoss = false;
+            resumePodcastTransferJob(job);
+            return;
+        }
+        if (job.provider == TransferJobStore.Provider.DIRECT) {
+            resumeDirectDownload(job);
+            return;
+        }
+        Toast.makeText(this, getString(R.string.downloads_retry_unavailable),
+                Toast.LENGTH_LONG).show();
+    }
+
+    private void resumePodcastTransferJob(final TransferJobStore.Job original) {
+        if (transferJobStore == null || original == null) return;
+        try {
+            TransferJobStore.Job job = transferJobStore.get(original.id);
+            if (job == null) return;
+            if (job.state == TransferJobStore.State.FAILED) {
+                job = transferJobStore.retry(job.id);
+            }
+            if (job.state == TransferJobStore.State.PAUSED
+                    || job.state == TransferJobStore.State.RETRYING
+                    || job.state == TransferJobStore.State.QUEUED) {
+                transferJobStore.transition(
+                        job.id, TransferJobStore.State.CONNECTING, "Connecting", "");
+            }
+        } catch (RuntimeException e) {
+            Toast.makeText(this, getString(R.string.downloads_retry_unavailable),
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        buildDownloadJobDetailUI(transferJobStore.get(original.id));
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    final File target = new File(original.targetPath);
+                    File completed;
+                    if (target.getName().startsWith("pod_")
+                            && target.getName().endsWith(".audio")) {
+                        completed = OpenRssClient.downloadAudio(
+                                target.getParentFile(), original.remoteId,
+                                new OpenRssClient.AudioDownloadListener() {
+                                    @Override
+                                    public void onProgress(long done, long total) {
+                                        progressTransferJob(original.id, done, total);
+                                    }
+
+                                    @Override
+                                    public boolean onPartialReady(File partial, long done) {
+                                        return false;
+                                    }
+                                });
+                    } else {
+                        PodcastLibrary.downloadTo(target, original.remoteId,
+                                new com.solar.launcher.net.SolarHttp.DownloadProgress() {
+                                    @Override
+                                    public void onProgress(long done, long total) {
+                                        progressTransferJob(original.id, done, total);
+                                    }
+                                });
+                        PodcastLibrary.tryEmbedSaveTags(
+                                target, original.sourceName, original.title);
+                        completed = target;
+                    }
+                    finishTransferJob(original.id, completed,
+                            !target.getName().startsWith("pod_"));
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (!original.targetPath.contains(File.separator + "pod_")) {
+                                scanMediaLibraryAsync();
+                            }
+                            scheduleDownloadsUiRefresh();
+                        }
+                    });
+                } catch (Exception e) {
+                    failTransferJob(original.id,
+                            e.getMessage() != null ? e.getMessage()
+                                    : getString(R.string.podcasts_save_failed));
+                }
+            }
+        }, "PodcastResume").start();
+    }
+
+    private void removeTransferHistory(TransferJobStore.Job job) {
+        if (transferJobStore == null || job == null) return;
+        try {
+            if (job.state != TransferJobStore.State.COMPLETED) {
+                deleteDirectPartialForJob(job);
+            }
+            transferJobStore.remove(job.id);
+            downloadsDetailJobId = null;
+            Toast.makeText(this, getString(R.string.downloads_removed),
+                    Toast.LENGTH_SHORT).show();
+            buildDownloadsUI();
+        } catch (RuntimeException e) {
+            android.util.Log.w("Solar", "Could not remove transfer history", e);
         }
     }
 
@@ -44210,7 +46117,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         if (scrollViewBrowser != null) scrollViewBrowser.setVisibility(View.VISIBLE); if (listVirtualSongs != null) listVirtualSongs.setVisibility(View.GONE);
         containerBrowserItems.removeAllViews();
 
-        if (isPickingBackground || isPickingApk || currentBrowserMode == BROWSER_FOLDER) {
+        if (isPickingBackground || isPickingApk || isPickingMediaImport
+                || currentBrowserMode == BROWSER_FOLDER) {
             buildFolderBrowserUI();
             return;
         }
@@ -47825,11 +49733,25 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         try {
             if (device.getBondState() != BluetoothDevice.BOND_BONDED) return;
             Method removeBond = device.getClass().getMethod("removeBond");
-            removeBond.invoke(device);
+            Object result = removeBond.invoke(device);
+            boolean accepted = !(result instanceof Boolean) || (Boolean) result;
+            if (!accepted) {
+                Toast.makeText(this, getString(R.string.toast_bt_forget_failed),
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
+            String address = device.getAddress();
+            BluetoothAudioRepair.clearRememberedDevice(this, address);
+            if (address != null && address.equals(connectedA2dpAddress)) {
+                connectedA2dpAddress = null;
+            }
             Toast.makeText(this, getString(R.string.toast_bt_forgotten,
                     device.getName() != null ? device.getName() : device.getAddress()),
                     Toast.LENGTH_SHORT).show();
             if (currentScreenState == STATE_BLUETOOTH) startBluetoothScan();
+        } catch (SecurityException denied) {
+            Toast.makeText(this, getString(R.string.toast_bt_forget_failed),
+                    Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
             Toast.makeText(this, getString(R.string.toast_bt_forget_failed), Toast.LENGTH_SHORT).show();
         }
@@ -48197,14 +50119,15 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         String pathLabel = cleanPathLabel(currentFolder.getAbsolutePath());
         browserStatusTitle = isPickingApk
                 ? getString(R.string.status_apk_install)
-                : getString(R.string.status_path, pathLabel);
+                : (isPickingMediaImport
+                        ? getString(R.string.status_media_import)
+                        : getString(R.string.status_path, pathLabel));
         updateStatusBarTitle();
         updateLibraryBreadcrumb();
         File[] files = currentFolder.listFiles();
 
-        final File storageRoot = getStorageRoot();
-        boolean showUp = isPickingBackground || isPickingApk
-                ? !currentFolder.getAbsolutePath().equals(storageRoot.getAbsolutePath())
+        boolean showUp = isPickingBackground || isPickingApk || isPickingMediaImport
+                ? !com.solar.launcher.DeviceFeatures.isStorageVolumeRoot(currentFolder)
                 : !currentFolder.getAbsolutePath().equals(rootFolder.getAbsolutePath());
 
         if (files == null || files.length == 0) {
@@ -48229,6 +50152,19 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                 });
                 containerBrowserItems.addView(btnUp);
             }
+            if (isPickingMediaImport
+                    && com.solar.launcher.DeviceFeatures.isStorageVolumeRoot(currentFolder)) {
+                Button otherApps = createListButton(
+                        "↗ " + getString(R.string.get_music_import_other_apps));
+                otherApps.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        clickFeedback();
+                        requestExternalMediaImport();
+                    }
+                });
+                containerBrowserItems.addView(otherApps);
+            }
             Button btnEmpty = createListButton(
                     files == null ? "⚠️ USB Disconnect Required (Tap to go back)" : "📂 Empty Folder (Tap to go back)");
             btnEmpty.setTextColor(0xFFFF5555);
@@ -48236,7 +50172,15 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                 @Override
                 public void onClick(View v) {
                     clickFeedback();
-                    if (isPickingApk) {
+                    if (isPickingMediaImport) {
+                        if (com.solar.launcher.DeviceFeatures.isStorageVolumeRoot(currentFolder)) {
+                            closeMediaImportPicker();
+                        } else {
+                            File parent = currentFolder.getParentFile();
+                            if (parent != null) currentFolder = parent;
+                            buildFileBrowserUI();
+                        }
+                    } else if (isPickingApk) {
                         if (currentFolder.getAbsolutePath().equals(getStorageRoot().getAbsolutePath())) {
                             isPickingApk = false;
                             changeScreen(STATE_APPS);
@@ -48281,7 +50225,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             else if (isPickingBackground && isImageFile(f)) imageFiles.add(f);
             else if (isPickingApk && isApkFile(f)) apkFiles.add(f);
             else if (!isPickingBackground && !isPickingApk && isAudioFile(f)) audioFiles.add(f);
-            else if (!isPickingBackground && !isPickingApk && isApkFile(f)) apkFiles.add(f);
+            else if (!isPickingBackground && !isPickingApk && !isPickingMediaImport
+                    && isApkFile(f)) apkFiles.add(f);
         }
         java.util.Comparator<File> fileSorter = new java.util.Comparator<File>() {
             @Override
@@ -48297,6 +50242,12 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         if (showUp) {
             folderBrowserEntries.add(FolderBrowserEntry.up(getString(R.string.browser_up)));
             currentScrollIndexList.add(getString(R.string.browser_up));
+        }
+        if (isPickingMediaImport
+                && com.solar.launcher.DeviceFeatures.isStorageVolumeRoot(currentFolder)) {
+            folderBrowserEntries.add(FolderBrowserEntry.externalImport(
+                    getString(R.string.get_music_import_other_apps)));
+            currentScrollIndexList.add(getString(R.string.get_music_import_other_apps));
         }
         appendOtherStorageVolumeEntries();
         for (File folder : folders) {
@@ -49715,77 +51666,37 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         }
         if (video == null || video.id == null || video.id.isEmpty()) return;
         final YouTubeVideo target = video;
-        // 2026-07-15 — Music→YouTube context is audio-only (no Save video / Open video).
-        // Was: always Play + Save video + Save audio. Reversal: drop audioMode branches.
-        final boolean audioMode = mediaSuite != null && mediaSuite.isYouTubeAudioMode();
         if (currentScreenState == MediaSuiteHost.STATE_YOUTUBE_BROWSE) {
-            addContextAction(getString(audioMode
-                    ? R.string.youtube_ctx_open_audio
-                    : R.string.youtube_ctx_open), new Runnable() {
+            addContextAction(getString(R.string.youtube_ctx_open), new Runnable() {
                 @Override public void run() {
                     if (!requireInternet(R.string.toast_internet_required)) return;
                     mediaSuite.openYouTubeDetailFromContext(target);
                 }
             });
         }
-        addContextAction(getString(R.string.youtube_ctx_play), new Runnable() {
+        addContextAction(getString(R.string.youtube_detail_bookmark), new Runnable() {
+            @Override public void run() {
+                mediaSuite.toggleYouTubeBookmark(target);
+            }
+        });
+        addContextAction(getString(R.string.youtube_detail_search_soulseek), new Runnable() {
             @Override public void run() {
                 if (!requireInternet(R.string.toast_internet_required)) return;
-                mediaSuite.playYouTubeFromContext(target);
+                mediaSuite.searchYouTubeOnSoulseek(target);
             }
         });
-        if (audioMode) {
-            addContextAction(getString(R.string.youtube_ctx_save), new Runnable() {
-                @Override public void run() {
-                    if (!requireInternet(R.string.toast_internet_required)) return;
-                    startYouTubeSave(target, true);
-                }
-            });
-            addContextAction(getString(R.string.context_add_to_local_playlist), new Runnable() {
-                @Override public void run() {
-                    openAddYouTubeTrackToLocalPlaylistFlow(target);
-                }
-            });
-            java.io.File savedAudio = YouTubeSavePaths.findSavedAudio(this, target);
-            if (savedAudio != null && savedAudio.length() > 1024L) {
-                addContextAction(getString(R.string.youtube_ctx_play_saved), new Runnable() {
-                    @Override public void run() {
-                        mediaSuite.playYouTubeFromContext(target);
-                    }
-                });
-            }
-            return;
-        }
-        addContextAction(getString(R.string.youtube_ctx_save_video), new Runnable() {
+        addContextAction(getString(R.string.youtube_detail_copy_link), new Runnable() {
             @Override public void run() {
-                if (!requireInternet(R.string.toast_internet_required)) return;
-                startYouTubeSave(target, false);
+                mediaSuite.copyYouTubeLink(target);
             }
         });
-        addContextAction(getString(R.string.youtube_ctx_save_audio), new Runnable() {
-            @Override public void run() {
-                if (!requireInternet(R.string.toast_internet_required)) return;
-                startYouTubeSave(target, true);
-            }
-        });
-        addContextAction(getString(R.string.context_add_to_local_playlist), new Runnable() {
-            @Override public void run() {
-                openAddYouTubeTrackToLocalPlaylistFlow(target);
-            }
-        });
-        java.io.File savedVideo = YouTubeSavePaths.findSavedVideo(this, target);
-        if (savedVideo != null && savedVideo.length() > 1024L) {
-            addContextAction(getString(R.string.youtube_ctx_play_saved), new Runnable() {
-                @Override public void run() {
-                    mediaSuite.playYouTubeFromContext(target);
-                }
-            });
-        }
     }
 
-    /** MediaSuiteHost adapter — save from detail list actions. */
-    public void mediaRequestYouTubeSave(YouTubeVideo video, boolean audioOnly) {
-        startYouTubeSave(video, audioOnly);
+    /** Route official YouTube metadata into the existing authorized Soulseek search. */
+    public void mediaSearchSoulseekForYouTube(YouTubeVideo video) {
+        String query = com.solar.launcher.youtube.YouTubeAcquisitionPolicy
+                .soulseekQuery(video);
+        if (query.length() > 0) launchReachSearchFromSuggestion(query, false);
     }
 
     /**
@@ -51203,6 +53114,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
+                    updateSoulseekTransferJournalPhase(phase, detail);
                     if (soulseekUiMode != SOULSEEK_UI_DOWNLOAD || soulseekActiveDownload == null) return;
                     long now = android.os.SystemClock.uptimeMillis();
                     if (now - soulseekLastStatusUiMs < 200) return;
@@ -51240,6 +53152,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                         SolarDevelopmentBootstrap.onSoulseekConnected(
                                 MainActivity.this, prefs, client);
                     }
+                    maybeResumeSoulseekDownloadAfterNetworkLoss();
                 }
             });
         }
@@ -51425,6 +53338,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                 @Override
                 public void run() {
                     if (soulseekActiveDownload == null) return;
+                    progressTransferJob(soulseekTransferJobId, done, total);
                     long now = android.os.SystemClock.uptimeMillis();
                     // 2026-07-15 — Coarser progress UI while user is interacting off download/NP.
                     long minGap = 150L;
@@ -51491,6 +53405,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                         handleSoulseekDownloadCompleteOnUi(file);
                     } catch (Throwable t) {
                         android.util.Log.w("Solar", "Reach download complete UI", t);
+                        failTransferJob(soulseekTransferJobId, "Download completion failed");
                         clearSoulseekBackgroundSaveState();
                         stopSoulseekDownloadUiRunnables();
                         soulseekActiveDownload = null;
@@ -51509,6 +53424,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                         handleSoulseekDownloadErrorOnUi(message);
                     } catch (Throwable t) {
                         android.util.Log.w("Solar", "Reach download error UI", t);
+                        failTransferJob(soulseekTransferJobId, "Download failed");
                         clearSoulseekBackgroundSaveState();
                         stopSoulseekDownloadUiRunnables();
                         soulseekActiveDownload = null;
@@ -51901,6 +53817,15 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     private void fetchGetMusicResults(final String query) {
         if (query == null || query.trim().isEmpty()) return;
         if (!requireInternet(R.string.toast_internet_required)) return;
+        if (getMusicReachSearchActive()
+                && !ensureSoulseekUseNotice(new Runnable() {
+                    @Override
+                    public void run() {
+                        fetchGetMusicResults(query);
+                    }
+                })) {
+            return;
+        }
         soulseekLastQuery = query.trim();
         GetMusicSearchHistory.remember(prefs, soulseekLastQuery);
         getMusicSearchGen++;
@@ -52733,8 +54658,60 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         });
         containerBrowserItems.addView(back);
 
-        if (!ConnectivityHelper.isOnline(this)) {
+        final boolean online = ConnectivityHelper.isOnline(this);
+        if (getMusic) {
+            View localImport = createGetMusicListRow(
+                    getString(R.string.get_music_import_local),
+                    getString(R.string.get_music_import_local_hint),
+                    new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    requestAuthorizedMediaImport();
+                }
+            });
+            containerBrowserItems.addView(localImport);
+
+            if (online) {
+                View directAudio = createGetMusicListRow(
+                        getString(R.string.get_music_direct_audio),
+                        getString(R.string.get_music_direct_audio_hint),
+                        new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        clickFeedback();
+                        openAuthorizedDirectDownloadKeyboard();
+                    }
+                });
+                containerBrowserItems.addView(directAudio);
+            }
+
+            if (com.solar.launcher.youtube.YouTubeExperiment.isEnabled(prefs)) {
+                View youtube = createGetMusicListRow(
+                        getString(R.string.get_music_youtube_discover),
+                        getString(online
+                                ? R.string.get_music_youtube_discover_hint
+                                : R.string.get_music_youtube_discover_offline_hint),
+                        new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        clickFeedback();
+                        if (mediaSuite != null) mediaSuite.openYouTubeDiscoverBrowse();
+                    }
+                });
+                containerBrowserItems.addView(youtube);
+            }
+        }
+
+        if (!online) {
             if (containerBrowserItems.getChildCount() > 0) containerBrowserItems.getChildAt(0).requestFocus();
+            return;
+        }
+        if (getMusic && !GetMusicSources.anyAvailable(
+                prefs, soulseekActive(), deezerActive())) {
+            if (containerBrowserItems.getChildCount() > 0) {
+                containerBrowserItems.getChildAt(0).requestFocus();
+            }
             return;
         }
 
@@ -52807,6 +54784,14 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             return;
         }
         if (!requireInternet(R.string.soulseek_wifi_required)) return;
+        if (!ensureSoulseekUseNotice(new Runnable() {
+            @Override
+            public void run() {
+                fetchSoulseekResults(query);
+            }
+        })) {
+            return;
+        }
         if (!requireReachPeerConnectivity()) return;
         soulseekLastQuery = query.trim();
         SoulseekSearchHistory.remember(prefs, soulseekLastQuery);
@@ -53454,6 +55439,15 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     /** Library browse save: stay on browse list; failures are silent (no crash, no failure UI). */
     private void startSoulseekBrowseBackgroundSave(final SoulseekClient.Result r, final boolean thankAfter) {
+        if (r == null) return;
+        if (!ensureSoulseekUseNotice(new Runnable() {
+            @Override
+            public void run() {
+                startSoulseekBrowseBackgroundSave(r, thankAfter);
+            }
+        })) {
+            return;
+        }
         if (!requireInternet(R.string.soulseek_wifi_required)) return;
         if (!requireReachPeerConnectivity()) return;
         stopSoulseekActionRefresh();
@@ -53466,8 +55460,12 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         soulseekLastProgressUiMs = 0;
         soulseekPendingThankYouResult = thankAfter ? r : null;
         watchDownloadPeerSharing(r.username);
+        soulseekTransferJobId = beginTransferJob(soulseekTransferJobId,
+                TransferJobStore.Provider.SOULSEEK, r.title(), r.username, r.filename,
+                rootFolder.getAbsolutePath(), 3);
         SoulseekClient client = ensureSoulseekClient();
         if (client == null) {
+            failTransferJob(soulseekTransferJobId, getString(R.string.soulseek_error_unknown));
             clearSoulseekBackgroundSaveState();
             return;
         }
@@ -53477,8 +55475,14 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     }
 
     private void handleSoulseekDownloadCompleteOnUi(final File file) {
+        soulseekPausedForNetworkLoss = false;
         final boolean backgroundSave = soulseekBackgroundSave;
         final int action = soulseekPendingAction;
+        if (file != null && file.isFile()) {
+            finishTransferJob(soulseekTransferJobId, file, action == SOULSEEK_ACTION_SAVE);
+        } else {
+            failTransferJob(soulseekTransferJobId, "Downloaded file is missing");
+        }
         final File queuePartial = reachQueuePartialFile;
         final boolean reachStream = reachPartialPlaybackStarted;
         final String reachMeta = soulseekActiveDownload != null
@@ -53563,6 +55567,14 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     private void handleSoulseekDownloadErrorOnUi(final String message) {
         if ("Download cancelled".equals(message)) {
+            if (soulseekPausedForNetworkLoss) return;
+            TransferJobStore.Job job = transferJobStore != null
+                    ? transferJobStore.get(soulseekTransferJobId) : null;
+            if (job != null && job.state != TransferJobStore.State.PAUSED
+                    && job.state != TransferJobStore.State.CANCELED) {
+                transitionTransferJob(job.id, TransferJobStore.State.CANCELED,
+                        "Canceled", "");
+            }
             if (soulseekBackgroundSave) {
                 clearSoulseekBackgroundSaveState();
             }
@@ -53571,6 +55583,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             }
             return;
         }
+        soulseekPausedForNetworkLoss = false;
+        failTransferJob(soulseekTransferJobId, humanizeSoulseekError(message));
         if (soulseekBackgroundSave) {
             clearSoulseekBackgroundSaveState();
             stopSoulseekDownloadUiRunnables();
@@ -53627,6 +55641,15 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     }
 
     private void startSoulseekTransfer(final SoulseekClient.Result r, final int action) {
+        if (r == null) return;
+        if (!ensureSoulseekUseNotice(new Runnable() {
+            @Override
+            public void run() {
+                startSoulseekTransfer(r, action);
+            }
+        })) {
+            return;
+        }
         if (!requireInternet(R.string.soulseek_wifi_required)) return;
         if (!requireReachPeerConnectivity()) return;
         stopSoulseekActionRefresh();
@@ -53646,13 +55669,45 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         watchDownloadPeerSharing(r.username);
         buildSoulseekDownloadUI(r, action);
         File dest = action == SOULSEEK_ACTION_SAVE ? rootFolder : reachCacheDir();
+        soulseekTransferJobId = beginTransferJob(soulseekTransferJobId,
+                TransferJobStore.Provider.SOULSEEK, r.title(), r.username, r.filename,
+                dest.getAbsolutePath(), 3);
         SoulseekClient client = ensureSoulseekClient();
         if (client == null) {
+            failTransferJob(soulseekTransferJobId, getString(R.string.soulseek_error_unknown));
             showSoulseekDownloadFailure(r, getString(R.string.soulseek_error_unknown));
             return;
         }
         client.download(r, dest);
         scheduleSoulseekSharePolicyRefresh();
+    }
+
+    private void updateSoulseekTransferJournalPhase(String phase, String detail) {
+        if (transferJobStore == null || soulseekTransferJobId == null) return;
+        TransferJobStore.Job job = transferJobStore.get(soulseekTransferJobId);
+        if (job == null || job.state.isTerminal()
+                || job.state == TransferJobStore.State.PAUSED) return;
+        String phaseText = phase != null ? phase.trim() : "";
+        String detailText = detail != null ? detail.trim() : "";
+        String journalDetail = phaseText;
+        if (detailText.length() > 0) {
+            journalDetail = journalDetail.length() > 0
+                    ? journalDetail + " - " + detailText : detailText;
+        }
+        String lower = phaseText.toLowerCase(Locale.US);
+        TransferJobStore.State next;
+        if (lower.contains("retry")) {
+            next = TransferJobStore.State.RETRYING;
+        } else if (lower.contains("receiv") || lower.contains("resum")
+                || lower.contains("download")) {
+            next = TransferJobStore.State.DOWNLOADING;
+        } else if (job.state == TransferJobStore.State.DOWNLOADING) {
+            next = TransferJobStore.State.DOWNLOADING;
+        } else {
+            next = TransferJobStore.State.CONNECTING;
+        }
+        transitionTransferJob(job.id, next,
+                journalDetail.length() > 0 ? journalDetail : "Connecting", "");
     }
 
     private void watchDownloadPeerSharing(final String peer) {
@@ -54059,6 +56114,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     private void cancelSoulseekDownloadSilent() {
         stopSoulseekDownloadUiRunnables();
+        soulseekPausedForNetworkLoss = false;
+        transitionTransferJob(soulseekTransferJobId,
+                TransferJobStore.State.CANCELED, "Canceled", "");
         if (soulseekClient != null) soulseekClient.cancelDownload();
         soulseekBackgroundSave = false;
         soulseekActiveDownload = null;
@@ -54078,6 +56136,69 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         reachGrowingTotalBytes = 0;
         progressHandler.removeCallbacks(reachGrowingEdgePoll);
         purgeUnreferencedReachCache();
+        scheduleSoulseekSharePolicyRefresh();
+    }
+
+    private void pauseSoulseekDownloadForResume() {
+        stopSoulseekDownloadUiRunnables();
+        soulseekPausedForNetworkLoss = false;
+        transitionTransferJob(soulseekTransferJobId,
+                TransferJobStore.State.PAUSED, "Paused", "");
+        if (soulseekClient != null) soulseekClient.cancelDownload();
+        soulseekBackgroundSave = false;
+        soulseekActiveDownload = null;
+        com.solar.launcher.ui.UiBusy.clear(com.solar.launcher.ui.UiBusy.REASON_DOWNLOAD);
+        soulseekDownloadProgressBar = null;
+        soulseekDownloadPercentText = null;
+        soulseekDownloadDetailText = null;
+        soulseekDownloadStatusRow = null;
+        soulseekTryAnotherRow = null;
+        soulseekReSearchRowsShown = false;
+        soulseekPendingAction = 0;
+        reachPartialPlaybackStarted = false;
+        reachGrowingCacheFile = null;
+        reachQueuePartialFile = null;
+        reachGrowingPreparedBytes = 0;
+        reachGrowingTotalBytes = 0;
+        progressHandler.removeCallbacks(reachGrowingEdgePoll);
+        scheduleSoulseekSharePolicyRefresh();
+        scheduleDownloadsUiRefresh();
+    }
+
+    private void pauseSoulseekDownloadForNetworkLoss() {
+        if (soulseekPausedForNetworkLoss || soulseekActiveDownload == null
+                || soulseekClient == null || !soulseekClient.isTransferActive()) return;
+        soulseekPausedForNetworkLoss = true;
+        stopSoulseekDownloadUiRunnables();
+        transitionTransferJob(soulseekTransferJobId,
+                TransferJobStore.State.PAUSED, "Paused - Wi-Fi unavailable", "");
+        com.solar.launcher.ui.UiBusy.clear(com.solar.launcher.ui.UiBusy.REASON_DOWNLOAD);
+        soulseekClient.cancelDownload();
+        scheduleDownloadsUiRefresh();
+    }
+
+    private void maybeResumeSoulseekDownloadAfterNetworkLoss() {
+        if (!soulseekPausedForNetworkLoss || soulseekActiveDownload == null
+                || soulseekClient == null || !hasInternetConnection()
+                || !ConnectivityHelper.isWifiAssociated(this)
+                || !isDownloadAutoResumeWifiEnabled()
+                || !soulseekClient.isLoggedIn() || soulseekClient.isTransferActive()) return;
+        File dest = soulseekPendingAction == SOULSEEK_ACTION_SAVE
+                ? rootFolder : reachCacheDir();
+        soulseekTransferJobId = beginTransferJob(soulseekTransferJobId,
+                TransferJobStore.Provider.SOULSEEK, soulseekActiveDownload.title(),
+                soulseekActiveDownload.username, soulseekActiveDownload.filename,
+                dest.getAbsolutePath(), 3);
+        soulseekPausedForNetworkLoss = false;
+        soulseekDownloadPhase = "Connecting";
+        soulseekDownloadPhaseDetail = soulseekActiveDownload.username;
+        soulseekDownloadStartMs = android.os.SystemClock.uptimeMillis();
+        if (soulseekUiMode == SOULSEEK_UI_DOWNLOAD) {
+            soulseekUiHandler.postDelayed(soulseekStallWatchRunnable, SOULSEEK_STALL_MS);
+            soulseekUiHandler.postDelayed(soulseekDownloadTickRunnable, 1000L);
+            updateSoulseekDownloadStatusUi();
+        }
+        soulseekClient.download(soulseekActiveDownload, dest);
         scheduleSoulseekSharePolicyRefresh();
     }
 
@@ -54921,11 +57042,35 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     }
 
     private void pausePodcastBackgroundDownload() {
+        pausePodcastBackgroundDownload(false);
+    }
+
+    private void pausePodcastBackgroundDownload(boolean networkLoss) {
         if (!podcastDownloadInProgress && !podcastPartialPlaybackStarted) return;
         if (podcastDownloadInProgress) {
+            transitionTransferJob(podcastStreamTransferJobId,
+                    TransferJobStore.State.PAUSED,
+                    networkLoss ? "Paused - Wi-Fi unavailable" : "Paused",
+                    "");
             podcastDownloadCancel.set(true);
             podcastDownloadInProgress = false;
             podcastDownloadPaused = true;
+            podcastPausedForNetworkLoss = networkLoss;
+            if (podcastGrowingCacheFile == null && playback.isPodcastActive()
+                    && playback.podcastIndex() >= 0
+                    && playback.podcastIndex() < playback.podcastQueue().size()) {
+                OpenRssClient.Episode episode =
+                        playback.podcastQueue().get(playback.podcastIndex());
+                File target = podcastCacheTarget(episode.audioUrl);
+                String name = target.getName();
+                File partial = new File(target.getParentFile(),
+                        name.substring(0, name.length() - ".audio".length()) + ".part");
+                if (partial.isFile()) {
+                    podcastGrowingCacheFile = partial;
+                    podcastGrowingCacheFinal = target;
+                    podcastDownloadBytesRead = partial.length();
+                }
+            }
         }
         progressHandler.removeCallbacks(podcastGrowingEdgePoll);
         saveCurrentPodcastResume();
@@ -54933,10 +57078,13 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     }
 
     private void stopPodcastDownloadFully() {
+        transitionTransferJob(podcastStreamTransferJobId,
+                TransferJobStore.State.CANCELED, "Canceled", "");
         podcastDownloadCancel.set(true);
         podcastDownloadCancel = new java.util.concurrent.atomic.AtomicBoolean(false);
         podcastDownloadInProgress = false;
         podcastDownloadPaused = false;
+        podcastPausedForNetworkLoss = false;
         podcastPartialPlaybackStarted = false;
         podcastRecoveryInFlight = false;
         progressHandler.removeCallbacks(podcastGrowingEdgePoll);
@@ -54947,11 +57095,14 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     private void maybeResumePodcastDownload() {
         if (!podcastDownloadPaused || podcastDownloadInProgress || !playback.isPodcastActive()) return;
         if (!ConnectivityHelper.isOnline(this)) return;
+        if (!ConnectivityHelper.isWifiAssociated(this)) return;
+        if (podcastPausedForNetworkLoss && !isDownloadAutoResumeWifiEnabled()) return;
         if (podcastGrowingCacheFile == null || !podcastGrowingCacheFile.isFile()) return;
         if (podcastGrowingCacheFinal != null && podcastGrowingCacheFinal.isFile()) return;
         long partial = podcastGrowingCacheFile.length();
         if (podcastDownloadBytesTotal > 0 && partial >= podcastDownloadBytesTotal) return;
         podcastDownloadPaused = false;
+        podcastPausedForNetworkLoss = false;
         podcastDownloadCancel = new java.util.concurrent.atomic.AtomicBoolean(false);
         resumePodcastDownload(playback.podcastIndex(),
                 playback.podcastQueue().get(playback.podcastIndex()), podcastLoadGeneration);
@@ -55162,6 +57313,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             SoulseekAccount.load(prefs, MainActivity.this);
             if (!soulseekKeyboardStashedAutoUser.isEmpty()) {
                 typedPassword = soulseekKeyboardStashedAutoUser;
+                keyboardCursor = typedPassword.length();
                 soulseekUsernameAutoPhase = true;
                 updateKeyboardUI();
             }
@@ -55239,7 +57391,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
      */
     private void refreshLibraryAfterStorageMount() {
         if (isUsbMassStorageUiLocked() || libraryScanRunning) return;
-        if (customLibrary.isEmpty()) {
+        // A SEGMENTED library intentionally keeps customLibrary empty. Testing that list here
+        // caused remount refreshes to take the startup cache fast-path and miss newly copied files.
+        if (libraryResidentTrackCount() <= 0) {
             startLibraryScan(false);
             return;
         }
@@ -55272,7 +57426,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         clockHandler.postDelayed(deferredPostUmsStorageMountRunnable, delay);
     }
 
-    /** Walk disk for audio paths absent from SQLite — merge without deleteExcept purge. */
+    /** Incrementally merge new/changed files and prune missing paths after a complete walk. */
     private void startLibraryNewFilesScan(final boolean showOverlay) {
         if (libraryScanRunning) return;
         if (isUsbMassStorageUiLocked()) return;
@@ -55291,14 +57445,27 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             @Override
             public void run() {
                 final MusicLibraryStore store = MusicLibraryStore.getInstance(getApplicationContext());
-                final int pruned = purgeStaleLibraryPaths(store);
-                final java.util.ArrayList<SongItem> additions = new java.util.ArrayList<SongItem>();
-                collectNewLibraryAudioFromAllRoots(store, additions, gen);
+                final java.util.HashSet<String> seenPaths = MusicLibraryStore.newKeepSet();
+                final java.util.ArrayList<SongItem> newOrChanged =
+                        new java.util.ArrayList<SongItem>();
+                final boolean[] walkComplete = new boolean[] { true };
+                collectChangedLibraryAudioFromAllRoots(
+                        store, seenPaths, newOrChanged, walkComplete, gen);
                 if (libraryScanGen != gen) {
                     abortLibraryScanWorker(gen);
                     return;
                 }
-                if (additions.isEmpty() && pruned == 0) {
+                // A temporarily unreadable SD root must not erase its indexed library rows.
+                int pruned = 0;
+                if (walkComplete[0]) {
+                    final int rowsBeforePrune = store.countTracks();
+                    store.deleteExcept(seenPaths);
+                    pruned = Math.max(0, rowsBeforePrune - store.countTracks());
+                } else {
+                    seenPaths.addAll(store.loadPaths());
+                }
+                final int rowsAfter = store.countTracks();
+                if (newOrChanged.isEmpty() && pruned == 0) {
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
@@ -55308,15 +57475,35 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                     });
                     return;
                 }
-                if (!additions.isEmpty()) {
+
+                clearArtCacheReadyStamp();
+                boolean segmented =
+                        com.solar.launcher.library.LibraryMemoryBudget.chooseMode(rowsAfter)
+                                == com.solar.launcher.library.LibraryMemoryBudget.Mode.SEGMENTED;
+                if (segmented) {
+                    applySegmentedLibraryHydrate(store);
+                } else {
                     synchronized (customLibrary) {
-                        customLibrary.addAll(additions);
+                        com.solar.launcher.library.LibraryIncrementalReconciler.merge(
+                                customLibrary,
+                                seenPaths,
+                                newOrChanged,
+                                new com.solar.launcher.library.LibraryIncrementalReconciler
+                                        .PathKey<SongItem>() {
+                                    @Override public String pathOf(SongItem item) {
+                                        return item != null && item.file != null
+                                                ? item.file.getAbsolutePath() : "";
+                                    }
+                                });
                     }
+                    refreshLibraryCategoryIndex();
                 }
+                store.pruneFavorites(seenPaths);
+                favoritePaths = store.loadFavoritePaths();
                 invalidateSongPathIndex();
                 invalidateShareDurationCache();
                 clearArtistOwnAlbumCache();
-                normalizeLibraryAlbumTitles();
+                if (!segmented) normalizeLibraryAlbumTitles();
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
@@ -55332,32 +57519,46 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         }, "LibraryNewFiles").start();
     }
 
-    /** Collect tracks whose paths are not yet in MusicLibraryStore (new files only). */
-    /** 2026-07-15 — Walk every Music/ volume, not only the preferred save root. */
-    private void collectNewLibraryAudioFromAllRoots(MusicLibraryStore store,
-            java.util.ArrayList<SongItem> out, int gen) {
+    /** Walk every Music/ volume; unchanged files retain cached metadata and object identity. */
+    private void collectChangedLibraryAudioFromAllRoots(MusicLibraryStore store,
+            java.util.HashSet<String> seenPaths, java.util.ArrayList<SongItem> out,
+            boolean[] walkComplete, int gen) {
+        boolean foundRoot = false;
         for (File musicRoot : com.solar.launcher.DeviceFeatures.getMusicRoots()) {
             if (libraryScanGen != gen) return;
-            collectNewLibraryAudio(musicRoot, store, out, gen);
+            foundRoot = true;
+            collectChangedLibraryAudio(
+                    musicRoot, store, seenPaths, out, walkComplete, gen);
         }
+        if (!foundRoot) walkComplete[0] = false;
     }
 
-    private void collectNewLibraryAudio(File folder, MusicLibraryStore store,
-            java.util.ArrayList<SongItem> out, int gen) {
-        if (libraryScanGen != gen || folder == null) return;
+    private void collectChangedLibraryAudio(File folder, MusicLibraryStore store,
+            java.util.HashSet<String> seenPaths, java.util.ArrayList<SongItem> out,
+            boolean[] walkComplete, int gen) {
+        if (libraryScanGen != gen) return;
+        if (folder == null || !folder.isDirectory()) {
+            walkComplete[0] = false;
+            return;
+        }
         // 2026-07-19 — Incremental scan must not pick up Stem Player pad files.
         if (com.solar.launcher.stem.LalalClient.isStemLibraryArtifact(folder)) return;
         File[] files = folder.listFiles();
-        if (files == null) return;
+        if (files == null) {
+            walkComplete[0] = false;
+            return;
+        }
         for (File f : files) {
             if (libraryScanGen != gen) return;
             if (f.isDirectory()) {
                 if (com.solar.launcher.stem.LalalClient.isStemLibraryArtifact(f)) continue;
-                collectNewLibraryAudio(f, store, out, gen);
+                collectChangedLibraryAudio(
+                        f, store, seenPaths, out, walkComplete, gen);
             } else if (isAudioFile(f)) {
                 if (blacklist.contains(f.getAbsolutePath())) continue;
                 if (com.solar.launcher.stem.LalalClient.isStemLibraryArtifact(f)) continue;
-                if (store.get(f.getAbsolutePath()) != null) continue;
+                seenPaths.add(f.getAbsolutePath());
+                if (store.getFresh(f) != null) continue;
                 LibraryScanResolved resolved = resolveSongItemForScan(f, store, gen);
                 if (resolved == null || resolved.item == null) continue;
                 out.add(resolved.item);
@@ -55511,6 +57712,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         podcastGrowingSeekMs = 0;
         podcastGrowingReprepareInFlight = false;
         podcastDownloadPaused = false;
+        podcastPausedForNetworkLoss = false;
         podcastDownloadRetryCount = 0;
         podcastRecoveryInFlight = false;
         podcastDownloadLastProgressMs = 0;
@@ -55679,7 +57881,15 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             final boolean resume) {
         if (gen != podcastLoadGeneration) return;
         if (currentScreenState != STATE_PLAYER) return;
+        File journalTarget = podcastCacheTarget(ep.audioUrl);
+        String showTitle = podcastSelected != null
+                ? podcastSelected.title : playback.podcastShowTitle();
+        podcastStreamTransferJobId = beginTransferJob(podcastStreamTransferJobId,
+                TransferJobStore.Provider.PODCAST, ep.title, showTitle, ep.audioUrl,
+                journalTarget.getAbsolutePath(), PODCAST_DOWNLOAD_MAX_RETRIES + 1);
+        final String streamTransferJobId = podcastStreamTransferJobId;
         podcastDownloadPaused = false;
+        podcastPausedForNetworkLoss = false;
         if (!resume) {
             updatePodcastLoadUi(gen, getString(R.string.podcasts_downloading), 0);
         } else {
@@ -55735,6 +57945,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                                 @Override
                                 public void onProgress(final long bytesRead, final long totalBytes) {
                                     if (gen != podcastLoadGeneration || cancel.get()) return;
+                                    progressTransferJob(
+                                            streamTransferJobId, bytesRead, totalBytes);
                                     podcastDownloadBytesRead = bytesRead;
                                     if (totalBytes > 0) podcastDownloadBytesTotal = totalBytes;
                                     if (bytesRead > podcastDownloadStallCheckBytes) {
@@ -55762,6 +57974,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                         public void run() {
                             if (gen != podcastLoadGeneration || !playback.isPodcastActive()
                                     || playback.podcastIndex() != index) return;
+                            finishTransferJob(streamTransferJobId, audioFile, false);
                             podcastDownloadInProgress = false;
                             podcastDownloadBytesRead = audioFile.length();
                             if (podcastDownloadBytesTotal <= 0) {
@@ -55778,6 +57991,15 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                     });
                 } catch (final Exception e) {
                     if (cancel.get()) return;
+                    if (podcastPartialPlaybackStarted
+                            && podcastDownloadRetryCount < PODCAST_DOWNLOAD_MAX_RETRIES) {
+                        transitionTransferJob(streamTransferJobId,
+                                TransferJobStore.State.RETRYING, "Waiting to retry", "");
+                    } else {
+                        failTransferJob(streamTransferJobId,
+                                e.getMessage() != null ? e.getMessage()
+                                        : getString(R.string.podcasts_stream_failed));
+                    }
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
@@ -55796,6 +58018,12 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                 }
             }
         }, "PodcastDl").start();
+    }
+
+    private File podcastCacheTarget(String audioUrl) {
+        File cacheDir = new File(streamAppCacheRoot(), "podcast");
+        String key = Integer.toHexString(audioUrl != null ? audioUrl.hashCode() : 0);
+        return new File(cacheDir, "pod_" + key + ".audio");
     }
 
     private void maybeRenamePodcastGrowingCache() {
@@ -56037,6 +58265,10 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             Toast.makeText(this, getString(R.string.podcasts_already_saved), Toast.LENGTH_SHORT).show();
             return;
         }
+        final String saveTransferJobId = beginTransferJob(podcastSaveTransferJobId,
+                TransferJobStore.Provider.PODCAST, ep.title, showTitle, ep.audioUrl,
+                dest.getAbsolutePath(), 3);
+        podcastSaveTransferJobId = saveTransferJobId;
         acquireBlockingOverlay(OVERLAY_PODCAST, getString(R.string.podcasts_saving));
         new Thread(new Runnable() {
             @Override
@@ -56045,6 +58277,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                     PodcastLibrary.downloadTo(dest, ep.audioUrl, new com.solar.launcher.net.SolarHttp.DownloadProgress() {
                         @Override
                         public void onProgress(final long bytesRead, final long totalBytes) {
+                            progressTransferJob(
+                                    saveTransferJobId, bytesRead, totalBytes);
                             runOnUiThread(new Runnable() {
                                 @Override
                                 public void run() {
@@ -56061,6 +58295,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                     });
                     // 2026-07-15 — Stamp show/episode into the file so scans survive folder moves.
                     PodcastLibrary.tryEmbedSaveTags(dest, showTitle, ep.title);
+                    finishTransferJob(saveTransferJobId, dest, true);
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
@@ -56072,6 +58307,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                         }
                     });
                 } catch (final Exception e) {
+                    failTransferJob(saveTransferJobId,
+                            e.getMessage() != null ? e.getMessage()
+                                    : getString(R.string.podcasts_save_failed));
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
@@ -58750,14 +60988,16 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             long now = System.currentTimeMillis();
             if (event.getRepeatCount() > 0) {
                 if (!scrubbing && now - downAt >= MEDIA_SKIP_LONG_PRESS_MS) {
-                    scrubbing = true;
-                    if (next) mediaNextScrubActive = true;
-                    else mediaPrevScrubActive = true;
-                    clickFeedback();
-                    mediaSuite.pulseVideoTransport();
+                    scrubbing = mediaSuite.beginVideoSkipScrub();
+                    if (scrubbing) {
+                        if (next) mediaNextScrubActive = true;
+                        else mediaPrevScrubActive = true;
+                        clickFeedback();
+                    }
                 }
                 if (scrubbing) {
-                    mediaSuite.seekVideoMs(next ? MEDIA_SCRUB_STEP_MS : -MEDIA_SCRUB_STEP_MS);
+                    mediaSuite.moveVideoScrubCursor(
+                            next ? MEDIA_SCRUB_STEP_MS : -MEDIA_SCRUB_STEP_MS);
                 }
             }
             return true;
@@ -58803,7 +61043,10 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         else mediaPrevScrubActive = false;
         if (scrubbing) {
             if (playback.isPodcastActive()) flushPodcastResumeIfNeeded();
-            if (currentScreenState == MediaSuiteHost.STATE_VIDEO_PLAYER && mediaSuite != null) return true;
+            if (currentScreenState == MediaSuiteHost.STATE_VIDEO_PLAYER && mediaSuite != null) {
+                mediaSuite.commitVideoSkipScrub();
+                return true;
+            }
             if (playback.isRadioActive() && mediaSuite != null) return true;
             return true;
         }
@@ -59189,14 +61432,15 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                 return true;
             }
             if (Y1InputKeys.isWheelUp(keyCode)) {
-                keyboardIndex = (keyboardIndex - 1 + KEYBOARD_CHARS.length) % KEYBOARD_CHARS.length;
+                keyboardIndex = (keyboardIndex - 1 + keyboardChars.length)
+                        % keyboardChars.length;
                 // 2026-07-15 — Wheel: key strip only (Hallmark cut motion; was full restyle).
                 updateKeyboardKeyStripTexts();
                 clickFeedback();
                 return true;
             }
             if (Y1InputKeys.isWheelDown(keyCode)) {
-                keyboardIndex = (keyboardIndex + 1) % KEYBOARD_CHARS.length;
+                keyboardIndex = (keyboardIndex + 1) % keyboardChars.length;
                 updateKeyboardKeyStripTexts();
                 clickFeedback();
                 return true;
@@ -59417,6 +61661,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                 || currentScreenState == STATE_WIFI || currentScreenState == STATE_PODCASTS
                 || currentScreenState == STATE_SOULSEEK || currentScreenState == STATE_DEEZER
                 || currentScreenState == STATE_APPS || currentScreenState == STATE_MORE
+                || currentScreenState == STATE_DOWNLOADS
                 || currentScreenState == STATE_NAVIDROME || currentScreenState == STATE_PLEX || currentScreenState == STATE_JELLYFIN
                 || MediaSuiteHost.isMediaListBrowseState(currentScreenState)) {
             // 2026-07-06 — FM: wheel navigates menu rows; settings+tune mode alone steps MHz (not volume).
@@ -60225,6 +62470,17 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     @Override
     protected void onDestroy() {
+        try {
+            DirectDownloadControl directControl = directDownloadControl;
+            if (directControl != null && transferJobStore != null) {
+                TransferJobStore.Job directJob = transferJobStore.get(directControl.jobId);
+                if (directJob != null && directJob.state.isRunning()) {
+                    pauseDirectDownloadForResume(directJob);
+                }
+            }
+        } catch (RuntimeException e) {
+            android.util.Log.w("Solar", "Could not pause direct download during shutdown", e);
+        }
         // 2026-07-20 — Clear MemoryRelease host so trim doesn’t touch a dead Activity.
         MemoryRelease.setHost(null);
         if (usbFocusHelper != null) usbFocusHelper.onDestroy();
@@ -60296,6 +62552,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             unregisterReceiver(contextHoldThrobberReceiver);
         } catch (Exception ignored) {}
         BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+        a2dpProfileClosing = true;
+        a2dpProfileRequested = false;
         if (adapter != null && bluetoothA2dp != null) {
             adapter.closeProfileProxy(BluetoothProfile.A2DP, bluetoothA2dp);
             bluetoothA2dp = null;
@@ -61502,6 +63760,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         static final int KIND_IMAGE = 4;
         /** Y2 cross-link to the other storage volume from a mount root. */
         static final int KIND_STORAGE = 5;
+        /** Optional Android content-provider picker from the Solar import browser. */
+        static final int KIND_EXTERNAL_IMPORT = 6;
 
         final int kind;
         final File file;
@@ -61536,6 +63796,10 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         static FolderBrowserEntry storageVolume(File f, String label) {
             return new FolderBrowserEntry(KIND_STORAGE, f, label);
         }
+
+        static FolderBrowserEntry externalImport(String label) {
+            return new FolderBrowserEntry(KIND_EXTERNAL_IMPORT, null, label);
+        }
     }
 
     private class FolderBrowserAdapter extends android.widget.BaseAdapter {
@@ -61562,6 +63826,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             else if (entry.kind == FolderBrowserEntry.KIND_IMAGE) prefix = "🖼 ";
             else if (entry.kind == FolderBrowserEntry.KIND_UP) prefix = "";
             else if (entry.kind == FolderBrowserEntry.KIND_STORAGE) prefix = "💾 ";
+            else if (entry.kind == FolderBrowserEntry.KIND_EXTERNAL_IMPORT) prefix = "↗ ";
             if (entry.kind == FolderBrowserEntry.KIND_APK) {
                 btn.setText(getString(R.string.browser_install_apk, entry.label));
                 btn.setTextColor(0xFF00FFFF);
@@ -61608,8 +63873,16 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                                 buildFileBrowserUI();
                             }
                         });
+                    } else if (entry.kind == FolderBrowserEntry.KIND_EXTERNAL_IMPORT) {
+                        requestExternalMediaImport();
                     } else if (entry.kind == FolderBrowserEntry.KIND_AUDIO && entry.file != null) {
-                        setupFolderPlaylist(entry.file);
+                        if (isPickingMediaImport) {
+                            File selected = entry.file;
+                            closeMediaImportPicker();
+                            importSelectedFile(selected);
+                        } else {
+                            setupFolderPlaylist(entry.file);
+                        }
                     } else if (entry.kind == FolderBrowserEntry.KIND_APK && entry.file != null) {
                         if (isPickingApk) {
                             confirmAndInstallUserApk(entry.file);
@@ -64085,7 +66358,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         }
         markAudioSourceNetwork(false);
         com.solar.launcher.audio.SolarTransport.get().playFile(
-                track, seek, /*preferIjk*/ false, !isPausedByHand);
+                track, seek, prefersIjkLocalDecode(track), !isPausedByHand);
         return true;
     }
 
@@ -65023,7 +67296,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
         // Not the playing track — Play Instrumental / Play Acapella starts that variant. 2026-07-20
         // Routes through Stems master after play (retire stem_separator for NP). 2026-07-21
-        if (canInstr) {
+        if (localInstrReady) {
             addContextAction(getString(R.string.context_action_play_instrumental), new Runnable() {
                 @Override
                 public void run() {
@@ -65031,7 +67304,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                 }
             });
         }
-        if (canAcap) {
+        if (localAcapReady) {
             addContextAction(getString(R.string.context_action_play_acapella), new Runnable() {
                 @Override
                 public void run() {

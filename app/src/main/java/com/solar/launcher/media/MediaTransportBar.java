@@ -48,6 +48,7 @@ public final class MediaTransportBar {
     private long volumeDismissMs = 2000L;
     private long overlayDismissMs = VIDEO_OVERLAY_DISMISS_MS;
     private boolean videoOverlayMode;
+    private boolean videoOverlayPersistent;
     private boolean volumeModeActive;
     private boolean volumeHintVisible;
     private boolean fmNormalModeActive = false;
@@ -298,15 +299,26 @@ public final class MediaTransportBar {
         overlayDismissMs = dismissMs;
     }
 
-    /** iPod-style video overlay: hidden until user adjusts volume, scrubs, or holds skip. */
+    /** Enables video-specific volume/scrub behavior for this transport strip. */
     public void setVideoOverlayMode(boolean enabled) {
         videoOverlayMode = enabled;
         if (!enabled) {
+            videoOverlayPersistent = false;
             cancelOverlayHide();
             if (root != null) {
                 root.animate().cancel();
                 root.setAlpha(1f);
             }
+        }
+    }
+
+    /** Keep elapsed time, duration, and progress visible throughout video playback. */
+    public void setVideoOverlayPersistent(boolean persistent) {
+        videoOverlayPersistent = persistent;
+        if (persistent) {
+            cancelOverlayHide();
+            setVisible(true);
+            showScrubTrack();
         }
     }
 
@@ -961,7 +973,7 @@ public final class MediaTransportBar {
     }
 
     public void scheduleVideoOverlayHide() {
-        if (!videoOverlayMode || dismissHandler == null) return;
+        if (!videoOverlayMode || videoOverlayPersistent || dismissHandler == null) return;
         if (hideOverlayRunnable != null) dismissHandler.removeCallbacks(hideOverlayRunnable);
         hideOverlayRunnable =
                 new Runnable() {

@@ -3,6 +3,7 @@ package com.solar.launcher.youtube;
 import org.junit.Test;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /** 2026-07-15 — Native client JSON matches YouTubeResultJson shapes. */
@@ -11,7 +12,8 @@ public class YouTubeClientJsonTest {
     @Test
     public void videosJsonRoundTrip() throws Exception {
         List<YouTubeVideo> vids = new ArrayList<YouTubeVideo>();
-        vids.add(new YouTubeVideo("abc", "Title", "Author", "3:45"));
+        vids.add(new YouTubeVideo("abc", "Title", "Author", "3:45",
+                "Download: https://artist.example/song.mp3"));
         String json = YouTubeClient.videosToJson(vids);
         List<YouTubeVideo> parsed = YouTubeResultJson.parseVideos(json);
         if (parsed.size() != 1 || !"abc".equals(parsed.get(0).id)) {
@@ -19,6 +21,9 @@ public class YouTubeClientJsonTest {
         }
         if (!"3:45".equals(parsed.get(0).duration)) {
             throw new AssertionError("duration lost: " + parsed.get(0).duration);
+        }
+        if (!parsed.get(0).description.contains("artist.example")) {
+            throw new AssertionError("description lost");
         }
     }
 
@@ -30,6 +35,40 @@ public class YouTubeClientJsonTest {
         List<YouTubeComment> parsed = YouTubeResultJson.parseComments(json);
         if (parsed.size() != 1 || !"Bob".equals(parsed.get(0).author)) {
             throw new AssertionError("comment round-trip failed: " + json);
+        }
+    }
+
+    @Test
+    public void cacheAnnotationPreservesPayloadShapeAndState() throws Exception {
+        List<YouTubeVideo> vids = new ArrayList<YouTubeVideo>();
+        vids.add(new YouTubeVideo("cached", "Cached title", "Channel", "4:00"));
+        String annotated = YouTubeClient.annotateCache(
+                YouTubeClient.videosToJson(vids), true, true, 42_000L);
+        List<YouTubeVideo> parsed = YouTubeResultJson.parseVideos(annotated);
+        YouTubeResultJson.CacheState cache =
+                YouTubeResultJson.parseCacheState(annotated);
+        if (parsed.size() != 1 || !"cached".equals(parsed.get(0).id)) {
+            throw new AssertionError("annotation changed items: " + annotated);
+        }
+        if (!cache.cached || !cache.stale || cache.ageMs != 42_000L) {
+            throw new AssertionError("cache state missing: " + annotated);
+        }
+    }
+
+    @Test
+    public void discoverAccountSignalsRoundTrip() throws Exception {
+        List<YouTubeVideo> liked = Arrays.asList(
+                new YouTubeVideo("liked1", "Liked title", "Liked channel", "3:00"));
+        String json = YouTubeClient.discoverSignalsToJson(
+                Arrays.asList("One", "Two"), liked, true, true, false);
+        YouTubeDiscoverSignals parsed = YouTubeDiscoverSignals.parse(json);
+        if (!parsed.accountConnected || !parsed.stale || parsed.partial) {
+            throw new AssertionError("signal flags lost: " + json);
+        }
+        if (parsed.subscribedChannels.size() != 2
+                || parsed.likedVideos.size() != 1
+                || !"liked1".equals(parsed.likedVideos.get(0).id)) {
+            throw new AssertionError("signals lost: " + json);
         }
     }
 

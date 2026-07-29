@@ -3,3 +3,16 @@ plugins {
 alias(libs.plugins.android.application) apply false
 alias(libs.plugins.android.library) apply false
 }
+
+// OneDrive and other sync clients can lock AGP's incremental output directories.
+// CI/local builders may keep generated files outside the checkout without changing
+// any source or artifact contents:
+//   SOLAR_BUILD_ROOT=/path/to/cache ./gradlew ...
+def solarBuildRoot = providers.gradleProperty("solarBuildRoot")
+        .orElse(providers.environmentVariable("SOLAR_BUILD_ROOT"))
+        .getOrNull()
+if (solarBuildRoot != null && solarBuildRoot.trim()) {
+    allprojects {
+        layout.buildDirectory.set(file("${solarBuildRoot}/${project.name}"))
+    }
+}

@@ -36,7 +36,7 @@ public final class ListWheelChromePolicy {
      */
     public static PaintPlan plan(boolean spinning) {
         if (spinning) {
-            return new PaintPlan(true, true, false);
+            return new PaintPlan(true, false, false);
         }
         return new PaintPlan(true, true, true);
     }
@@ -48,6 +48,6 @@ public final class ListWheelChromePolicy {
      * Reversal: return focused only.
      */
     public static boolean rowHighlighted(boolean listSelected, boolean focused) {
-        return focused;
+        return listSelected || focused;
     }
 }

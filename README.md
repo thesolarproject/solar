@@ -84,7 +84,11 @@ Extract [rom.zip](https://github.com/thesolarproject/solar/releases/latest/downl
 ### Install with MTKClient
 
 1. Install [MTKClient](https://github.com/bkerler/mtkclient)
-2. Download [the latest Solar firmware](https://github.com/thesolarproject/solar/releases/latest) (rom.zip or rom\_type\_b.zip) (Try Type A first, if scrolling doesn't work then try B)
+2. Identify the device as Y1 Type A or Type B from a verified partition backup,
+   then download only the matching firmware. **Do not try one variant and then
+   the other.** Their Android properties look alike but their boot-critical
+   images differ. Follow [the backup and recovery preflight](docs/RECOVERY.md)
+   before writing any partition.
 3. Unpack the archive:mkdir rom && cd rom unzip ../rom.zip
 4. Turn of the device, disconnect from the PC
 5. Start the flashing process:cd rom python ../mtk.py w logo,uboot,bootimg,recovery,android,usrdata logo.bin,lk.bin,boot.img,recovery.img,system.img,userdata.img

@@ -40,9 +40,10 @@
     <permission
         android:name="com.solar.launcher.permission.OVERLAY_TRIGGER"
         android:protectionLevel="signatureOrSystem" />
+    <!-- API 17 adb backup cannot selectively exclude OAuth/Soulseek credentials. -->
     <application
         android:name=".SolarApplication"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:usesCleartextTraffic="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -125,6 +126,7 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.bluetooth.adapter.action.STATE_CHANGED" />
                 <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
+                <action android:name="android.bluetooth.device.action.ACL_DISCONNECTED" />
                 <action android:name="android.bluetooth.device.action.BOND_STATE_CHANGED" />
                 <action android:name="android.bluetooth.device.action.PAIRING_REQUEST" />
                 <action android:name="android.bluetooth.a2dp.profile.action.CONNECTION_STATE_CHANGED" />

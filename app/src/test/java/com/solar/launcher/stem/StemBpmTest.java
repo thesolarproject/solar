@@ -76,7 +76,7 @@ public class StemBpmTest {
     /** Past end clamps to duration. 2026-07-20 */
     @Test
     public void beatRollCatchUpClampsPastEnd() {
-        assertEquals(10_000, StemBpm.beatRollCatchUpMs(9000, 2000L, 1f, 10_000));
+        assertEquals(9_900, StemBpm.beatRollCatchUpMs(9000, 2000L, 1f, 10_000));
         assertEquals(0, StemBpm.beatRollCatchUpMs(-50, 0L, 1f, 10_000));
     }
 

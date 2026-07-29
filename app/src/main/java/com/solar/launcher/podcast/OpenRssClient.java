@@ -470,9 +470,6 @@ public class OpenRssClient {
         File out = new File(cacheDir, "pod_" + key + ".audio");
         if (out.isFile() && out.length() > 0) return out;
         File tmp = new File(cacheDir, "pod_" + key + ".part");
-        if (tmp.isFile() && tmp.length() > 0 && !out.isFile()) {
-            if (tmp.renameTo(out)) return out;
-        }
         final boolean[] playbackFromPartial = {false};
         final SolarHttp.PartialReadyListener partialReady = listener == null ? null
                 : new SolarHttp.PartialReadyListener() {

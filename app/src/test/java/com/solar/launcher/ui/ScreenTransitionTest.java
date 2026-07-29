@@ -66,6 +66,9 @@ public class ScreenTransitionTest {
                 ScreenTransitionMap.resolve(ScreenTransitionMap.STATE_BROWSER,
                         ScreenTransitionMap.STATE_PODCASTS, false));
         assertEquals(ScreenTransitionMap.Kind.NONE,
+                ScreenTransitionMap.resolve(ScreenTransitionMap.STATE_DOWNLOADS,
+                        ScreenTransitionMap.STATE_BROWSER, false));
+        assertEquals(ScreenTransitionMap.Kind.NONE,
                 ScreenTransitionMap.resolve(MediaSuiteHost.STATE_RADIO,
                         MediaSuiteHost.STATE_VIDEOS, false));
         assertEquals(ScreenTransitionMap.Kind.NONE,

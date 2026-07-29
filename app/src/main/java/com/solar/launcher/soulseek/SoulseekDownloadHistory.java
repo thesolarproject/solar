@@ -45,6 +45,11 @@ public final class SoulseekDownloadHistory {
         return out;
     }
 
+    public static void clear(SharedPreferences prefs) {
+        if (prefs == null) return;
+        prefs.edit().remove(PREF_PEERS).commit();
+    }
+
     private static void save(SharedPreferences prefs, Set<String> peers) {
         JSONArray arr = new JSONArray();
         for (String p : peers) arr.put(p);

@@ -20,13 +20,12 @@ public class RockboxDisableTest {
     }
 
     @Test
-    public void setupScript_setsPreferredSolarHomeWithoutDisablingRockbox() throws Exception {
+    public void setupScript_delegatesToSharedHomePolicyWithoutDisablingRockbox() throws Exception {
         File f = scriptFile("disable-rockbox-for-solar.sh");
         String script = readFile(f);
-        assertTrue(script.contains("SET_PREFERRED_HOME"));
-        assertTrue(script.contains("pm enable"));
+        assertTrue(script.contains("apply-preferred-home-boot.sh"));
+        assertTrue(script.contains("exec sh"));
         assertFalse(script.contains("pm disable"));
-        assertTrue(script.contains("[ -f \"$MARKER\" ]"));
     }
 
     private static File scriptFile(String name) {

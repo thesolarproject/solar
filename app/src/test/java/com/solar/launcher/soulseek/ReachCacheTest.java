@@ -49,6 +49,29 @@ public class ReachCacheTest {
         }
     }
 
+    @Test
+    public void purgeUnreferenced_keepsResumeMetadataBesidePartial() throws Exception {
+        File root = File.createTempFile("reachcache", "");
+        root.delete();
+        root.mkdirs();
+        try {
+            File partial = new File(ReachCache.dir(root), "keep.mp3.part");
+            File metadata = new File(ReachCache.dir(root), "keep.mp3.part.meta");
+            writeBytes(partial, new byte[] {1});
+            writeBytes(metadata, new byte[] {2});
+            File orphanMetadata = new File(ReachCache.dir(root), "old.mp3.part.meta");
+            writeBytes(orphanMetadata, new byte[] {3});
+
+            ReachCache.purgeUnreferenced(root, Arrays.asList(partial));
+
+            if (!partial.isFile()) throw new AssertionError("partial deleted");
+            if (!metadata.isFile()) throw new AssertionError("resume metadata deleted");
+            if (orphanMetadata.isFile()) throw new AssertionError("orphan metadata kept");
+        } finally {
+            deleteTree(root);
+        }
+    }
+
     private static void writeBytes(File f, byte[] data) throws Exception {
         FileOutputStream out = new FileOutputStream(f);
         out.write(data);

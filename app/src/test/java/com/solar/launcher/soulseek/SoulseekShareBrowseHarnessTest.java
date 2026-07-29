@@ -1,6 +1,7 @@
 package com.solar.launcher.soulseek;
 
 import org.junit.Test;
+import org.junit.Assume;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -39,6 +40,10 @@ public class SoulseekShareBrowseHarnessTest {
         int reachFiles = countFiles(reachParsed);
         if (reachFiles != 1) throw new AssertionError("reach parse files=" + reachFiles);
 
+        boolean pynicotineAvailable = hasPynicotine();
+        if (!pynicotineAvailable) deleteTree(music);
+        Assume.assumeTrue("pynicotine is required for the external compatibility harness",
+                pynicotineAvailable);
         File zlibFile = File.createTempFile("reach_shares_", ".zlib");
         try {
             FileOutputStream zout = new FileOutputStream(zlibFile);
@@ -51,6 +56,16 @@ public class SoulseekShareBrowseHarnessTest {
         } finally {
             zlibFile.delete();
             deleteTree(music);
+        }
+    }
+
+    private static boolean hasPynicotine() {
+        try {
+            Process process = new ProcessBuilder(
+                    "python3", "-c", "import pynicotine").start();
+            return process.waitFor() == 0;
+        } catch (Exception ignored) {
+            return false;
         }
     }
 

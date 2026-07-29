@@ -163,6 +163,7 @@ public final class SoulseekShareIndex {
             Map<String, Integer> cachedDurationSecByPath) {
         if (f == null || !f.isFile() || !isShareableAudio(f.getName())) return;
         String rel = relativize(root, f);
+        if (rel == null || rel.length() == 0) return;
         String virtual = "@@" + user + "\\" + libName + "\\" + rel.replace('/', '\\');
         int slash = virtual.lastIndexOf('\\');
         String parent = slash > 0 ? virtual.substring(0, slash) : virtual;
@@ -176,14 +177,21 @@ public final class SoulseekShareIndex {
     }
 
     private static String relativize(File root, File file) {
-        String rootPath = root.getAbsolutePath();
-        String filePath = file.getAbsolutePath();
-        if (filePath.startsWith(rootPath)) {
-            String rel = filePath.substring(rootPath.length());
-            if (rel.startsWith("/")) rel = rel.substring(1);
-            return rel;
+        if (root == null || file == null) return null;
+        try {
+            String rootPath = root.getCanonicalPath();
+            String filePath = file.getCanonicalPath();
+            String prefix = rootPath.endsWith(File.separator)
+                    ? rootPath : rootPath + File.separator;
+            if (!filePath.startsWith(prefix)) return null;
+            String rel = filePath.substring(prefix.length());
+            while (rel.startsWith("/") || rel.startsWith("\\")) {
+                rel = rel.substring(1);
+            }
+            return rel.replace(File.separatorChar, '/');
+        } catch (IOException e) {
+            return null;
         }
-        return file.getName();
     }
 
     static boolean isShareableAudio(String name) {

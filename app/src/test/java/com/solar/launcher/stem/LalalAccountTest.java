@@ -28,7 +28,8 @@ public class LalalAccountTest {
         assertEquals("vocals", LalalClient.STEM_IDS[0]);
         assertEquals("drum", LalalClient.STEM_IDS[1]);
         assertEquals("bass", LalalClient.STEM_IDS[2]);
-        assertEquals("piano", LalalClient.STEM_IDS[3]);
+        assertEquals(3, LalalClient.STEM_IDS.length);
+        assertEquals("piano", LalalClient.OTHER_IDS[0]);
         assertEquals(0, LalalClient.zoneForId("vocals"));
         assertEquals(1, LalalClient.zoneForId("drum"));
         assertEquals(1, LalalClient.zoneForId("drums"));
@@ -37,8 +38,9 @@ public class LalalAccountTest {
         assertEquals(3, LalalClient.zoneForId("melody"));
         assertEquals(3, LalalClient.zoneForId("electric_guitar"));
         assertEquals(3, LalalClient.zoneForId("no_multistem"));
-        assertEquals(LalalClient.MULTISTEM_MAX, LalalClient.MULTISTEM_IDS.length);
-        assertEquals(LalalClient.MULTISTEM_MAX, LalalClient.BATCH_A.length);
+        assertEquals(LalalClient.CORE_IDS.length, LalalClient.MULTISTEM_IDS.length);
+        assertTrue(LalalClient.MULTISTEM_IDS.length <= LalalClient.MULTISTEM_MAX);
+        assertEquals(LalalClient.MULTISTEM_IDS.length, LalalClient.BATCH_A.length);
         assertEquals(0, LalalClient.BATCH_B.length);
         // OpenAPI multistem enum — these must NOT appear in MULTISTEM_IDS.
         for (int i = 0; i < LalalClient.MULTISTEM_IDS.length; i++) {
@@ -56,7 +58,8 @@ public class LalalAccountTest {
         File track = new File("/storage/sdcard1/Music/My Song.mp3");
         File dir = LalalClient.userStemsDir(track);
         assertEquals("My Song.stems", dir.getName());
-        assertEquals("/storage/sdcard1/Music/My Song.stems", dir.getAbsolutePath());
+        assertTrue(dir.getAbsolutePath().replace('\\', '/')
+                .endsWith("/storage/sdcard1/Music/My Song.stems"));
     }
 
     @Test

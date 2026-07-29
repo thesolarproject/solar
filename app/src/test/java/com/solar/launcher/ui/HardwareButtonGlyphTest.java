@@ -151,7 +151,7 @@ public class HardwareButtonGlyphTest {
     public void stemMixTipStubsAreDescriptiveNotTwoWords() {
         // 2026-07-21 — Context tip stubs must read as a lesson, not "Stem pick" / "Mix".
         // Was: two-word stubs as header fallback. Reversal: short title stubs.
-        assertDescriptiveTipStub(HardwareButtonGlyph.STEM_PICK_TIP_STUB, "Prev");
+        assertDescriptiveTipStub(HardwareButtonGlyph.STEM_PICK_TIP_STUB, "Center");
         assertDescriptiveTipStub(HardwareButtonGlyph.STEM_FACE_TIP_STUB, "volume");
         assertDescriptiveTipStub(HardwareButtonGlyph.STEM_MIX_JOURNEY_TIP_STUB, "Volume");
         assertDescriptiveTipStub(HardwareButtonGlyph.MIX_ASSIGN_TIP_STUB, "deck");

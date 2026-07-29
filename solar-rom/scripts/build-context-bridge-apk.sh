@@ -19,12 +19,20 @@ done
 [ -n "$BT" ] || die "no usable build-tools with aapt under $ANDROID_HOME/build-tools"
 
 PLATFORM=""
-for p in android-19 android-17 android-34; do
+for p in android-19 android-17 android-34 android-35; do
     [ -f "$ANDROID_HOME/platforms/$p/android.jar" ] && PLATFORM="$ANDROID_HOME/platforms/$p/android.jar" && break
 done
-[ -n "$PLATFORM" ] || die "install platforms;android-19 via sdkmanager"
+[ -n "$PLATFORM" ] || die "install Android platform 17, 19, 34, or 35 via sdkmanager"
 
 JAVAC=$(command -v javac) || die "missing javac"
+D8="$BT/d8"
+if [ ! -x "$D8" ] && [ -f "$BT/d8.bat" ]; then
+    D8="$BT/d8.bat"
+fi
+APKSIGNER="$BT/apksigner"
+if [ ! -x "$APKSIGNER" ] && [ -f "$BT/apksigner.bat" ]; then
+    APKSIGNER="$BT/apksigner.bat"
+fi
 
 # Compile stubs — vendored XposedBridge.jar is dex-only; stubs match device API signatures.
 gen_stubs() {
@@ -95,7 +103,8 @@ public interface IXposedHookLoadPackage {
 EOF
     mkdir -p "$stubdir/out"
     mapfile -t STUB_JAVA < <(find "$stubdir" -name '*.java' ! -path '*/out/*')
-    "$JAVAC" -source 8 -target 8 -bootclasspath "$PLATFORM" -d "$stubdir/out" \
+    "$JAVAC" -encoding UTF-8 -source 8 -target 8 -bootclasspath "$PLATFORM" \
+        -d "$stubdir/out" \
         "${STUB_JAVA[@]}" \
         || die "Xposed stub javac failed"
     jar cf "$stubdir/stubs.jar" -C "$stubdir/out" .
@@ -118,14 +127,14 @@ build_one() {
 
     echo "==> javac ($variant)"
     mapfile -t JAVA_FILES < <(find "$MOD_DIR/src" "$SCRIPT_DIR/../vendor/global-input-policy" "$SCRIPT_DIR/../vendor/solar-home-policy" -name '*.java')
-    "$JAVAC" -source 8 -target 8 -bootclasspath "$PLATFORM" \
+    "$JAVAC" -encoding UTF-8 -source 8 -target 8 -bootclasspath "$PLATFORM" \
         -classpath "$XPOSED_CP" \
         -d "$build/classes" "${JAVA_FILES[@]}" 2>"$build/javac.log" \
         || { cat "$build/javac.log"; die "javac failed ($variant)"; }
 
     jar cf "$build/classes.jar" -C "$build/classes" .
-    if [ -x "$BT/d8" ]; then
-        "$BT/d8" --min-api 17 --lib "$PLATFORM" --classpath "$XPOSED_CP" \
+    if [ -x "$D8" ] || [ -f "$D8" ]; then
+        "$D8" --min-api 17 --lib "$PLATFORM" --classpath "$XPOSED_CP" \
             --output "$build/bin" "$build/classes.jar" 2>"$build/d8.log" \
             || { cat "$build/d8.log"; die "d8 failed ($variant)"; }
     else
@@ -142,9 +151,10 @@ build_one() {
             -alias androiddebugkey -keyalg RSA -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US" 2>/dev/null
     fi
-    "$BT/apksigner" sign --ks "$KEYSTORE" --ks-pass pass:android --key-pass pass:android \
+    "$APKSIGNER" sign --ks "$KEYSTORE" --ks-pass pass:android --key-pass pass:android \
         --out "$out_apk" "$build/unsigned.apk" 2>/dev/null \
-        || "$BT/apksigner" sign --ks "$KEYSTORE" --ks-pass pass:android --out "$out_apk" "$build/unsigned.apk"
+        || "$APKSIGNER" sign --ks "$KEYSTORE" --ks-pass pass:android \
+            --out "$out_apk" "$build/unsigned.apk"
     echo "==> $out_apk ($(wc -c < "$out_apk") bytes)"
 }
 

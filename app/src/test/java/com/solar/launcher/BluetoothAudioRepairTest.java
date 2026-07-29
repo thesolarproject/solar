@@ -1,6 +1,8 @@
 package com.solar.launcher;
 
+import android.bluetooth.BluetoothA2dp;
 import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothProfile;
 import org.junit.Test;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -39,5 +41,37 @@ public class BluetoothAudioRepairTest {
         assertEquals(14, BluetoothAudioRepair.preserveUserVolumeIndex(14, 15));
         // Old floor would have returned 11 for cur=2/max=15 — must not return that.
         assertTrue(BluetoothAudioRepair.preserveUserVolumeIndex(2, 15) < Math.max(1, (15 * 3) / 4));
+    }
+
+    @Test
+    public void repairRetriesUseBoundedBackoff() {
+        assertEquals(500L, BluetoothAudioRepairService.retryDelayMs(1));
+        assertEquals(1500L, BluetoothAudioRepairService.retryDelayMs(2));
+        assertEquals(2500L, BluetoothAudioRepairService.retryDelayMs(3));
+        assertEquals(4000L, BluetoothAudioRepairService.retryDelayMs(4));
+        assertEquals(6000L, BluetoothAudioRepairService.retryDelayMs(5));
+        assertEquals(-1L, BluetoothAudioRepairService.retryDelayMs(6));
+    }
+
+    @Test
+    public void autoReconnectDefaultsOnAndHonorsUserChoice() {
+        assertTrue(BluetoothAudioRepair.autoReconnectEnabledForValue(null));
+        assertTrue(BluetoothAudioRepair.autoReconnectEnabledForValue(Boolean.TRUE));
+        assertFalse(BluetoothAudioRepair.autoReconnectEnabledForValue(Boolean.FALSE));
+    }
+
+    @Test
+    public void explicitPairAndA2dpCompletionBypassAutoReconnectSetting() {
+        assertTrue(BluetoothAudioRepairReceiver.isExplicitConnectionCompletion(
+                BluetoothDevice.ACTION_BOND_STATE_CHANGED, BluetoothDevice.BOND_BONDED));
+        assertTrue(BluetoothAudioRepairReceiver.isExplicitConnectionCompletion(
+                BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED,
+                BluetoothProfile.STATE_CONNECTING));
+        assertTrue(BluetoothAudioRepairReceiver.isExplicitConnectionCompletion(
+                BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED,
+                BluetoothProfile.STATE_CONNECTED));
+        assertFalse(BluetoothAudioRepairReceiver.isExplicitConnectionCompletion(
+                BluetoothDevice.ACTION_ACL_DISCONNECTED,
+                BluetoothProfile.STATE_DISCONNECTED));
     }
 }

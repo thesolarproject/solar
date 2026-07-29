@@ -12,7 +12,7 @@ public class ThemeMirrorHelperTest {
     public void mirroredThemeDir_buildsActiveThemeSubpath() {
         File sidecar = new File("/storage/sdcard1/.solar");
         File dir = ThemeMirrorHelper.mirroredThemeDir(sidecar, "Melody");
-        if (!dir.getPath().endsWith(".solar/active-theme/Melody")) {
+        if (!dir.getPath().replace('\\', '/').endsWith(".solar/active-theme/Melody")) {
             throw new AssertionError("unexpected mirror path: " + dir);
         }
     }
@@ -24,7 +24,9 @@ public class ThemeMirrorHelperTest {
             throw new AssertionError("expected at least one sidecar root");
         }
         for (File root : roots) {
-            if (!".solar".equals(root.getName())) {
+            String path = root.getAbsolutePath().replace('\\', '/');
+            if (!".solar".equals(root.getName())
+                    && !path.endsWith("/data/local/tmp/solar-theme")) {
                 throw new AssertionError("expected .solar dir: " + root);
             }
         }

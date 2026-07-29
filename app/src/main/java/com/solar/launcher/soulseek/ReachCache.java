@@ -31,7 +31,11 @@ public final class ReachCache {
         Set<String> keepPaths = new HashSet<String>();
         if (keep != null) {
             for (File f : keep) {
-                if (f != null) keepPaths.add(f.getAbsolutePath());
+                if (f == null) continue;
+                keepPaths.add(f.getAbsolutePath());
+                if (f.getName().endsWith(".part")) {
+                    keepPaths.add(f.getAbsolutePath() + ".meta");
+                }
             }
         }
         for (File f : files) {

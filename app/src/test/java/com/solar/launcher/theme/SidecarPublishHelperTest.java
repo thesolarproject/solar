@@ -22,7 +22,9 @@ public class SidecarPublishHelperTest {
             throw new AssertionError("expected at least primary storage sidecar dir");
         }
         for (File dir : dirs) {
-            if (!".solar".equals(dir.getName())) {
+            String path = dir.getAbsolutePath().replace('\\', '/');
+            if (!".solar".equals(dir.getName())
+                    && !path.endsWith("/data/local/tmp/solar-theme")) {
                 throw new AssertionError("each dir should end with .solar: " + dir);
             }
         }

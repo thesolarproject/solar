@@ -1,9 +1,11 @@
 package com.solar.launcher;
 
 import android.content.Context;
+import android.os.SystemClock;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.Toast;
 
 import com.solar.launcher.theme.ThemeManager;
 
@@ -23,6 +25,7 @@ final class OverlayWifiPasswordKeyboard {
     private SolarKeyboardShellHost shellHost;
     private SolarWheelKeyboardController controller;
     private String targetSsid;
+    private long playPauseDownAt;
 
     OverlayWifiPasswordKeyboard(Context context, ViewGroup parent,
             Runnable onDismissKeyboardOnly) {
@@ -40,7 +43,9 @@ final class OverlayWifiPasswordKeyboard {
         dismiss();
         targetSsid = ssid;
         controller = new SolarWheelKeyboardController();
+        controller.setGroupedMode(WheelKeyboardLayout.isGrouped(context));
         controller.setDigitOnlyMode(false);
+        controller.setPasswordMode(true);
         controller.setListener(new SolarWheelKeyboardController.Listener() {
             @Override
             public void onStateChanged() {
@@ -51,11 +56,21 @@ final class OverlayWifiPasswordKeyboard {
             public void onEnterRequested() {
                 String password = controller.getBuffer();
                 if (password == null) password = "";
-                WifiConnector.connect(context, targetSsid, password, false,
-                        new WifiConnector.Callback() {
+                WifiConnector.connectDetailed(context, targetSsid, password, false,
+                        new WifiConnector.DetailedCallback() {
                             @Override
-                            public void onComplete(boolean success) {
-                                dismissKeyboardOnly();
+                            public void onComplete(WifiConnector.ConnectionResult result) {
+                                if (result != null && result.success) {
+                                    dismissKeyboardOnly();
+                                    return;
+                                }
+                                if (result != null
+                                        && result.failure != WifiConnector.Failure.CANCELED) {
+                                    Toast.makeText(context,
+                                            context.getString(WifiConnector.failureMessageResId(
+                                                    result.failure)),
+                                            Toast.LENGTH_LONG).show();
+                                }
                             }
                         });
             }
@@ -86,20 +101,39 @@ final class OverlayWifiPasswordKeyboard {
             controller.wheelDown();
             return true;
         }
-        if (Y1InputKeys.isCenterKey(keyCode) || Y1InputKeys.isPlayPauseKey(keyCode)) {
+        if (Y1InputKeys.isCenterKey(keyCode)) {
             controller.centerPress();
+            return true;
+        }
+        if (Y1InputKeys.isPlayPauseKey(keyCode)) {
+            if (playPauseDownAt == 0L) playPauseDownAt = SystemClock.uptimeMillis();
             return true;
         }
         if (Y1InputKeys.isTrackPreviousKey(keyCode)) {
             controller.mediaDelete();
             return true;
         }
+        if (Y1InputKeys.isTrackNextKey(keyCode)) {
+            controller.mediaSpace();
+            return true;
+        }
         return false;
     }
 
     boolean handleKeyUp(int keyCode) {
-        return isShowing() && (Y1InputKeys.isCenterKey(keyCode) || Y1InputKeys.isBackKey(keyCode)
-                || Y1InputKeys.isWheelKey(keyCode) || Y1InputKeys.isPlayPauseKey(keyCode));
+        if (!isShowing()) return false;
+        if (Y1InputKeys.isPlayPauseKey(keyCode)) {
+            long held = playPauseDownAt > 0L
+                    ? SystemClock.uptimeMillis() - playPauseDownAt : 0L;
+            playPauseDownAt = 0L;
+            if (held >= 500L) controller.playPauseLongPress();
+            else controller.requestEnter();
+            return true;
+        }
+        return Y1InputKeys.isCenterKey(keyCode) || Y1InputKeys.isBackKey(keyCode)
+                || Y1InputKeys.isWheelKey(keyCode)
+                || Y1InputKeys.isTrackPreviousKey(keyCode)
+                || Y1InputKeys.isTrackNextKey(keyCode);
     }
 
     void dismiss() {
@@ -113,6 +147,7 @@ final class OverlayWifiPasswordKeyboard {
         shellHost = null;
         controller = null;
         targetSsid = null;
+        playPauseDownAt = 0L;
     }
 
     private void dismissKeyboardOnly() {
@@ -130,7 +165,7 @@ final class OverlayWifiPasswordKeyboard {
         boolean empty = buffer == null || buffer.length() == 0;
         String input = empty
                 ? context.getString(R.string.keyboard_enter_wifi_password)
-                : buffer;
+                : controller.renderBuffer(true);
         shellHost.getKeyboardUi().refresh(controller, null, input, empty);
     }
 }

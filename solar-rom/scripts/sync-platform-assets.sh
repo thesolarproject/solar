@@ -13,6 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENDOR="$ROOT/solar-rom/vendor/xposed"
 DST="$ROOT/app/src/main/assets/platform"
 INIT_SRC="$ROOT/solar-rom/system/99XposedInit.sh"
+REUSE_EXISTING="${SOLAR_PLATFORM_REUSE_EXISTING:-0}"
 
 die() { echo "sync-platform-assets: $*" >&2; exit 1; }
 
@@ -25,31 +26,35 @@ build_if_missing() {
     [ -f "$path" ] || die "build failed: $path"
 }
 
-build_if_missing "$VENDOR/XposedInstaller.apk" "build-xposed-installer-apk.sh"
-build_if_missing "$VENDOR/solar-context-bridge/SolarContextBridgeY1.apk" "build-context-bridge-apk.sh"
-build_if_missing "$VENDOR/solar-context-bridge/SolarContextBridgeY2.apk" "build-context-bridge-apk.sh"
-build_if_missing "$VENDOR/solar-theme-font/SolarThemeFont.apk" "build-theme-font-apk.sh"
-build_if_missing "$VENDOR/solar-rockbox-ime/SolarRockboxIme.apk" "build-rockbox-xposed-apks.sh"
-build_if_missing "$VENDOR/solar-rockbox-compat/SolarRockboxCompat.apk" "build-rockbox-xposed-apks.sh"
+if [ "$REUSE_EXISTING" != "1" ]; then
+    build_if_missing "$VENDOR/XposedInstaller.apk" "build-xposed-installer-apk.sh"
+    build_if_missing "$VENDOR/solar-context-bridge/SolarContextBridgeY1.apk" "build-context-bridge-apk.sh"
+    build_if_missing "$VENDOR/solar-context-bridge/SolarContextBridgeY2.apk" "build-context-bridge-apk.sh"
+    build_if_missing "$VENDOR/solar-theme-font/SolarThemeFont.apk" "build-theme-font-apk.sh"
+    build_if_missing "$VENDOR/solar-rockbox-ime/SolarRockboxIme.apk" "build-rockbox-xposed-apks.sh"
+    build_if_missing "$VENDOR/solar-rockbox-compat/SolarRockboxCompat.apk" "build-rockbox-xposed-apks.sh"
+fi
 # 2026-07-15 — YouTube is native in Solar APK; notPipe + SolarNotPipeBridge no longer bundled.
 # A5 ROM still bakes upstream notPipe via build-rom.sh install_notpipe_system (touch UI).
 
 # 2026-07-05 — Companion global context modal APK (Phase 1); bundled for platform self-heal.
-COMPANION_APK="$ROOT/global-context-modal/build/outputs/apk/debug/global-context-modal-debug.apk"
+COMPANION_APK="${SOLAR_COMPANION_APK:-$ROOT/global-context-modal/build/outputs/apk/debug/global-context-modal-debug.apk}"
 if [ ! -f "$COMPANION_APK" ]; then
     (cd "$ROOT" && ./gradlew :global-context-modal:assembleDebug -q)
 fi
 [ -f "$COMPANION_APK" ] || die "missing companion APK — run ./gradlew :global-context-modal:assembleDebug"
 
 # 2026-07-06 — Solar Home Helper middle-man APK; permanent PM preferred HOME on Y1/Y2.
-HELPER_APK="$ROOT/launcher-helper/build/outputs/apk/debug/launcher-helper-debug.apk"
+HELPER_APK="${SOLAR_HELPER_APK:-$ROOT/launcher-helper/build/outputs/apk/debug/launcher-helper-debug.apk}"
 if [ ! -f "$HELPER_APK" ]; then
     (cd "$ROOT" && ./gradlew :launcher-helper:assembleDebug -q)
 fi
 [ -f "$HELPER_APK" ] || die "missing SolarHomeHelper APK — run ./gradlew :launcher-helper:assembleDebug"
 
-[ -d "$VENDOR/api17-arm" ] || die "missing $VENDOR/api17-arm"
-[ -d "$VENDOR/api19-arm" ] || die "missing $VENDOR/api19-arm"
+if [ "$REUSE_EXISTING" != "1" ]; then
+    [ -d "$VENDOR/api17-arm" ] || die "missing $VENDOR/api17-arm"
+    [ -d "$VENDOR/api19-arm" ] || die "missing $VENDOR/api19-arm"
+fi
 [ -f "$INIT_SRC" ] || die "missing $INIT_SRC"
 
 mkdir -p "$DST/xposed/api17-arm" "$DST/xposed/api19-arm" "$DST/init" "$DST/scripts" "$DST/companion" "$DST/thirdparty" "$DST/bluetooth"
@@ -75,18 +80,28 @@ rm -rf "$DST/rockbox"
 echo "==> Rockbox platform APK bundle skipped (Solar-only — no self-heal install)"
 
 # Vendor framework trees (app_process, XposedBridge.jar, xposed.prop).
-for api in api17-arm api19-arm; do
-    for f in app_process XposedBridge.jar xposed.prop; do
-        cp "$VENDOR/$api/$f" "$DST/xposed/$api/$f"
+if [ "$REUSE_EXISTING" = "1" ]; then
+    for rel in \
+        xposed/api17-arm/app_process xposed/api17-arm/XposedBridge.jar xposed/api17-arm/xposed.prop \
+        xposed/api19-arm/app_process xposed/api19-arm/XposedBridge.jar xposed/api19-arm/xposed.prop \
+        xposed/XposedInstaller.apk xposed/SolarContextBridgeY1.apk \
+        xposed/SolarContextBridgeY2.apk xposed/SolarThemeFont.apk \
+        xposed/SolarRockboxIme.apk xposed/SolarRockboxCompat.apk; do
+        [ -f "$DST/$rel" ] || die "reuse requested but existing asset is missing: $rel"
     done
-done
-
-cp "$VENDOR/XposedInstaller.apk" "$DST/xposed/XposedInstaller.apk"
-cp "$VENDOR/solar-context-bridge/SolarContextBridgeY1.apk" "$DST/xposed/SolarContextBridgeY1.apk"
-cp "$VENDOR/solar-context-bridge/SolarContextBridgeY2.apk" "$DST/xposed/SolarContextBridgeY2.apk"
-cp "$VENDOR/solar-theme-font/SolarThemeFont.apk" "$DST/xposed/SolarThemeFont.apk"
-cp "$VENDOR/solar-rockbox-ime/SolarRockboxIme.apk" "$DST/xposed/SolarRockboxIme.apk"
-cp "$VENDOR/solar-rockbox-compat/SolarRockboxCompat.apk" "$DST/xposed/SolarRockboxCompat.apk"
+else
+    for api in api17-arm api19-arm; do
+        for f in app_process XposedBridge.jar xposed.prop; do
+            cp "$VENDOR/$api/$f" "$DST/xposed/$api/$f"
+        done
+    done
+    cp "$VENDOR/XposedInstaller.apk" "$DST/xposed/XposedInstaller.apk"
+    cp "$VENDOR/solar-context-bridge/SolarContextBridgeY1.apk" "$DST/xposed/SolarContextBridgeY1.apk"
+    cp "$VENDOR/solar-context-bridge/SolarContextBridgeY2.apk" "$DST/xposed/SolarContextBridgeY2.apk"
+    cp "$VENDOR/solar-theme-font/SolarThemeFont.apk" "$DST/xposed/SolarThemeFont.apk"
+    cp "$VENDOR/solar-rockbox-ime/SolarRockboxIme.apk" "$DST/xposed/SolarRockboxIme.apk"
+    cp "$VENDOR/solar-rockbox-compat/SolarRockboxCompat.apk" "$DST/xposed/SolarRockboxCompat.apk"
+fi
 # 2026-07-15 — Drop legacy NotPipe self-heal assets if a previous sync left them.
 rm -f "$DST/xposed/SolarNotPipeBridge.apk" "$DST/thirdparty/notPipe-0.3.0-release.apk"
 cp "$COMPANION_APK" "$DST/companion/SolarGlobalContextModal.apk"

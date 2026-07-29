@@ -26,11 +26,13 @@ public final class VideoPlayerController implements SurfaceHolder.Callback,
         IMediaPlayer.OnCompletionListener,
         IMediaPlayer.OnVideoSizeChangedListener,
         IMediaPlayer.OnBufferingUpdateListener,
+        IMediaPlayer.OnSeekCompleteListener,
         MediaPlayer.OnPreparedListener,
         MediaPlayer.OnErrorListener,
         MediaPlayer.OnCompletionListener,
         MediaPlayer.OnVideoSizeChangedListener,
-        MediaPlayer.OnBufferingUpdateListener {
+        MediaPlayer.OnBufferingUpdateListener,
+        MediaPlayer.OnSeekCompleteListener {
 
     private static final String TAG = "SolarVideoPlayer";
 
@@ -45,6 +47,10 @@ public final class VideoPlayerController implements SurfaceHolder.Callback,
         void onReadyToPlay();
     }
 
+    public interface SeekListener {
+        void onSeekComplete(long positionMs);
+    }
+
     private final Context appCtx;
     private final IjkMediaPlayer ijkPlayer;
     private MediaPlayer mediaPlayer;
@@ -56,6 +62,7 @@ public final class VideoPlayerController implements SurfaceHolder.Callback,
     private String pendingPath;
     private PlaybackListener playbackListener;
     private BufferingListener bufferingListener;
+    private SeekListener seekListener;
     private boolean released;
     private boolean triedIjkFallback;
     private boolean preparePosted;
@@ -77,6 +84,10 @@ public final class VideoPlayerController implements SurfaceHolder.Callback,
 
     public void setBufferingListener(BufferingListener listener) {
         bufferingListener = listener;
+    }
+
+    public void setSeekListener(SeekListener listener) {
+        seekListener = listener;
     }
 
     public IjkMediaPlayer getPlayer() {
@@ -212,12 +223,26 @@ public final class VideoPlayerController implements SurfaceHolder.Callback,
         else play();
     }
 
-    public void seekTo(long positionMs) {
-        if (!prepared) return;
+    /**
+     * Submit the target directly to the active engine. Network players own their Range/buffering
+     * behavior; gating this call on a buffering percentage can leave a seek pending forever.
+     */
+    public boolean seekTo(long positionMs) {
+        if (!prepared) return false;
+        long targetMs = VideoSeekPolicy.clampTarget(positionMs, getDuration());
         try {
-            if (useMediaPlayer && mediaPlayer != null) mediaPlayer.seekTo((int) positionMs);
-            else ijkPlayer.seekTo(positionMs);
-        } catch (IllegalStateException ignored) {}
+            if (useMediaPlayer && mediaPlayer != null) {
+                mediaPlayer.seekTo((int) Math.min(Integer.MAX_VALUE, targetMs));
+            } else {
+                ijkPlayer.seekTo(targetMs);
+            }
+            Log.i(TAG, "seek submitted targetMs=" + targetMs
+                    + " engine=" + (useMediaPlayer ? "mediaplayer" : "ijk"));
+            return true;
+        } catch (RuntimeException e) {
+            Log.e(TAG, "seek failed targetMs=" + targetMs, e);
+            return false;
+        }
     }
 
     public void attachHolder(SurfaceHolder holder) {
@@ -243,6 +268,7 @@ public final class VideoPlayerController implements SurfaceHolder.Callback,
         pendingPath = null;
         playbackListener = null;
         bufferingListener = null;
+        seekListener = null;
         releaseMediaPlayer();
         try {
             ijkPlayer.stop();
@@ -279,6 +305,11 @@ public final class VideoPlayerController implements SurfaceHolder.Callback,
     }
 
     @Override
+    public void onSeekComplete(IMediaPlayer mp) {
+        onEngineSeekComplete();
+    }
+
+    @Override
     public void onPrepared(MediaPlayer mp) {
         onEnginePrepared("mediaplayer");
     }
@@ -301,6 +332,11 @@ public final class VideoPlayerController implements SurfaceHolder.Callback,
     @Override
     public void onBufferingUpdate(MediaPlayer mp, int percent) {
         onEngineBuffering(percent);
+    }
+
+    @Override
+    public void onSeekComplete(MediaPlayer mp) {
+        onEngineSeekComplete();
     }
 
     private void onEnginePrepared(String eng) {
@@ -357,6 +393,14 @@ public final class VideoPlayerController implements SurfaceHolder.Callback,
         if (released) return;
         BufferingListener bl = bufferingListener;
         if (bl != null) bl.onBuffering(percent);
+    }
+
+    private void onEngineSeekComplete() {
+        if (released) return;
+        long positionMs = getCurrentPosition();
+        Log.i(TAG, "seek complete positionMs=" + positionMs);
+        SeekListener listener = seekListener;
+        if (listener != null) listener.onSeekComplete(positionMs);
     }
 
     @Override
@@ -483,6 +527,7 @@ public final class VideoPlayerController implements SurfaceHolder.Callback,
         mediaPlayer.setOnCompletionListener(this);
         mediaPlayer.setOnVideoSizeChangedListener(this);
         mediaPlayer.setOnBufferingUpdateListener(this);
+        mediaPlayer.setOnSeekCompleteListener(this);
         mediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
         mediaPlayer.setScreenOnWhilePlaying(true);
     }
@@ -514,6 +559,7 @@ public final class VideoPlayerController implements SurfaceHolder.Callback,
         ijkPlayer.setOnCompletionListener(this);
         ijkPlayer.setOnVideoSizeChangedListener(this);
         ijkPlayer.setOnBufferingUpdateListener(this);
+        ijkPlayer.setOnSeekCompleteListener(this);
     }
 
     private static boolean isHttpUrl(String url) {

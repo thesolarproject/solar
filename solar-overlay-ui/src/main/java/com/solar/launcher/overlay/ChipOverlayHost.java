@@ -530,6 +530,9 @@ public final class ChipOverlayHost {
                         states.add("");
                     }
                 }
+            } catch (SecurityException denied) {
+                labels.add(str(R.string.context_wifi_scanning));
+                states.add("");
             } catch (Exception ignored) {
                 labels.add(str(R.string.context_wifi_scanning));
                 states.add("");
@@ -576,6 +579,7 @@ public final class ChipOverlayHost {
                 try {
                     if (on) bt.disable();
                     else bt.enable();
+                } catch (SecurityException denied) {
                 } catch (Exception ignored) {}
                 handler.postDelayed(new Runnable() {
                     @Override

@@ -278,6 +278,14 @@ public final class StemMixer {
      * 2026-07-21
      */
     public void loadOrigin(String pathOrUrl) throws IOException {
+        loadOrigin(pathOrUrl, false);
+    }
+
+    /**
+     * Load an origin through IJK when the caller knows the platform decoder is unsuitable.
+     * Network origins always use IJK, matching Solar's existing stream path.
+     */
+    public void loadOrigin(String pathOrUrl, boolean preferIjk) throws IOException {
         if (pathOrUrl == null || pathOrUrl.trim().isEmpty()) {
             throw new IOException("Need origin file or url");
         }
@@ -297,7 +305,7 @@ public final class StemMixer {
         originPath = pathOrUrl;
         expectedPrepare = 1;
         
-        if (pathOrUrl.startsWith("http") || pathOrUrl.startsWith("https")) {
+        if (shouldUseIjkOrigin(pathOrUrl, preferIjk)) {
             originIjkPlayer = com.solar.launcher.video.SolarIjkPlayerFactory.create();
             StemSoundTouch.applyStemPlayerOptions(originIjkPlayer);
             originIjkPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
@@ -320,6 +328,17 @@ public final class StemMixer {
                     if (listener != null) listener.onComplete();
                 }
             });
+            originIjkPlayer.setOnErrorListener(
+                    new tv.danmaku.ijk.media.player.IMediaPlayer.OnErrorListener() {
+                @Override
+                public boolean onError(tv.danmaku.ijk.media.player.IMediaPlayer p,
+                        int what, int extra) {
+                    if (listener != null) {
+                        listener.onError("Origin play error " + what + "/" + extra);
+                    }
+                    return true;
+                }
+            });
             originIjkPlayer.prepareAsync();
         } else {
             originPlayer = new MediaPlayer();
@@ -335,17 +354,24 @@ public final class StemMixer {
                     }
                 }
             });
+            originPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
+                @Override
+                public void onCompletion(MediaPlayer mediaPlayer) {
+                    if (released || sourceMode != SourceMode.ORIGIN) return;
+                    pause();
+                    if (listener != null) listener.onComplete();
+                }
+            });
+            wireError(originPlayer);
+            originPlayer.prepareAsync();
         }
-        originPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
-            @Override
-            public void onCompletion(MediaPlayer mediaPlayer) {
-                if (released || sourceMode != SourceMode.ORIGIN) return;
-                pause();
-                if (listener != null) listener.onComplete();
-            }
-        });
-        wireError(originPlayer);
-        originPlayer.prepareAsync();
+    }
+
+    static boolean shouldUseIjkOrigin(String pathOrUrl, boolean preferIjk) {
+        if (preferIjk) return true;
+        if (pathOrUrl == null) return false;
+        return pathOrUrl.regionMatches(true, 0, "http://", 0, 7)
+                || pathOrUrl.regionMatches(true, 0, "https://", 0, 8);
     }
 
     /**

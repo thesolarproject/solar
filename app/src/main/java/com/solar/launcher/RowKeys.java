@@ -45,6 +45,14 @@ public final class RowKeys {
     public static final String DEVICE = "settings.device";
     public static final String LIBRARY = "settings.library";
     public static final String MEDIA = "settings.media";
+    public static final String DOWNLOAD_AUTO_RESUME_WIFI =
+            "settings.download_auto_resume_wifi";
+    public static final String YOUTUBE_REGION = "settings.youtube.region";
+    public static final String YOUTUBE_DISCOVER_DURATION =
+            "settings.youtube.discover_duration";
+    public static final String YOUTUBE_CACHE_SIZE = "settings.youtube.cache_size";
+    public static final String YOUTUBE_CLEAR_CACHE = "settings.youtube.clear_cache";
+    public static final String YOUTUBE_CLEAR_HISTORY = "settings.youtube.clear_history";
     public static final String POWER = "settings.power";
     public static final String USB = "settings.usb";
     public static final String USB_AUTO_CONNECT = "settings.usb_auto_connect";
@@ -71,6 +79,7 @@ public final class RowKeys {
     public static final String WEB_SERVER = "settings.web_server";
     public static final String CONNECTIONS = "settings.connections";
     public static final String WIFI_SETUP = "settings.wifi_setup";
+    public static final String WIFI_AUTO_CONNECT = "settings.wifi_auto_connect";
     public static final String REACH = "settings.reach";
     public static final String SOULSEEK = "settings.soulseek";
     public static final String DEEZER = "settings.deezer";
@@ -167,12 +176,14 @@ public final class RowKeys {
     public static final String SYSTEM_UPDATE = "settings.system_update";
     public static final String BLUETOOTH_SETUP = "settings.bluetooth_setup";
     public static final String BLUETOOTH_PAIRING_PIN = "settings.bluetooth_pairing_pin";
+    public static final String BLUETOOTH_AUTO_RECONNECT = "settings.bluetooth_auto_reconnect";
     public static final String BRIGHTNESS = "settings.brightness";
     public static final String STORAGE = "settings.storage";
     /** Legacy — prefer Y2_PRIMARY_STORAGE; scans always include every mounted volume. */
     public static final String Y2_INTERNAL_MEDIA = "settings.y2_internal_media";
     /** Y2 only — long OK sleeps screen instead of opening quick menu (legacy behaviour). */
     public static final String Y2_HOLD_OK_TO_SLEEP = "settings.y2_hold_ok_to_sleep";
+    public static final String KEYBOARD_LAYOUT = "settings.keyboard_layout";
     /** 2026-07-11 — A5: face vs side buttons navigate menus. */
     public static final String A5_MENU_NAV = "settings.a5_menu_nav";
     /** 2026-07-11 — A5: portrait 240×320 vs landscape 240p-scaled. */
@@ -317,6 +328,9 @@ public final class RowKeys {
         if (DEVICE.equals(rowKey)) return R.string.settings_device;
         if (LIBRARY.equals(rowKey)) return R.string.settings_library;
         if (MEDIA.equals(rowKey)) return R.string.settings_media;
+        if (DOWNLOAD_AUTO_RESUME_WIFI.equals(rowKey)) {
+            return R.string.settings_download_auto_resume_wifi;
+        }
         if (POWER.equals(rowKey)) return R.string.settings_power;
         if (USB.equals(rowKey)) return R.string.settings_usb;
         if (USB_AUTO_CONNECT.equals(rowKey)) return R.string.settings_usb_auto_connect;
@@ -341,6 +355,7 @@ public final class RowKeys {
         if (WEB_SERVER.equals(rowKey)) return R.string.settings_web_server;
         if (CONNECTIONS.equals(rowKey)) return R.string.settings_connections;
         if (WIFI_SETUP.equals(rowKey)) return R.string.settings_wifi_setup;
+        if (WIFI_AUTO_CONNECT.equals(rowKey)) return R.string.settings_wifi_auto_connect;
         if (REACH.equals(rowKey)) return R.string.settings_reach;
         if (SOULSEEK.equals(rowKey)) return R.string.settings_soulseek;
         if (DEEZER.equals(rowKey)) return R.string.settings_deezer;
@@ -408,10 +423,12 @@ public final class RowKeys {
         if (SYSTEM_UPDATE.equals(rowKey)) return R.string.settings_app_version;
         if (BLUETOOTH_SETUP.equals(rowKey)) return R.string.settings_bluetooth_setup;
         if (BLUETOOTH_PAIRING_PIN.equals(rowKey)) return R.string.settings_bluetooth_pairing_pin;
+        if (BLUETOOTH_AUTO_RECONNECT.equals(rowKey)) return R.string.settings_bluetooth_auto_reconnect;
         if (BRIGHTNESS.equals(rowKey)) return R.string.settings_display_brightness;
         if (STORAGE.equals(rowKey)) return R.string.settings_storage_info;
         if (Y2_INTERNAL_MEDIA.equals(rowKey)) return R.string.settings_y2_internal_media;
         if (Y2_HOLD_OK_TO_SLEEP.equals(rowKey)) return R.string.settings_y2_hold_ok_to_sleep;
+        if (KEYBOARD_LAYOUT.equals(rowKey)) return R.string.settings_keyboard_layout;
         if (A5_MENU_NAV.equals(rowKey)) return R.string.settings_a5_menu_nav;
         if (A5_ORIENTATION.equals(rowKey)) return R.string.settings_a5_orientation;
         if (Y2_PRIMARY_STORAGE.equals(rowKey)) return R.string.settings_y2_primary_storage;

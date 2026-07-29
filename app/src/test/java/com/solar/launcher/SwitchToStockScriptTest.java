@@ -39,17 +39,18 @@ public class SwitchToStockScriptTest {
     }
 
     @Test
-    public void buttonScriptUsesHomeTargetNotPmDisable() throws Exception {
+    public void buttonScriptKeepsUnsafeY1LauncherHandoffDisabled() throws Exception {
         File f = new File("solar-rom/system/99Y1ButtonScript");
         if (!f.isFile()) {
             f = new File("../solar-rom/system/99Y1ButtonScript");
         }
         assertTrue("99Y1ButtonScript missing", f.isFile());
         String text = readFile(f);
-        assertTrue(text.contains("persist.solar.home.target"));
-        assertTrue(text.contains("switch-to-stock.sh --rockbox"));
-        // Old pm -d Solar branch fought helper-always-enabled policy.
-        assertFalse(text.contains("Solar disabled — switching to Solar"));
+        String code = stripShellComments(text);
+        assertTrue(code.contains("launcher_handoff()"));
+        assertTrue(code.contains("launcher handoff disabled"));
+        assertFalse(code.contains("switch-to-stock.sh --rockbox"));
+        assertFalse(code.contains("pm disable"));
     }
 
     private static String readAssetOrRom(String name) throws Exception {

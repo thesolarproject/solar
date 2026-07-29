@@ -51,6 +51,18 @@ public class YouTubeResultJsonTest {
     }
 
     @Test
+    public void parseOfficialPageAndPaginationToken() throws Exception {
+        String json = "{\"items\":[{\"id\":\"page1\",\"title\":\"Paged\","
+                + "\"author\":\"Channel\",\"length\":\"4:02\"}],"
+                + "\"nextPageToken\":\"NEXT_2\"}";
+        List<YouTubeVideo> rows = YouTubeResultJson.parseVideos(json);
+        assertEquals(1, rows.size());
+        assertEquals("page1", rows.get(0).id);
+        assertEquals("NEXT_2", YouTubeResultJson.parseNextPageToken(json));
+        assertEquals("", YouTubeResultJson.parseNextPageToken("[]"));
+    }
+
+    @Test
     public void parseCommentsPayload() throws Exception {
         String json = "[{\"author\":\"Alice\",\"content\":\"Great video!\"},"
                 + "{\"author\":\"Bob\",\"content\":\"Thanks\"}]";

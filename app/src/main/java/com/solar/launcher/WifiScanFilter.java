@@ -24,7 +24,7 @@ public final class WifiScanFilter {
      */
     public static String displayableConnectedSsid(String rawSsid) {
         if (rawSsid == null) return "";
-        String ssid = rawSsid.replace("\"", "").trim();
+        String ssid = WifiConnector.unquoteWifiString(rawSsid);
         if (ssid.isEmpty() || isHiddenSsid(ssid)) return "";
         if ("<unknown ssid>".equalsIgnoreCase(ssid)) return "";
         return ssid;

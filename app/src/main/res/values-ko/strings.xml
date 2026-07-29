@@ -877,4 +877,9 @@
     <string name="adb_setup_reboot_warning">기기 설정 중…\n준비가 되면 다시 시작하세요. 다시 켜지는 데 최대 약 3분이 걸릴 수 있습니다.</string>
     <string name="settings_debug_wireless_adb">무선 ADB</string>
     <string name="settings_debug_wireless_adb_hint">루트 권한이 있는 경우 시작 시 무선 ADB를 자동으로 활성화합니다.</string>
+    <string name="video_seek_target">재생 위치를 %1$s(으)로 이동 중…</string>
+    <string name="video_seek_failed">이 동영상에서 재생 위치를 이동할 수 없습니다</string>
+    <string name="keyboard_bt_pairing_passkey">%1$s 페어링 패스키</string>
+    <string name="bt_pairing_passkey_invalid">1~6자리 숫자 패스키를 입력하세요</string>
+    <string name="bt_pairing_submit_failed">페어링 키를 전송하지 못했습니다. 다시 시도하세요.</string>
 </resources>

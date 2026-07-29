@@ -25,6 +25,7 @@ final class BluetoothAudioRepair {
     static final String PREF_LAST_BT_AUDIO = "last_bt_audio_address";
     static final String PREF_PAIRING_PIN = "bluetooth_pairing_pin";
     static final String PREF_PAIRING_PIN_PREFIX = "bluetooth_pairing_pin_";
+    static final String PREF_AUTO_RECONNECT = "bluetooth_auto_reconnect";
     static final String EXTRA_ADDRESS = "com.solar.launcher.extra.BT_ADDRESS";
     static final String EXTRA_PAIR_PIN_PROMPT = "com.solar.launcher.extra.BT_PAIR_PIN_PROMPT";
     static final String EXTRA_PAIR_PIN_ADDRESS = "com.solar.launcher.extra.BT_PAIR_PIN_ADDRESS";
@@ -43,6 +44,22 @@ final class BluetoothAudioRepair {
             i.putExtra(EXTRA_ADDRESS, device.getAddress());
         }
         context.startService(i);
+    }
+
+    static void requestAutoRepair(Context context, BluetoothDevice device) {
+        if (!isAutoReconnectEnabled(context)) return;
+        requestRepair(context, device);
+    }
+
+    static boolean isAutoReconnectEnabled(Context context) {
+        if (context == null) return true;
+        SharedPreferences prefs =
+                context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        return prefs.getBoolean(PREF_AUTO_RECONNECT, true);
+    }
+
+    static boolean autoReconnectEnabledForValue(Boolean storedValue) {
+        return storedValue == null || storedValue;
     }
 
     static BluetoothDevice resolveDevice(Context context, Intent intent) {
@@ -159,6 +176,19 @@ final class BluetoothAudioRepair {
         } catch (Exception ignored) {}
     }
 
+    /** Forget per-device PIN/reconnect state only after Android accepts bond removal. */
+    static void clearRememberedDevice(Context context, String address) {
+        if (context == null || address == null || address.isEmpty()) return;
+        SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        SharedPreferences.Editor edit = prefs.edit()
+                .remove(PREF_PAIRING_PIN_PREFIX + address);
+        if (address.equals(prefs.getString(PREF_LAST_BT_AUDIO, ""))) {
+            edit.remove(PREF_LAST_BT_AUDIO);
+        }
+        edit.apply();
+        BluetoothDiagnostics.clearForgottenDevice(context, address);
+    }
+
     static boolean shouldRepairEvent(Intent intent) {
         if (intent == null) return true;
         String action = intent.getAction();
@@ -176,7 +206,8 @@ final class BluetoothAudioRepair {
             return intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR)
                     == BluetoothDevice.BOND_BONDED;
         }
-        if (BluetoothDevice.ACTION_ACL_CONNECTED.equals(action)) return true;
+        if (BluetoothDevice.ACTION_ACL_CONNECTED.equals(action)
+                || BluetoothDevice.ACTION_ACL_DISCONNECTED.equals(action)) return true;
         if (BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED.equals(action)) {
             int state = intent.getIntExtra(BluetoothProfile.EXTRA_STATE,
                     BluetoothProfile.STATE_DISCONNECTED);

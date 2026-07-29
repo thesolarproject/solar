@@ -91,7 +91,9 @@ public class PlayQueueTest {
         q.setAll(items, 1);
         q.move(1, 0);
         if (q.index() != 0) throw new AssertionError("np index follows track");
-        if (!"/baby.mp3".equals(q.items().get(0).file.getPath())) throw new AssertionError("baby slot");
+        if (!new File("/baby.mp3").equals(q.items().get(0).file)) {
+            throw new AssertionError("baby slot");
+        }
     }
 
     @Test
@@ -104,7 +106,9 @@ public class PlayQueueTest {
         int at = q.insertAfter(0, PlayQueue.QueueItem.reach(new File("/r.tmp"), "reach"));
         if (at != 1) throw new AssertionError("insert at 1");
         if (q.size() != 3) throw new AssertionError("size");
-        if (!"/r.tmp".equals(q.items().get(1).file.getPath())) throw new AssertionError("reach slot");
+        if (!new File("/r.tmp").equals(q.items().get(1).file)) {
+            throw new AssertionError("reach slot");
+        }
     }
 
     @Test

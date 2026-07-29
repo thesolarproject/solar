@@ -8,6 +8,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.view.ViewGroup;
+import android.widget.Toast;
 
 import com.solar.launcher.theme.ThemeManager;
 import com.solar.home.policy.HomeTargetPolicy;
@@ -826,20 +827,18 @@ public final class OverlayModalHost {
         bluetoothPairingTierRestore = buildBluetoothPairingRestoreRunnable();
         if (wifiPasswordKeyboard != null) wifiPasswordKeyboard.dismiss();
         if (btPinKeyboard != null) btPinKeyboard.dismiss();
-        // 2026-07-19 — MODE_PIN uses digit wheel keyboard; other modes use passkey/consent menu.
-        if (mode == BluetoothPairingCoordinator.MODE_PIN) {
-            showBluetoothPinKeyboard(address, name, pinPrefill);
+        // PIN and passkey entry use the digit wheel; display/confirmation variants use rows.
+        if (mode == BluetoothPairingCoordinator.MODE_PIN
+                || mode == BluetoothPairingCoordinator.MODE_PASSKEY_ENTRY) {
+            showBluetoothPinKeyboard(mode, address, name, pinPrefill);
             return;
         }
         showBluetoothPasskeyMenu(mode, name, passkey);
     }
 
-    /**
-     * 2026-07-19 — Overlay digit PIN for legacy headsets after 15s silent negotiation.
-     * Was: MainActivity EXTRA_PAIR_PIN_PROMPT keyboard (settings path).
-     * Reversal: showPinOverlay Intent to MainActivity again.
-     */
-    private void showBluetoothPinKeyboard(String address, String name, String pinPrefill) {
+    /** Immediate overlay digit keyboard for legacy PIN and numeric-passkey requests. */
+    private void showBluetoothPinKeyboard(
+            int mode, String address, String name, String pinPrefill) {
         if (btPinKeyboard == null) {
             btPinKeyboard = new OverlayBtPinKeyboard(context, overlayRoot, new Runnable() {
                 @Override
@@ -850,7 +849,7 @@ public final class OverlayModalHost {
             });
         }
         if (menu != null && menu.isShowing()) menu.dismiss();
-        btPinKeyboard.show(address, name, pinPrefill);
+        btPinKeyboard.show(mode, address, name, pinPrefill);
     }
 
     /** Passkey display, passkey match, or Just Works consent — scrollable detail + action rows. */
@@ -864,6 +863,10 @@ public final class OverlayModalHost {
             dialogTitle = context.getString(R.string.bt_pairing_passkey_title, deviceLabel);
             body = context.getString(R.string.bt_pairing_passkey_body,
                     BluetoothPairingCoordinator.formatPasskey(passkey));
+        } else if (mode == BluetoothPairingCoordinator.MODE_PIN_DISPLAY) {
+            dialogTitle = context.getString(R.string.bt_pairing_passkey_title, deviceLabel);
+            body = context.getString(R.string.bt_pairing_passkey_body,
+                    BluetoothPairingCoordinator.formatDisplayPin(passkey));
         } else if (mode == BluetoothPairingCoordinator.MODE_PASSKEY_CONFIRM) {
             dialogTitle = context.getString(R.string.bt_pairing_match_title, deviceLabel);
             body = context.getString(R.string.bt_pairing_match_body,
@@ -874,7 +877,8 @@ public final class OverlayModalHost {
         }
         labels.add(body);
         headers.add(Boolean.TRUE);
-        if (mode == BluetoothPairingCoordinator.MODE_PASSKEY_DISPLAY) {
+        if (mode == BluetoothPairingCoordinator.MODE_PASSKEY_DISPLAY
+                || mode == BluetoothPairingCoordinator.MODE_PIN_DISPLAY) {
             labels.add(context.getString(R.string.bt_pairing_passkey_ok));
             headers.add(Boolean.FALSE);
         } else {
@@ -898,15 +902,26 @@ public final class OverlayModalHost {
     }
 
     private void handleBluetoothPairingRowPick(int mode, int index) {
-        if (mode == BluetoothPairingCoordinator.MODE_PASSKEY_DISPLAY) {
+        boolean submitted = true;
+        if (mode == BluetoothPairingCoordinator.MODE_PASSKEY_DISPLAY
+                || mode == BluetoothPairingCoordinator.MODE_PIN_DISPLAY) {
             if (index == 1) {
                 BluetoothPairingCoordinator.dismissPasskeyDisplaySession();
             }
         } else if (index == 1) {
-            BluetoothPairingCoordinator.submitConfirmationFromOverlay(
-                    context, btPairingAddress, true);
+            if (mode == BluetoothPairingCoordinator.MODE_OOB_CONSENT) {
+                submitted = BluetoothPairingCoordinator.submitOobConsentFromOverlay(
+                        context, btPairingAddress, true);
+            } else {
+                submitted = BluetoothPairingCoordinator.submitConfirmationFromOverlay(
+                        context, btPairingAddress, true);
+            }
         } else if (index == 2) {
             BluetoothPairingCoordinator.cancelPairing(context, btPairingAddress);
+        }
+        if (!submitted) {
+            Toast.makeText(context, R.string.bt_pairing_submit_failed, Toast.LENGTH_SHORT).show();
+            return;
         }
         bluetoothPairingPromptVisible = false;
         dismissListener.onDismissOverlay();
@@ -922,8 +937,9 @@ public final class OverlayModalHost {
         return new Runnable() {
             @Override
             public void run() {
-                if (mode == BluetoothPairingCoordinator.MODE_PIN) {
-                    showBluetoothPinKeyboard(address, name, pinPrefill);
+                if (mode == BluetoothPairingCoordinator.MODE_PIN
+                        || mode == BluetoothPairingCoordinator.MODE_PASSKEY_ENTRY) {
+                    showBluetoothPinKeyboard(mode, address, name, pinPrefill);
                 } else {
                     showBluetoothPasskeyMenu(mode, name, passkey);
                 }

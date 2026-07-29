@@ -115,7 +115,8 @@ public final class SolarImeFullscreenOverlay {
         shellHost.applyShellTheme(title != null ? title : "");
         String buffer = controller.getBuffer();
         String placeholder = context.getString(R.string.solar_ime_type_hint);
-        String display = buffer.length() == 0 ? placeholder : buffer;
+        String display = buffer.length() == 0
+                ? placeholder : controller.renderBuffer(true);
         shellHost.getKeyboardUi().refresh(controller, null, display, buffer.length() == 0);
     }
 }

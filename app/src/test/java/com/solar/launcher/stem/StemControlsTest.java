@@ -202,8 +202,8 @@ public class StemControlsTest {
         // First pad press after clearActiveZone is focus-only (no cycle). 2026-07-21
         assertFalse(StemControls.stemKeyShouldCycleSong(-1, 2, 2));
         assertTrue(StemControls.stemKeyShouldCycleSong(2, 2, 2));
-        assertTrue(StemControls.centerTapWhilePadIdleIsWakeOnly(true, 0));
-        assertTrue(StemControls.centerTapWhilePadIdleIsWakeOnly(false, -1));
+        assertFalse(StemControls.centerTapWhilePadIdleIsWakeOnly(true, 0));
+        assertFalse(StemControls.centerTapWhilePadIdleIsWakeOnly(false, -1));
         assertFalse(StemControls.centerTapWhilePadIdleIsWakeOnly(false, 1));
     }
 }

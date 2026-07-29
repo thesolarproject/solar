@@ -85,6 +85,10 @@ public class MusicLibraryStorePagingTest {
         // 2026-07-20 — Genre/year DISTINCT shapes for SEGMENTED Tier-0 menus.
         assertTrue(MusicLibraryStore.SQL_DISTINCT_GENRES.contains("DISTINCT genre"));
         assertTrue(MusicLibraryStore.SQL_DISTINCT_GENRES.contains("Unknown Genre"));
+        assertTrue(MusicLibraryStore.SQL_TOP_DISCOVER_ARTISTS.contains("COUNT(*)"));
+        assertTrue(MusicLibraryStore.SQL_TOP_DISCOVER_ARTISTS.contains("LIMIT ?"));
+        assertTrue(MusicLibraryStore.SQL_TOP_DISCOVER_GENRES.contains("COUNT(*)"));
+        assertTrue(MusicLibraryStore.SQL_TOP_DISCOVER_GENRES.contains("LIMIT ?"));
         assertTrue(MusicLibraryStore.SQL_DISTINCT_YEARS.contains("DISTINCT year"));
         assertTrue(MusicLibraryStore.SQL_DISTINCT_YEARS.contains("year > 0"));
         assertFalse(MusicLibraryStore.SQL_LOAD_BY_ARTIST.contains("SELECT * FROM tracks ORDER BY path"));
@@ -101,6 +105,8 @@ public class MusicLibraryStorePagingTest {
         assertEquals(3, countPlaceholders(MusicLibraryStore.SQL_COUNT_BY_ARTIST_ALBUM));
         assertEquals(0, countPlaceholders(MusicLibraryStore.SQL_DISTINCT_ARTISTS));
         assertEquals(0, countPlaceholders(MusicLibraryStore.SQL_DISTINCT_ALBUMS));
+        assertEquals(1, countPlaceholders(MusicLibraryStore.SQL_TOP_DISCOVER_ARTISTS));
+        assertEquals(1, countPlaceholders(MusicLibraryStore.SQL_TOP_DISCOVER_GENRES));
         assertEquals(0, countPlaceholders(MusicLibraryStore.SQL_PATH_SIZES));
         assertEquals(2, countPlaceholders(MusicLibraryStore.SQL_LOAD_BY_MTIME_DESC));
     }

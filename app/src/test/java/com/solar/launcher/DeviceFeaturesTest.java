@@ -146,7 +146,7 @@ public class DeviceFeaturesTest {
         DeviceFeatures.setCachedFamilyForTest("y1");
         List<File> roots = DeviceFeatures.getMusicRoots();
         if (roots.size() != 1) throw new AssertionError("expected 1 music root on Y1 got " + roots.size());
-        if (!roots.get(0).getAbsolutePath().endsWith("/Music")) {
+        if (!portablePath(roots.get(0)).endsWith("/Music")) {
             throw new AssertionError("music subdir");
         }
         DeviceFeatures.resetCacheForTest();
@@ -166,11 +166,11 @@ public class DeviceFeaturesTest {
     @Test
     public void rockboxRootFollowsDevicePolicy() {
         DeviceFeatures.setCachedFamilyForTest("y1");
-        if (!DeviceFeatures.getRockboxRoot().getAbsolutePath().equals("/storage/sdcard0")) {
+        if (!portablePath(DeviceFeatures.getRockboxRoot()).endsWith("/storage/sdcard0")) {
             throw new AssertionError("y1 rockbox on user sd");
         }
         DeviceFeatures.setCachedFamilyForTest("y2");
-        if (!DeviceFeatures.getRockboxRoot().getAbsolutePath().startsWith("/storage/sdcard")) {
+        if (!portablePath(DeviceFeatures.getRockboxRoot()).contains("/storage/sdcard")) {
             throw new AssertionError("y2 rockbox path");
         }
         DeviceFeatures.resetCacheForTest();
@@ -280,5 +280,9 @@ public class DeviceFeaturesTest {
         String family = DeviceFeatures.detectFamilyForTest(
                 "MT6572", "mt6572", 17, "Y1", "Timmkoo", 240, 320);
         if (!"a5".equals(family)) throw new AssertionError("display must beat lying model got " + family);
+    }
+
+    private static String portablePath(File file) {
+        return file.getAbsolutePath().replace('\\', '/');
     }
 }

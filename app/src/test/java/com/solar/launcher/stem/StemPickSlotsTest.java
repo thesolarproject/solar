@@ -82,7 +82,8 @@ public class StemPickSlotsTest {
         assertEquals(4000L, StemControls.transitionMsForPreset(StemControls.TRANSITION_PRESET_LONG));
         assertEquals(8000L, StemControls.transitionMsForPreset(StemControls.TRANSITION_PRESET_OVERLAP));
         assertEquals(400L, StemControls.transitionMsForPreset(StemControls.TRANSITION_PRESET_WAVE));
-        assertEquals(100, StemControls.transitionFadeSteps(4000L));
+        assertEquals((int) (4000L / StemControls.TRANSITION_TICK_MS),
+                StemControls.transitionFadeSteps(4000L));
         assertEquals(1, StemControls.transitionFadeSteps(0L));
         assertTrue(StemControls.stemTransitionHoldOneSide(true, false));
         assertTrue(StemControls.stemTransitionHoldOneSide(false, true));

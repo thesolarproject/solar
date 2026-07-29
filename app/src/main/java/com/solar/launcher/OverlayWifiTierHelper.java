@@ -107,10 +107,10 @@ public final class OverlayWifiTierHelper {
     public static void connect(Context ctx, final String ssid, final Runnable onRefresh,
             final Runnable onPasswordHandoff) {
         if (ctx == null || ssid == null || ssid.isEmpty()) return;
-        final boolean open = isOpenNetwork(ctx, ssid);
+        final String capabilities = capabilitiesForNetwork(ctx, ssid);
         Toast.makeText(ctx, ctx.getString(R.string.toast_wifi_connecting, ssid), Toast.LENGTH_SHORT).show();
-        WifiConnector.connectFromMenu(ctx.getApplicationContext(), ssid, open, null,
-                new WifiConnector.MenuCallback() {
+        WifiConnector.connectFromMenuDetailed(ctx.getApplicationContext(), ssid,
+                capabilities, null, new WifiConnector.DetailedMenuCallback() {
                     @Override
                     public void onNeedPassword() {
                         if (onPasswordHandoff != null) {
@@ -122,7 +122,22 @@ public final class OverlayWifiTierHelper {
                     }
 
                     @Override
-                    public void onComplete(boolean success) {
+                    public void onComplete(WifiConnector.ConnectionResult result) {
+                        if (result != null && !result.success
+                                && result.failure == WifiConnector.Failure.AUTHENTICATION_FAILED
+                                && onPasswordHandoff != null) {
+                            Toast.makeText(ctx,
+                                    ctx.getString(WifiConnector.failureMessageResId(result.failure)),
+                                    Toast.LENGTH_LONG).show();
+                            onPasswordHandoff.run();
+                            return;
+                        }
+                        if (result != null && !result.success
+                                && result.failure != WifiConnector.Failure.CANCELED) {
+                            Toast.makeText(ctx,
+                                    ctx.getString(WifiConnector.failureMessageResId(result.failure)),
+                                    Toast.LENGTH_LONG).show();
+                        }
                         if (onRefresh != null) {
                             onRefresh.run();
                         }
@@ -131,22 +146,19 @@ public final class OverlayWifiTierHelper {
     }
 
     @SuppressLint("MissingPermission")
-    private static boolean isOpenNetwork(Context ctx, String ssid) {
+    private static String capabilitiesForNetwork(Context ctx, String ssid) {
         try {
             WifiManager wm = wifi(ctx);
-            if (wm == null) return false;
+            if (wm == null) return "";
             List<ScanResult> results = wm.getScanResults();
-            if (results == null) return false;
+            if (results == null) return "";
             for (ScanResult r : results) {
                 if (ssid.equals(r.SSID)) {
-                    return r.capabilities == null
-                            || (!r.capabilities.contains("WEP")
-                            && !r.capabilities.contains("WPA")
-                            && !r.capabilities.contains("PSK"));
+                    return r.capabilities != null ? r.capabilities : "";
                 }
             }
         } catch (Exception ignored) {}
-        return false;
+        return "";
     }
 
     /** Live association name — empty when the platform reports a phantom hex placeholder. */

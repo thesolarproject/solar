@@ -134,31 +134,76 @@ public final class SolarHttp {
             long readyAfterBytes, PartialReadyListener partialReady,
             java.util.concurrent.atomic.AtomicBoolean cancel, long resumeFromBytes) throws IOException {
         TlsHelper.ensureSecurityProvider();
-        long existing = resumeFromBytes > 0 ? resumeFromBytes : (dest.isFile() ? dest.length() : 0L);
-        Request.Builder rb = new Request.Builder()
-                .url(urlStr)
-                .header("User-Agent", DEFAULT_UA);
-        if (existing > 0) rb.header("Range", "bytes=" + existing + "-");
-        Response resp = executeDownload(rb.build());
+        if (dest == null) throw new IOException("Download destination is unavailable");
+        File parent = dest.getParentFile();
+        if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
+            throw new IOException("Cannot create download directory");
+        }
+        if (cancel != null && cancel.get()) throw new IOException("Download cancelled");
+
+        // FileOutputStream append always writes at EOF. Never request an offset that differs from
+        // the actual durable length, even if a stale caller supplied one.
+        long existing = dest.isFile() ? dest.length() : 0L;
+        Response resp = executeDownload(buildDownloadRequest(urlStr, existing));
         InputStream in = null;
         FileOutputStream out = null;
         try {
-            if (resp.body() == null) throw new IOException("Empty body for " + urlStr);
             int code = resp.code();
-            boolean append = code == 206 && existing > 0;
-            if (code == 200 && existing > 0) {
-                existing = 0;
-                append = false;
+            ContentRange contentRange = parseContentRange(resp.header("Content-Range"));
+
+            if (code == 416 && existing > 0 && contentRange != null
+                    && contentRange.unsatisfied && contentRange.total == existing) {
+                if (progress != null) progress.onProgress(existing, existing);
+                if (partialReady != null && readyAfterBytes > 0 && existing >= readyAfterBytes) {
+                    partialReady.onPartialReady(dest, existing);
+                }
+                return;
             }
+
+            boolean validResume = code == 206 && existing > 0 && contentRange != null
+                    && !contentRange.unsatisfied && contentRange.start == existing;
+            boolean usableFreshResponse = code == 200
+                    || (code == 206 && existing == 0 && contentRange != null
+                    && !contentRange.unsatisfied && contentRange.start == 0);
+            if (existing > 0 && !validResume && code != 200) {
+                // A mismatched/missing Content-Range would splice unrelated bytes. Retry once
+                // without Range and overwrite only after a valid fresh response is open.
+                resp.close();
+                resp = executeDownload(buildDownloadRequest(urlStr, 0L));
+                code = resp.code();
+                contentRange = parseContentRange(resp.header("Content-Range"));
+                usableFreshResponse = code == 200
+                        || (code == 206 && contentRange != null
+                        && !contentRange.unsatisfied && contentRange.start == 0);
+                if (!usableFreshResponse) {
+                    throw new IOException("Server did not provide a safe resumable response");
+                }
+                existing = 0;
+            }
+            if (existing == 0 && !usableFreshResponse) {
+                throw new IOException("Server did not provide a complete download response");
+            }
+            if (resp.body() == null) throw new IOException("Download response has no body");
+
+            boolean append = validResume && existing > 0;
+            if (!append) existing = 0;
             in = resp.body().byteStream();
             out = new FileOutputStream(dest, append);
-            long total = resp.body().contentLength();
-            if (append && total > 0) total += existing;
-            else if (total <= 0 && existing > 0 && append) total = existing;
+            long bodyLength = resp.body().contentLength();
+            long total = contentRange != null && !contentRange.unsatisfied
+                    && contentRange.total > 0 ? contentRange.total : -1L;
+            if (total <= 0 && bodyLength >= 0) {
+                total = append ? safeAdd(existing, bodyLength) : bodyLength;
+            }
             byte[] buf = new byte[8192];
             long read = append ? existing : 0;
             int n;
-            boolean partialFired = append && read >= readyAfterBytes;
+            boolean partialFired = false;
+            if (progress != null) progress.onProgress(read, total);
+            if (partialReady != null && readyAfterBytes > 0 && read >= readyAfterBytes) {
+                partialFired = true;
+                partialReady.onPartialReady(dest, read);
+            }
             while ((n = in.read(buf)) != -1) {
                 if (cancel != null && cancel.get()) throw new IOException("Download cancelled");
                 out.write(buf, 0, n);
@@ -169,20 +214,84 @@ public final class SolarHttp {
                     partialReady.onPartialReady(dest, read);
                 }
             }
+            out.flush();
+            if (cancel != null && cancel.get()) throw new IOException("Download cancelled");
+            if (total >= 0 && read != total) {
+                throw new IOException("Incomplete download: " + read + " of " + total
+                        + " bytes saved");
+            }
         } finally {
             if (in != null) try { in.close(); } catch (IOException ignored) {}
             if (out != null) try { out.close(); } catch (IOException ignored) {}
-            if (resp.body() != null) resp.body().close();
+            resp.close();
         }
+    }
+
+    private static Request buildDownloadRequest(String urlStr, long existing) {
+        Request.Builder builder = new Request.Builder()
+                .url(urlStr)
+                .header("User-Agent", DEFAULT_UA)
+                .header("Accept-Encoding", "identity");
+        if (existing > 0) builder.header("Range", "bytes=" + existing + "-");
+        return builder.build();
     }
 
     private static Response executeDownload(Request req) throws IOException {
         OkHttpClient base = longReadClient();
         Response resp = base.newCall(req).execute();
         int code = resp.code();
-        if (code == 206 || resp.isSuccessful()) return resp;
+        if (code == 416 || code == 206 || resp.isSuccessful()) return resp;
         resp.close();
-        throw new IOException("HTTP " + code + " for " + req.url());
+        throw new IOException("HTTP " + code + " while downloading");
+    }
+
+    static final class ContentRange {
+        final long start;
+        final long end;
+        final long total;
+        final boolean unsatisfied;
+
+        ContentRange(long start, long end, long total, boolean unsatisfied) {
+            this.start = start;
+            this.end = end;
+            this.total = total;
+            this.unsatisfied = unsatisfied;
+        }
+    }
+
+    static ContentRange parseContentRange(String raw) {
+        if (raw == null) return null;
+        String value = raw.trim();
+        if (!value.regionMatches(true, 0, "bytes ", 0, 6)) return null;
+        String rangeAndTotal = value.substring(6).trim();
+        int slash = rangeAndTotal.indexOf('/');
+        if (slash <= 0 || slash == rangeAndTotal.length() - 1) return null;
+        String range = rangeAndTotal.substring(0, slash).trim();
+        long total = parseNonNegativeLong(rangeAndTotal.substring(slash + 1).trim());
+        if (total < 0) return null;
+        if ("*".equals(range)) return new ContentRange(-1L, -1L, total, true);
+        int dash = range.indexOf('-');
+        if (dash <= 0 || dash == range.length() - 1) return null;
+        long start = parseNonNegativeLong(range.substring(0, dash).trim());
+        long end = parseNonNegativeLong(range.substring(dash + 1).trim());
+        if (start < 0 || end < start || (total > 0 && end >= total)) return null;
+        return new ContentRange(start, end, total, false);
+    }
+
+    private static long parseNonNegativeLong(String value) {
+        try {
+            long parsed = Long.parseLong(value);
+            return parsed >= 0 ? parsed : -1L;
+        } catch (Exception ignored) {
+            return -1L;
+        }
+    }
+
+    private static long safeAdd(long a, long b) throws IOException {
+        if (a < 0 || b < 0 || a > Long.MAX_VALUE - b) {
+            throw new IOException("Download size overflow");
+        }
+        return a + b;
     }
 
     public static String getText(String urlStr) throws IOException {
@@ -240,10 +349,22 @@ public final class SolarHttp {
 
     /** HEAD then tiny ranged GET — true if any URL variant is reachable (TLS/HTTP). */
     public static boolean probeAnyReachable(String[] urls) {
+        return probeAnyReachableQuick(urls, 5, 8);
+    }
+
+    /**
+     * Bounded endpoint probe for an explicit diagnostics action. Callers choose short limits;
+     * normal download/read clients keep their existing timeouts.
+     */
+    public static boolean probeAnyReachableQuick(String[] urls,
+            int connectTimeoutSeconds, int readTimeoutSeconds) {
         if (urls == null || urls.length == 0) return false;
+        int connectSeconds = Math.max(1, connectTimeoutSeconds);
+        int readSeconds = Math.max(1, readTimeoutSeconds);
         OkHttpClient probe = TlsHelper.client().newBuilder()
-                .connectTimeout(5, TimeUnit.SECONDS)
-                .readTimeout(8, TimeUnit.SECONDS)
+                .connectTimeout(connectSeconds, TimeUnit.SECONDS)
+                .readTimeout(readSeconds, TimeUnit.SECONDS)
+                .writeTimeout(connectSeconds, TimeUnit.SECONDS)
                 .followRedirects(true)
                 .build();
         for (String url : urls) {

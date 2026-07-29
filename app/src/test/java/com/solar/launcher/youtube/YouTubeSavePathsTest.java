@@ -16,14 +16,14 @@ public class YouTubeSavePathsTest {
     public void videoPathUnderVideosYouTube() {
         File root = new File("/storage/sdcard0");
         File dest = YouTubeSavePaths.destUnderRoot(root, "Videos", "Cool Clip", "mp4");
-        assertEquals("/storage/sdcard0/Videos/YouTube/Cool Clip.mp4", dest.getPath());
+        assertEquals("/storage/sdcard0/Videos/YouTube/Cool Clip.mp4", portable(dest));
     }
 
     @Test
     public void audioPathUnderMusicYouTube() {
         File root = new File("/storage/sdcard1");
         File dest = YouTubeSavePaths.destUnderRoot(root, "Music", "Song Title", "m4a");
-        assertEquals("/storage/sdcard1/Music/YouTube/Song Title.m4a", dest.getPath());
+        assertEquals("/storage/sdcard1/Music/YouTube/Song Title.m4a", portable(dest));
     }
 
     @Test
@@ -47,5 +47,10 @@ public class YouTubeSavePathsTest {
         File found = YouTubeSavePaths.matchInDirForTest(dir, "Cool Clip");
         assertNotNull(found);
         assertEquals(hit.getAbsolutePath(), found.getAbsolutePath());
+    }
+
+    private static String portable(File file) {
+        String path = file.getPath().replace('\\', '/');
+        return path.startsWith("/") ? path : "/" + path;
     }
 }

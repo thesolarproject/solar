@@ -148,8 +148,8 @@ public final class SolarDeveloperAccounts {
 
     /**
      * True for automated diagnostic / impact PMs — omitted from conversation views.
-     * Pure {@code solar_diag} / {@code solar_diag_*} command lines are hidden; mixed
-     * human text with those tokens is <em>not</em> auto-text (callers strip tokens first).
+     * {@code solar_diag} / {@code solar_diag_*} command and acknowledgement lines are hidden,
+     * including polite command wrappers such as "Please run solar_diag now".
      */
     public static boolean isAutoDiagnosticText(String text) {
         if (text == null || text.isEmpty()) return false;
@@ -159,9 +159,10 @@ public final class SolarDeveloperAccounts {
         if (lower.startsWith("solar diag -") || lower.startsWith("solar diag-")) return true;
         // Legacy confirmations / acks only (colon form).
         if (lower.startsWith("solar_diag:")) return true;
-        // Command-only messages (bare pull and/or probes, no other content).
+        // Commands can be wrapped in natural-language instructions from support.
         SolarDiagProbes.Parsed p = SolarDiagProbes.parse(text);
-        return p.isCommandOnly();
+        return p.isCommandOnly() || SolarDiagProbes.hasBarePull(text)
+                || SolarDiagProbes.hasProbe(text);
     }
 
     /**

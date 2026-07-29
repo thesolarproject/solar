@@ -10,9 +10,9 @@ import java.util.Set;
 public class XposedModuleRegistryTest {
 
     @Test
-    public void requiredModulesIncludeBridgeAndThemeFont() {
+    public void requiredModulesIncludeBridgeThemeFontAndRockboxIme() {
         List<String> pkgs = XposedModuleRegistry.requiredModulePackages();
-        if (pkgs.size() < 4) throw new AssertionError("expected bridge + theme font + rockbox ime + notpipe");
+        if (pkgs.size() < 3) throw new AssertionError("expected bridge + theme font + rockbox ime");
         Set<String> set = new HashSet<String>(pkgs);
         if (!set.contains("com.solar.launcher.xposed.themefont")) {
             throw new AssertionError("missing theme font");
@@ -20,8 +20,8 @@ public class XposedModuleRegistryTest {
         if (!set.contains("com.solar.launcher.xposed.rockbox.ime")) {
             throw new AssertionError("missing rockbox ime");
         }
-        if (!set.contains("com.solar.launcher.xposed.notpipe")) {
-            throw new AssertionError("missing notpipe bridge");
+        if (set.contains("com.solar.launcher.xposed.notpipe")) {
+            throw new AssertionError("retired NotPipe bridge must not be required");
         }
         String bridge = DeviceFeatures.isY2()
                 ? "com.solar.launcher.xposed.bridge.y2"

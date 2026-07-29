@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "audited_at_utc": "2026-07-28",
+  "device": {
+    "model": "Y1",
+    "soc": "MT6572",
+    "android_api": 17,
+    "scatter_sha256": "29390D04D90368A2FDFDF28913E8DCFF8BA139B4487AFA0E92ED2B9B1EC26866"
+  },
+  "variants": {
+    "a": {
+      "label": "Y1 Type A",
+      "base_archive": {
+        "filename": "rom.zip",
+        "size": 533410269,
+        "sha256": "D3B79CA460A3D3EC2C41BA57893127A0F9A90278E374DD33CDB5DE5BB46E367E",
+        "source": "https://github.com/y1-community/y1-ata-rom/releases/download/0.1/rom.zip"
+      },
+      "partition_fingerprints": {
+        "boot": "A289B10E8154AEA80252CB517C29FE8A598EE657B12A6E460DA0FB2CCB7C534B",
+        "uboot": "BDA26D8DB9C8D9097547B815205EB65B351562B3EDEAA7810884731BF5D857ED",
+        "recovery": "70760BC5B91B33B7F517C9F5C26AB65F9E3573659F4F980A0F608EDF490E53E4"
+      }
+    },
+    "b": {
+      "label": "Y1 Type B",
+      "base_archive": {
+        "filename": "rom_type_b.zip",
+        "size": 475393744,
+        "sha256": "B7956FDDD768F5FF4AE9A84C4F33820A0EAC9919D02FE4F315C1E83785E7CB88",
+        "source": "https://github.com/y1-community/y1-ata-rom/releases/download/0.1/rom_type_b.zip"
+      },
+      "partition_fingerprints": {
+        "boot": "9EF0851F4686263F3DA153B0E61AF37639ACF8A56AB93D6F5372B81B00FCF5D5",
+        "uboot": "47FBB6E07E0BAF8893F2D42057AD28047402120B0C0FC7678ACDAB98C3CEB0C8",
+        "recovery": "0C5D9B8E5054DC4A8680F5578D1324639A04831C35D422C8C9265A788B09C993"
+      }
+    }
+  }
+}

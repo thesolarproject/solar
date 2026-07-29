@@ -34,6 +34,7 @@ public final class ScreenTransitionMap {
     public static final int STATE_STEM_PLAYER = 33;
     /** 2026-07-19 — 3-deck Mix. */
     public static final int STATE_MIX = 34;
+    public static final int STATE_DOWNLOADS = 35;
 
     public enum Kind {
         /** No root animation — instant or in-place content swap. */
@@ -101,6 +102,7 @@ public final class ScreenTransitionMap {
     public static boolean sameBrowserRoot(int state) {
         return state == STATE_BROWSER || state == STATE_PODCASTS || state == STATE_SOULSEEK
                 || state == STATE_DEEZER || state == STATE_APPS || state == STATE_MORE
+                || state == STATE_DOWNLOADS
                 || state == STATE_USB_STORAGE || state == STATE_NAVIDROME
                 || state == STATE_PLEX || state == STATE_JELLYFIN
                 || state == MediaSuiteHost.STATE_RADIO

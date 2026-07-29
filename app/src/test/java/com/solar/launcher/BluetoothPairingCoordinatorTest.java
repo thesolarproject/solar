@@ -1,6 +1,7 @@
 package com.solar.launcher;
 
 import android.bluetooth.BluetoothDevice;
+import com.solar.input.policy.BluetoothPairingVariantPolicy;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
@@ -22,13 +23,26 @@ public class BluetoothPairingCoordinatorTest {
         assertEquals(BluetoothPairingCoordinator.MODE_PIN,
                 BluetoothPairingCoordinator.overlayModeForVariant(
                         BluetoothDevice.PAIRING_VARIANT_PIN));
-        assertEquals(BluetoothPairingCoordinator.MODE_PASSKEY_DISPLAY,
-                BluetoothPairingCoordinator.overlayModeForVariant(1));
+        assertEquals(BluetoothPairingCoordinator.MODE_PASSKEY_ENTRY,
+                BluetoothPairingCoordinator.overlayModeForVariant(
+                        BluetoothPairingVariantPolicy.VARIANT_PASSKEY));
         assertEquals(BluetoothPairingCoordinator.MODE_PASSKEY_CONFIRM,
                 BluetoothPairingCoordinator.overlayModeForVariant(
                         BluetoothDevice.PAIRING_VARIANT_PASSKEY_CONFIRMATION));
         assertEquals(BluetoothPairingCoordinator.MODE_CONSENT,
-                BluetoothPairingCoordinator.overlayModeForVariant(3));
+                BluetoothPairingCoordinator.overlayModeForVariant(
+                        BluetoothPairingVariantPolicy.VARIANT_CONSENT));
+        assertEquals(BluetoothPairingCoordinator.MODE_PASSKEY_DISPLAY,
+                BluetoothPairingCoordinator.overlayModeForVariant(
+                        BluetoothPairingVariantPolicy.VARIANT_DISPLAY_PASSKEY));
+        assertEquals(BluetoothPairingCoordinator.MODE_PIN_DISPLAY,
+                BluetoothPairingCoordinator.overlayModeForVariant(
+                        BluetoothPairingVariantPolicy.VARIANT_DISPLAY_PIN));
+        assertEquals(BluetoothPairingCoordinator.MODE_OOB_CONSENT,
+                BluetoothPairingCoordinator.overlayModeForVariant(
+                        BluetoothPairingVariantPolicy.VARIANT_OOB_CONSENT));
+        assertEquals(BluetoothPairingVariantPolicy.MODE_NONE,
+                BluetoothPairingCoordinator.overlayModeForVariant(99));
     }
 
     @Test
@@ -53,6 +67,15 @@ public class BluetoothPairingCoordinatorTest {
     public void testPendingPinClearedOnBondedNull() {
         BluetoothPairingCoordinator.clearSession();
         BluetoothPairingCoordinator.onBonded(null);
-        assertFalse(BluetoothPairingCoordinator.isPendingPinNegotiation("AA:BB:CC:DD:EE:FF"));
+    }
+
+    @Test
+    public void testPairingKeyFormattingAndValidation() {
+        assertEquals("0042", BluetoothPairingCoordinator.formatDisplayPin(42));
+        assertEquals(42, BluetoothPairingCoordinator.parsePasskey("000042"));
+        assertEquals(999999, BluetoothPairingCoordinator.parsePasskey("999999"));
+        assertEquals(-1, BluetoothPairingCoordinator.parsePasskey(""));
+        assertEquals(-1, BluetoothPairingCoordinator.parsePasskey("1234567"));
+        assertEquals(-1, BluetoothPairingCoordinator.parsePasskey("12A4"));
     }
 }

@@ -87,7 +87,7 @@ public class BootReceiver extends BroadcastReceiver {
             @Override
             public void run() {
                 XposedModuleEnsurer.ensureRequiredModulesAsync(context);
-                BluetoothAudioRepair.requestRepair(context, null);
+                BluetoothAudioRepair.requestAutoRepair(context, null);
             }
         });
         // #region agent log

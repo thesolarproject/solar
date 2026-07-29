@@ -49,4 +49,11 @@ public final class GetMusicSearchHistory {
         } catch (Exception ignored) {}
         return out;
     }
+
+    public static void clear(SharedPreferences prefs) {
+        if (prefs == null) return;
+        try {
+            prefs.edit().remove(PREF_KEY).commit();
+        } catch (Exception ignored) {}
+    }
 }

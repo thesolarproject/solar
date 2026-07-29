@@ -5,33 +5,27 @@ import static org.junit.Assert.assertTrue;
 
 import java.io.File;
 import java.io.FileOutputStream;
-import java.io.FileWriter;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.json.JSONObject;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
 /**
  * 2026-07-20 — Classico-style collapse: named acoustic vs residual Melody pick.
- * Writes NDJSON to session debug log for hypothesis A.
  */
 public class LalalMelodyPadPickTest {
-
-    private static final String DEBUG_LOG =
-            "/home/deck/Documents/Cursor Workspaces/TheSolarProject/solar/.cursor/debug-75a361.log";
 
     @Rule
     public TemporaryFolder tmp = new TemporaryFolder();
 
     /**
-     * Acoustic+vocals track shape: residual preferred today → guitar discarded.
-     * 2026-07-20
+     * Acoustic+vocals track shape: a complete guitar must beat a tiny residual
+     * fragment when only one Melody pad can be retained.
      */
     @Test
-    public void classicoShapePrefersResidualOverAcoustic() throws Exception {
+    public void classicoShapePrefersStrongestMelodyCandidate() throws Exception {
         File dir = tmp.newFolder("classico_stems");
         List<LalalClient.StemFile> raw = new ArrayList<LalalClient.StemFile>();
         raw.add(stem(dir, "vocals", 0, 800_000));
@@ -51,29 +45,8 @@ public class LalalMelodyPadPickTest {
                 pickedBytes = out.get(i).file.length();
             }
         }
-        // #region agent log
-        JSONObject d = new JSONObject();
-        d.put("pickedId", picked);
-        d.put("pickedBytes", pickedBytes);
-        d.put("acousticBytes", 900_000);
-        d.put("residualBytes", 5000);
-        d.put("discardedGuitar", "no_multistem".equals(picked));
-        JSONObject o = new JSONObject();
-        o.put("sessionId", "75a361");
-        o.put("timestamp", System.currentTimeMillis());
-        o.put("location", "LalalMelodyPadPickTest.classicoShape");
-        o.put("message", "unit: Classico-shaped collapse pick");
-        o.put("hypothesisId", "A");
-        o.put("runId", "unit-classico-shape");
-        o.put("data", d);
-        FileWriter w = new FileWriter(DEBUG_LOG, true);
-        w.write(o.toString());
-        w.write('\n');
-        w.close();
-        // #endregion
-        // Documents current (broken for Classico) preference — residual wins. 2026-07-20
-        assertEquals("no_multistem", picked);
-        assertTrue(pickedBytes < 900_000);
+        assertEquals("acoustic_guitar", picked);
+        assertEquals(900_000L, pickedBytes);
     }
 
     private static LalalClient.StemFile stem(File dir, String id, int zone, int bytes)

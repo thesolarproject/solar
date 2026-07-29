@@ -201,11 +201,11 @@ public class StemPadGainAndShuffleTest {
     @Test
     public void contextRowsHavePauseHomeNoLoop() {
         String[] slot = StemMixContextRows.slotRows(1);
-        assertEquals(4, slot.length);
+        assertEquals(StemMixContextRows.SLOT_ROW_COUNT, slot.length);
         assertTrue(slot[0].toLowerCase().contains("replace"));
         assertTrue(slot[0].toLowerCase().contains("focused"));
         String[] session = StemMixContextRows.sessionRows(false);
-        assertEquals(6, session.length);
+        assertEquals(StemMixContextRows.SESSION_ROW_COUNT, session.length);
         assertTrue(StemMixContextRows.isSessionPauseRow(StemMixContextRows.SESSION_PAUSE));
         assertTrue(StemMixContextRows.isSessionHomeRow(StemMixContextRows.SESSION_HOME));
         boolean sawPause = false;

@@ -161,6 +161,14 @@ public class SoulseekClientTest {
     }
 
     @Test
+    public void basenameForSaveSanitizesFatUnsafeNames() {
+        assertEquals("_CON.mp3", SoulseekClient.basenameForSave("folder\\CON.mp3"));
+        assertEquals("bad_______name.mp3",
+                SoulseekClient.basenameForSave("folder/bad<>:\"|?*name.mp3"));
+        assertEquals("download.bin", SoulseekClient.basenameForSave("../.."));
+    }
+
+    @Test
     public void uploadDeniedSignalsDownloadFailure() throws Exception {
         SoulseekClient client = new SoulseekClient("u", "p",
                 new File(System.getProperty("java.io.tmpdir")), null, null);

@@ -158,7 +158,8 @@ public final class SolarWheelKeyboardUi {
             int baseIdx, int offset) {
         if (tv == null || controller == null) return;
         int i = offset == 0 ? baseIdx : controller.wrapActiveIndex(baseIdx, offset);
-        tv.setText(SolarWheelKeyboardController.displayChar(controller.charAt(i), enterLabel));
+        tv.setText(SolarWheelKeyboardController.displayChar(controller.charAt(i), enterLabel,
+                controller.isPasswordVisible()));
     }
 
     /**

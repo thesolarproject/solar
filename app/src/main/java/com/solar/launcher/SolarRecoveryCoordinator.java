@@ -146,7 +146,7 @@ public final class SolarRecoveryCoordinator {
         if (context == null) return;
         markRecoveryAction("solar_restart");
         UsbRecoveryAgent.ensureRunning(context);
-        BluetoothAudioRepair.requestRepair(context, null);
+        BluetoothAudioRepair.requestAutoRepair(context, null);
         SolarOverlayHost.ensureStarted(context);
         SolarRescueHoldHost.ensureStarted(context);
     }

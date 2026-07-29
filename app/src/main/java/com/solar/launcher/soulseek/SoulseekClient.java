@@ -2939,15 +2939,24 @@ public final class SoulseekClient extends Thread {
           return;
         }
       }
-      peer.getOutputStream().write(SoulseekWire.packUInt64(0));
-      peer.getOutputStream().flush();
-
       String base = basenameForSave(pd.filename);
       File dir = pendingDestDir != null ? pendingDestDir : downloadDir;
-      File outFile = uniqueFile(dir, base);
-      receiveRawFile(in, pd.size, outFile, base);
+      SoulseekPartialStore.Entry partial = SoulseekPartialStore.select(
+              dir, pd.filename, pd.username, pd.size);
+      long resumeFrom = SoulseekPartialStore.prepareResume(partial);
+      SoulseekPartialStore.ensureStorageAvailable(dir, pd.size, resumeFrom);
+      peer.getOutputStream().write(SoulseekWire.packUInt64(resumeFrom));
+      peer.getOutputStream().flush();
+      if (resumeFrom > 0) {
+        notifyDownloadPhase("Resuming", formatSize(resumeFrom));
+        if (listener != null) {
+          listener.onDownloadProgress(base, resumeFrom, pd.size > 0 ? pd.size : resumeFrom);
+        }
+      }
+
+      File outFile = receiveRawFile(in, pd.size, partial, base, resumeFrom);
       debugLog("download complete " + outFile.getName());
-      phaseLog("dl8", true, "FileOffset/receive");
+      phaseLog("dl8", true, "FileOffset=" + resumeFrom + "/receive");
       phaseLog("dl9", true, outFile.getName());
       markDownloadComplete();
       if (listener != null) listener.onDownloadComplete(outFile);
@@ -2965,7 +2974,7 @@ public final class SoulseekClient extends Thread {
       }
       String msg = e.getMessage() != null ? e.getMessage() : "Download failed";
       if (msg.contains("Incomplete")) {
-        msg = "Transfer interrupted — forward TCP port " + reportedListenPort;
+        msg = "Transfer interrupted; partial file kept. Retry to resume.";
       }
       failDownload(msg);
       if (!downloadCancelled) notifyError(msg);
@@ -2980,15 +2989,21 @@ public final class SoulseekClient extends Thread {
     return !alreadyFired && total > 0 && done * 100 / total >= REACH_EARLY_PLAY_PERCENT;
   }
 
-  private void receiveRawFile(InputStream in, long size, File outFile, String progressName) throws Exception {
+  private File receiveRawFile(InputStream in, long size, SoulseekPartialStore.Entry partial,
+                              String progressName, long resumeFrom) throws Exception {
     BufferedOutputStream out = null;
     try {
-      out = new BufferedOutputStream(new FileOutputStream(outFile), 16384);
+      out = new BufferedOutputStream(
+              new FileOutputStream(partial.partialFile, resumeFrom > 0), 16384);
       byte[] buf = new byte[16384];
-      long done = 0;
-      long lastNotifyDone = 0;
+      long done = resumeFrom;
+      long lastNotifyDone = resumeFrom;
       int lastNotifyPct = -1;
       boolean partialFired = false;
+      if (listener != null && shouldFirePartialReady(done, size, partialFired)) {
+        partialFired = true;
+        listener.onDownloadPartialReady(partial.partialFile, done, size);
+      }
       while (!downloadCancelled && (size <= 0 || done < size)) {
         int want = size > 0 ? (int) Math.min(buf.length, size - done) : buf.length;
         int n = in.read(buf, 0, want);
@@ -3001,7 +3016,7 @@ public final class SoulseekClient extends Thread {
           if (shouldFirePartialReady(done, total, partialFired)) {
             partialFired = true;
             out.flush();
-            listener.onDownloadPartialReady(outFile, done, total);
+            listener.onDownloadPartialReady(partial.partialFile, done, total);
           }
           if (done >= total || pct != lastNotifyPct && (pct % 5 == 0 || done - lastNotifyDone >= 65536)) {
             listener.onDownloadProgress(progressName, done, total);
@@ -3017,16 +3032,12 @@ public final class SoulseekClient extends Thread {
       if (listener != null) {
         listener.onDownloadProgress(progressName, done, size > 0 ? size : done);
       }
-    } catch (Exception e) {
-      if (outFile.exists() && !outFile.delete()) {
-        debugLog("partial delete fail " + outFile.getName());
-      }
-      throw e;
     } finally {
       if (out != null) {
         try { out.close(); } catch (Exception ignored) {}
       }
     }
+    return SoulseekPartialStore.finish(partial);
   }
 
   /** ponytail: same-package test hook */
@@ -3054,12 +3065,7 @@ public final class SoulseekClient extends Thread {
   }
 
   static String basenameForSave(String filename) {
-    if (filename == null || filename.isEmpty()) return "download.bin";
-    int slash = Math.max(filename.lastIndexOf('/'), filename.lastIndexOf('\\'));
-    String base = slash >= 0 ? filename.substring(slash + 1) : filename;
-    base = base.replace('/', '_').replace('\\', '_').replace(':', '_');
-    if (base.trim().isEmpty()) return "download.bin";
-    return base;
+    return SoulseekPartialStore.safeBasename(filename);
   }
 
   public static File uniqueFile(File dir, String name) {

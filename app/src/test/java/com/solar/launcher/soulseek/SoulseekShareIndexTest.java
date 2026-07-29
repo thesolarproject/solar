@@ -93,6 +93,25 @@ public class SoulseekShareIndexTest {
     deleteTree(music);
   }
 
+  @Test
+  public void knownFileOutsideMusicRootIsNotShared() throws Exception {
+    File music = new File(System.getProperty("java.io.tmpdir"), "share_safe_root");
+    File outside = new File(System.getProperty("java.io.tmpdir"), "share_private/song.mp3");
+    deleteTree(music);
+    deleteTree(outside.getParentFile());
+    music.mkdirs();
+    writeEmpty(outside);
+    java.util.ArrayList<File> known = new java.util.ArrayList<File>();
+    known.add(outside);
+
+    SoulseekShareIndex idx = new SoulseekShareIndex();
+    idx.scan("testuser", music, null, null, known);
+
+    if (idx.fileCount() != 0) throw new AssertionError("outside file was shared");
+    deleteTree(music);
+    deleteTree(outside.getParentFile());
+  }
+
   private static void writeEmpty(File f) throws Exception {
     f.getParentFile().mkdirs();
     FileOutputStream out = new FileOutputStream(f);

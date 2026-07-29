@@ -60,7 +60,8 @@ public final class GlobalInputCoordinatorService extends Service {
     public void onDestroy() {
         cancelRunnables();
         if (workerThread != null) {
-            workerThread.quitSafely();
+            if (android.os.Build.VERSION.SDK_INT >= 18) workerThread.quitSafely();
+            else workerThread.quit();
         }
         super.onDestroy();
     }

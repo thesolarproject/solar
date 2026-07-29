@@ -6,7 +6,8 @@ public final class KeyboardCharset {
     public static final int UPPER = 26;
     public static final int DIGIT = 52;
     public static final int SYMBOL = 62;
-    public static final int SPECIAL = 76;
+    /** First editing-action slot after all 32 printable ASCII punctuation characters. */
+    public static final int SPECIAL = 94;
 
     private KeyboardCharset() {}
 

@@ -1239,6 +1239,17 @@ else
     echo "==> Downloading type-${TYPE} base firmware"
     curl -fsSL -o "$BASE_DIR/rom.zip" "$BASE_URL"
 fi
+
+# Solar Classic safety gate: Y1 A/B properties are indistinguishable while their
+# boot-critical payloads differ.  Pin the selected input archive before unzip or
+# loop mount; an unknown/custom base must be audited and added to the registry.
+if [ "$TYPE" = "a" ] || [ "$TYPE" = "b" ]; then
+    require_cmd python3
+    python3 "$SCRIPT_DIR/y1-firmware-preflight.py" verify-base \
+        --variant "$TYPE" --archive "$BASE_DIR/rom.zip" \
+        || die "Y1 type-${TYPE} base failed audited-archive preflight"
+fi
+
 unzip -q "$BASE_DIR/rom.zip" -d "$BASE_DIR"
 normalize_firmware_layout
 # A5 ATA bases (and any trimmed raw ext4) need a full block-device length before loop mount.

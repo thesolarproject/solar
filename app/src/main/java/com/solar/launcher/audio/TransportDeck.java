@@ -115,7 +115,7 @@ public final class TransportDeck {
         url = null;
         if (track == null || !track.isFile()) throw new IOException("TransportDeck missing file");
         path = track;
-        mixer.loadOrigin(track.getAbsolutePath());
+        mixer.loadOrigin(track.getAbsolutePath(), preferIjk);
     }
 
     public void loadFile(File track) throws IOException {

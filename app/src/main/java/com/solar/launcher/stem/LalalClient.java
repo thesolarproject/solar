@@ -57,9 +57,9 @@ public final class LalalClient {
     };
 
     /**
-     * Full multistem stem_list — exactly the OpenAPI enum (maxItems 6).
-     * vocals, drum, piano, bass, electric_guitar, acoustic_guitar
-     * 2026-07-19
+     * Requested isolates. Lalal returns the residual/back track for the Melody
+     * pad, so requesting only the three core isolates avoids six simultaneous
+     * downloads and duplicate Melody candidates on the Y1.
      */
     public static final String[] MULTISTEM_IDS = {
             "vocals", "drum", "bass"
@@ -1686,7 +1686,8 @@ public final class LalalClient {
     /**
      * Keep ≤1 MediaPlayer per Stem pad (zones 0–3). Prefer melody.wav / aliases for zone 3.
      * Layman: one file per pad so mashups stay playable on a small chip.
-     * Technical: first hit wins for 0–2; zone 3 prefers melody/other/instruments/samples then residual.
+     * Technical: first hit wins for 0–2; zone 3 prefers an explicit Melody alias,
+     * then the largest usable named/residual candidate.
      * Was: all OTHER_IDS as separate zone-3 players. Reversal: return input list unchanged.
      * 2026-07-19
      */
@@ -1723,21 +1724,27 @@ public final class LalalClient {
                     || "instruments".equals(id) || "samples".equals(id)
                     || (s.file.getName() != null
                             && s.file.getName().toLowerCase().startsWith("melody"))) {
-                if (melodyAlias == null) melodyAlias = s;
+                melodyAlias = largerStem(melodyAlias, s);
             } else if (RESIDUAL_ID.equals(id)) {
-                if (melodyResidual == null) melodyResidual = s;
-            } else if (melodyOther == null) {
-                melodyOther = s;
+                melodyResidual = largerStem(melodyResidual, s);
+            } else {
+                melodyOther = largerStem(melodyOther, s);
             }
         }
-        // Prefer alias → residual → first named other (piano/guitars). 2026-07-19
+        // Explicit user-produced Melody aliases win. Otherwise use the strongest
+        // named/residual candidate instead of allowing a tiny residual scrap to
+        // discard a complete piano or guitar stem.
         String pickReason;
         if (melodyAlias != null) {
             byZone[3] = melodyAlias;
             pickReason = "alias";
+        } else if (melodyOther != null && (melodyResidual == null
+                || melodyOther.file.length() > melodyResidual.file.length())) {
+            byZone[3] = melodyOther;
+            pickReason = "largest_named";
         } else if (melodyResidual != null) {
             byZone[3] = melodyResidual;
-            pickReason = "residual_over_named";
+            pickReason = "largest_residual";
         } else {
             byZone[3] = melodyOther;
             pickReason = "named_other";
@@ -1758,7 +1765,7 @@ public final class LalalClient {
             d.put("hadElectric", z3Ids.toString().contains("electric_guitar"));
             d.put("hadPiano", z3Ids.toString().contains("piano"));
             d.put("hadResidual", z3Ids.toString().contains(RESIDUAL_ID));
-            d.put("discardedNamed", "residual_over_named".equals(pickReason)
+            d.put("discardedNamed", "largest_residual".equals(pickReason)
                     && (z3Ids.toString().contains("acoustic_guitar")
                     || z3Ids.toString().contains("electric_guitar")
                     || z3Ids.toString().contains("piano")));
@@ -1770,6 +1777,12 @@ public final class LalalClient {
         } catch (Exception ignored) {}
         // #endregion
         return out;
+    }
+
+    private static StemFile largerStem(StemFile current, StemFile candidate) {
+        if (candidate == null || candidate.file == null) return current;
+        if (current == null || current.file == null) return candidate;
+        return candidate.file.length() > current.file.length() ? candidate : current;
     }
 
     /** @deprecated Prefer overload with premix flag (defaults live). */

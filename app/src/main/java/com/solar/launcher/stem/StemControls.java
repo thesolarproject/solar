@@ -563,8 +563,9 @@ public final class StemControls {
      */
     public static boolean isIntentionalPadOptionsHold(boolean holdFired, long physicalHoldMs) {
         if (!holdFired) return false;
-        // If physicalHoldMs <= 0 (e.g. rapid tap / clock skew), do not treat as intentional hold.
-        if (physicalHoldMs <= 0L) return false;
+        // Some Y1 KeyEvent paths omit usable event times. The fired hold timer is the
+        // authoritative fallback; otherwise a real hold is dismissed as a quick tap.
+        if (physicalHoldMs <= 0L) return true;
         return physicalHoldMs >= mashupOptionsHoldMs();
     }
 
@@ -575,7 +576,8 @@ public final class StemControls {
      */
     public static boolean shouldUndoSpuriousPadOptions(boolean holdFired, boolean menuShowing,
             long physicalHoldMs) {
-        return holdFired && menuShowing && physicalHoldMs < mashupOptionsHoldMs();
+        return holdFired && menuShowing && physicalHoldMs > 0L
+                && physicalHoldMs < mashupOptionsHoldMs();
     }
 
     /**

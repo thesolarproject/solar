@@ -31,7 +31,7 @@ public final class SolarOnlyContextModalContractTest {
                 "com.android.settings", false, false));
         assertFalse(GlobalInputPolicy.shouldLaunchSolarOnBackLong(
                 "org.rockbox", false, false));
-        assertEquals(25, GlobalInputPolicy.POLICY_REV);
+        assertEquals(27, GlobalInputPolicy.POLICY_REV);
         // H4: short POWER sleeps only when lit at DOWN (wake must not re-sleep).
         assertTrue(GlobalInputPolicy.shouldForcePowerTapSleep(100L, true));
         assertFalse(GlobalInputPolicy.shouldForcePowerTapSleep(100L, false));

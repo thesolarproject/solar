@@ -76,6 +76,19 @@ public class MusicLibraryStore extends SolarDbHelper {
             "SELECT DISTINCT genre FROM tracks WHERE TRIM(genre) != ''"
                     + " AND genre != 'Unknown Genre' COLLATE NOCASE"
                     + " ORDER BY genre COLLATE NOCASE ASC";
+    /** Bounded local-only Discover signals, ordered by representation in the library. */
+    static final String SQL_TOP_DISCOVER_ARTISTS =
+            "SELECT artist, COUNT(*) AS track_count FROM tracks"
+                    + " WHERE TRIM(artist) != ''"
+                    + " AND artist != 'Unknown Artist' COLLATE NOCASE"
+                    + " GROUP BY artist COLLATE NOCASE"
+                    + " ORDER BY track_count DESC, artist COLLATE NOCASE ASC LIMIT ?";
+    static final String SQL_TOP_DISCOVER_GENRES =
+            "SELECT genre, COUNT(*) AS track_count FROM tracks"
+                    + " WHERE TRIM(genre) != ''"
+                    + " AND genre != 'Unknown Genre' COLLATE NOCASE"
+                    + " GROUP BY genre COLLATE NOCASE"
+                    + " ORDER BY track_count DESC, genre COLLATE NOCASE ASC LIMIT ?";
     static final String SQL_DISTINCT_YEARS =
             "SELECT DISTINCT year FROM tracks WHERE year > 0 ORDER BY year ASC";
     // 2026-07-20 — Genre/year song drills under SEGMENTED (page, don’t loadAll).
@@ -330,6 +343,24 @@ public class MusicLibraryStore extends SolarDbHelper {
         return 0;
     }
 
+    /** Absolute paths only, used to preserve indexed rows when one storage root is unreadable. */
+    public Set<String> loadPaths() {
+        Set<String> out = new HashSet<String>();
+        SQLiteDatabase db = getReadableDatabase();
+        Cursor c = null;
+        try {
+            c = db.query("tracks", new String[] { "path" },
+                    null, null, null, null, null);
+            while (c.moveToNext()) {
+                String path = c.getString(0);
+                if (path != null && path.length() > 0) out.add(path);
+            }
+        } finally {
+            if (c != null) c.close();
+        }
+        return out;
+    }
+
     /**
      * 2026-07-20 — Page of tracks for SEGMENTED ListView (LIMIT/OFFSET, path order).
      * Layman: load one chunk of the big list so scrolling does not need every song in RAM.
@@ -519,6 +550,16 @@ public class MusicLibraryStore extends SolarDbHelper {
         return queryDistinctNames(SQL_DISTINCT_GENRES);
     }
 
+    /** Most represented artist tags for local Discover ranking; never leaves the device. */
+    public List<String> listTopArtistsForDiscover(int limit) {
+        return queryBoundedNames(SQL_TOP_DISCOVER_ARTISTS, limit);
+    }
+
+    /** Most represented genre tags for local Discover ranking; never leaves the device. */
+    public List<String> listTopGenresForDiscover(int limit) {
+        return queryBoundedNames(SQL_TOP_DISCOVER_GENRES, limit);
+    }
+
     /**
      * 2026-07-20 — DISTINCT release years as decimal strings for Tier-0 Year menu.
      * Layman: list years that songs actually have tagged, without a full library walk.
@@ -622,6 +663,23 @@ public class MusicLibraryStore extends SolarDbHelper {
         Cursor c = null;
         try {
             c = db.rawQuery(sql, null);
+            while (c.moveToNext()) {
+                String name = c.getString(0);
+                if (name != null && !name.trim().isEmpty()) out.add(name.trim());
+            }
+        } finally {
+            if (c != null) c.close();
+        }
+        return out;
+    }
+
+    private List<String> queryBoundedNames(String sql, int requestedLimit) {
+        List<String> out = new ArrayList<String>();
+        int limit = Math.max(1, Math.min(50, requestedLimit));
+        SQLiteDatabase db = getReadableDatabase();
+        Cursor c = null;
+        try {
+            c = db.rawQuery(sql, new String[] { String.valueOf(limit) });
             while (c.moveToNext()) {
                 String name = c.getString(0);
                 if (name != null && !name.trim().isEmpty()) out.add(name.trim());

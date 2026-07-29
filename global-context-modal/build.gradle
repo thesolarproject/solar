@@ -3,20 +3,37 @@ plugins {
 }
 
 // 2026-07-05 — Standalone companion APK; platform keystore matches Solar for OVERLAY_TRIGGER parity.
+def configuredBash = project.findProperty("SOLAR_BASH") ?: System.getenv("SOLAR_BASH")
+def windowsGitBash = file("${System.getenv("ProgramFiles") ?: "C:/Program Files"}/Git/bin/bash.exe")
+def solarBash = configuredBash
+        ?: (System.getProperty("os.name").toLowerCase().contains("windows")
+        && windowsGitBash.isFile() ? windowsGitBash.absolutePath : "bash")
 def platformKeystore = file("${rootProject.projectDir}/.gradle/platform.keystore")
+def platformKeyPk8 = project.findProperty("SOLAR_PLATFORM_KEY_PK8")
+        ?: System.getenv("SOLAR_PLATFORM_KEY_PK8") ?: ""
+def platformKeyPem = project.findProperty("SOLAR_PLATFORM_KEY_PEM")
+        ?: System.getenv("SOLAR_PLATFORM_KEY_PEM") ?: ""
+def platformSigningRequested = platformKeystore.isFile()
+        || (platformKeyPk8.toString().trim() && platformKeyPem.toString().trim())
 
 tasks.register("ensurePlatformKeystore") {
     doLast {
         if (!platformKeystore.isFile()) {
+            if (!platformKeyPk8.toString().trim() || !platformKeyPem.toString().trim()) {
+                throw new GradleException(
+                        "Release/platform signing needs SOLAR_PLATFORM_KEY_PK8 and "
+                                + "SOLAR_PLATFORM_KEY_PEM. Debug/unit-test builds use "
+                                + "the normal local Android debug key when they are absent.")
+            }
             exec {
                 workingDir rootProject.projectDir
-                commandLine "bash", "scripts/ensure-platform-keystore.sh"
+                environment "SOLAR_PLATFORM_KEY_PK8", platformKeyPk8.toString()
+                environment "SOLAR_PLATFORM_KEY_PEM", platformKeyPem.toString()
+                commandLine solarBash, "scripts/ensure-platform-keystore.sh"
             }
         }
     }
 }
-
-tasks.named("preBuild").configure { dependsOn("ensurePlatformKeystore") }
 
 android {
     namespace 'com.solar.launcher.globalcontext'
@@ -45,7 +62,9 @@ android {
 
     buildTypes {
         debug {
-            signingConfig signingConfigs.platform
+            if (platformSigningRequested) {
+                signingConfig signingConfigs.platform
+            }
         }
         release {
             minifyEnabled false
@@ -73,6 +92,10 @@ android {
             ]
         }
     }
+}
+
+afterEvaluate {
+    tasks.named("preReleaseBuild").configure { dependsOn("ensurePlatformKeystore") }
 }
 
 dependencies {

@@ -7,6 +7,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 
@@ -155,7 +156,7 @@ public final class OverlayMenuClient {
                 callback.onMenuResult(index);
             }
         };
-        app.registerReceiver(receiver,
+        registerResultReceiver(app, receiver,
                 new IntentFilter(OverlayMenuContract.ACTION_APP_MENU_RESULT));
     }
 
@@ -175,8 +176,25 @@ public final class OverlayMenuClient {
                 callback.onDialogResult(index);
             }
         };
-        app.registerReceiver(receiver,
+        registerResultReceiver(app, receiver,
                 new IntentFilter(OverlayMenuContract.ACTION_DIALOG_RESULT));
+    }
+
+    /**
+     * Results can come from Solar's separately installed companion, so the
+     * receiver is exported on Android 13+ but restricted to Solar's
+     * signature/system permission on every supported API.
+     */
+    private static void registerResultReceiver(Context app, BroadcastReceiver receiver,
+            IntentFilter filter) {
+        if (Build.VERSION.SDK_INT >= 33) {
+            app.registerReceiver(receiver, filter,
+                    OverlayMenuContract.PERMISSION_OVERLAY_TRIGGER, null,
+                    Context.RECEIVER_EXPORTED);
+        } else {
+            app.registerReceiver(receiver, filter,
+                    OverlayMenuContract.PERMISSION_OVERLAY_TRIGGER, null);
+        }
     }
 
     /** Soft policy — unsigned hooks still work; voluntary API should opt in. */

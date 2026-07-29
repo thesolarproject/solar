@@ -40,5 +40,12 @@ public class WifiScanFilterTest {
         if (!"HomeNet".equals(WifiScanFilter.displayableConnectedSsid("\"HomeNet\""))) {
             throw new AssertionError("real ssid");
         }
+        if (!"Cafe \"East\"".equals(
+                WifiScanFilter.displayableConnectedSsid("\"Cafe \\\"East\\\"\""))) {
+            throw new AssertionError("escaped quote in real ssid");
+        }
+        if (!" Guest ".equals(WifiScanFilter.displayableConnectedSsid("\" Guest \""))) {
+            throw new AssertionError("valid surrounding spaces");
+        }
     }
 }

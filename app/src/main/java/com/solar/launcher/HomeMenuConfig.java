@@ -23,7 +23,7 @@ public final class HomeMenuConfig {
      * Schema 7 seeded it; schema 6 made order user-editable.
      * Was: HOME_SCHEMA=7 with tile on default home. Reversal: HOME_SCHEMA=7 + re-add id to defaults.
      */
-    private static final int HOME_SCHEMA = 8;
+    private static final int HOME_SCHEMA = 9;
 
     public static final String ID_NOW_PLAYING = "now_playing";
     public static final String ID_MUSIC = "music";
@@ -35,6 +35,7 @@ public final class HomeMenuConfig {
     public static final String ID_PC_UPLOAD = "pc_upload";
     public static final String ID_PODCASTS = "podcasts";
     public static final String ID_SOULSEEK = "soulseek";
+    public static final String ID_DOWNLOADS = "downloads";
     /**
      * 2026-07-15 — Legacy home id; schema 8 removes from home. Kept for prefs cleanup / connectivity id.
      * Was: Music YouTube Audio home shortcut. Reversal: re-add to SOLAR_HOME_EXTRAS + DEFAULT_ORDER.
@@ -63,7 +64,7 @@ public final class HomeMenuConfig {
      * Was: pc_upload, podcasts, soulseek, themes, apps. Reversal: restore that list.
      */
     private static final List<String> SOLAR_HOME_EXTRAS = Arrays.asList(
-            ID_PC_UPLOAD, ID_PODCASTS, ID_SOULSEEK, ID_THEMES, ID_APPS);
+            ID_PC_UPLOAD, ID_PODCASTS, ID_SOULSEEK, ID_DOWNLOADS, ID_THEMES, ID_APPS);
 
     /**
      * Default enabled home shortcuts (coming-soon opt-in items omitted).
@@ -72,8 +73,8 @@ public final class HomeMenuConfig {
      * Was: np, music, radio, bt, settings, pc_upload, podcasts, soulseek.
      */
     private static final String DEFAULT_ORDER = String.join(",",
-            ID_NOW_PLAYING, ID_MUSIC, ID_RADIO, ID_BLUETOOTH, ID_SETTINGS,
-            ID_PC_UPLOAD, ID_PODCASTS, ID_SOULSEEK);
+            ID_NOW_PLAYING, ID_MUSIC, ID_SOULSEEK, ID_PODCASTS, ID_DOWNLOADS,
+            ID_RADIO, ID_BLUETOOTH, ID_SETTINGS, ID_PC_UPLOAD);
 
     /**
      * 2026-07-15 — Default catalog sequence + editor listing order.
@@ -95,23 +96,10 @@ public final class HomeMenuConfig {
     /** Editor catalog; hides Radio until its debug gate is on. */
     public static List<Entry> loadEditorCatalogEntries(SharedPreferences prefs) {
         List<Entry> out = new ArrayList<Entry>();
-        Set<String> seen = new HashSet<String>();
-        for (String id : loadHomeOrderIds(prefs)) {
-            if (ID_MORE.equals(id)) continue;
-            if (isHiddenByExperimentGate(id, prefs)) continue;
-            Entry e = find(id);
-            if (e != null) {
-                out.add(e);
-                seen.add(e.id);
-            }
-        }
         for (String id : FIXED_HOME_ORDER) {
             if (isHiddenByExperimentGate(id, prefs)) continue;
             Entry e = find(id);
-            if (e != null && !seen.contains(e.id)) {
-                out.add(e);
-                seen.add(e.id);
-            }
+            if (e != null) out.add(e);
         }
         return out;
     }
@@ -205,13 +193,27 @@ public final class HomeMenuConfig {
         }
         // 2026-07-15 — Schema 8: Music → YouTube only; strip home youtube_audio tile.
         // Was: kept tiled after schema 7. Reversal: stop at schema 7 (leave id on home).
-        if (schema < HOME_SCHEMA) {
+        if (schema < 8) {
             List<String> home = new ArrayList<String>(loadHomeOrderIds(prefs));
             List<String> more = new ArrayList<String>(loadMoreOrderIds(prefs));
             home.remove(ID_YOUTUBE_AUDIO);
             more.remove(ID_YOUTUBE_AUDIO);
             saveOrder(prefs, home);
             saveMoreOrder(prefs, more);
+            schema = 8;
+        }
+        // Schema 9: expose the durable transfer queue beside Get Music.
+        if (schema < HOME_SCHEMA) {
+            List<String> home = new ArrayList<String>(loadHomeOrderIds(prefs));
+            List<String> more = new ArrayList<String>(loadMoreOrderIds(prefs));
+            if (!home.contains(ID_DOWNLOADS) && !more.contains(ID_DOWNLOADS)) {
+                int afterGetMusic = home.indexOf(ID_SOULSEEK);
+                int afterPodcasts = home.indexOf(ID_PODCASTS);
+                int insertAfter = afterGetMusic >= 0 ? afterGetMusic : afterPodcasts;
+                if (insertAfter >= 0) home.add(insertAfter + 1, ID_DOWNLOADS);
+                else home.add(ID_DOWNLOADS);
+                saveOrder(prefs, home);
+            }
             schema = HOME_SCHEMA;
         }
         if (prefs.getInt(PREF_HOME_SCHEMA, 1) < schema) {
@@ -254,6 +256,7 @@ public final class HomeMenuConfig {
             // Legacy id kept findable for prefs cleanup; not in SOLAR_HOME_EXTRAS / editor.
             new Entry(ID_YOUTUBE_AUDIO, R.string.home_menu_youtube_audio, null, R.drawable.music_list, "YouTube Audio", false),
             new Entry(ID_SOULSEEK, R.string.home_menu_soulseek, null, R.drawable.music_list, "Get Music", false),
+            new Entry(ID_DOWNLOADS, R.string.home_menu_downloads, null, R.drawable.file_sync, "Downloads", false),
             new Entry(ID_THEMES, R.string.home_menu_themes, "theme", R.drawable.setting_circle, "Themes", false),
             new Entry(ID_VIDEOS, R.string.home_menu_videos, "video", R.drawable.music_list, null, false),
             new Entry(ID_PHOTOS, R.string.home_menu_photos, "photos", R.drawable.music_list, null, false),
@@ -585,6 +588,8 @@ public final class HomeMenuConfig {
         List<String> ids = new ArrayList<String>(loadHomeOrderIds(prefs));
         if (from >= ids.size() || to >= ids.size()) return false;
         String fromId = ids.get(from);
+        String toId = ids.get(to);
+        if (ID_SETTINGS.equals(fromId) || ID_SETTINGS.equals(toId)) return false;
         ids.remove(from);
         ids.add(to, fromId);
         saveOrder(prefs, ids);

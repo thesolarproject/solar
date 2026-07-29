@@ -33,7 +33,8 @@ public class SystemFontBridgeTest {
     @Test
     public void sidecarFileForRoot_usesHiddenSolarDir() {
         File sidecar = SystemFontBridge.sidecarFileForRoot(new File("/storage/sdcard1"));
-        if (!sidecar.getPath().equals("/storage/sdcard1/.solar/system-font.ttf")) {
+        if (!sidecar.getPath().replace('\\', '/')
+                .endsWith("/storage/sdcard1/.solar/system-font.ttf")) {
             throw new AssertionError("unexpected sidecar path: " + sidecar);
         }
     }

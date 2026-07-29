@@ -2,18 +2,38 @@ plugins {
     alias(libs.plugins.android.application)
 }
 
+def configuredBash = project.findProperty("SOLAR_BASH") ?: System.getenv("SOLAR_BASH")
+def windowsGitBash = file("${System.getenv("ProgramFiles") ?: "C:/Program Files"}/Git/bin/bash.exe")
+def solarBash = configuredBash
+        ?: (System.getProperty("os.name").toLowerCase().contains("windows")
+        && windowsGitBash.isFile() ? windowsGitBash.absolutePath : "bash")
+
 // 2026-07-05 — versionName/versionCode stamped from SOURCE_DATE_EPOCH at build start (not git commit time).
 // syncReleaseVersion → sync-gradle-version.sh; must match OTA tag, About UI, and Reach client version.
 // When changing: CI records SOURCE_DATE_EPOCH at checkout in .github/workflows/build-release.yml.
 
 def platformKeystore = file("${rootProject.projectDir}/.gradle/platform.keystore")
+def platformKeyPk8 = project.findProperty("SOLAR_PLATFORM_KEY_PK8")
+        ?: System.getenv("SOLAR_PLATFORM_KEY_PK8") ?: ""
+def platformKeyPem = project.findProperty("SOLAR_PLATFORM_KEY_PEM")
+        ?: System.getenv("SOLAR_PLATFORM_KEY_PEM") ?: ""
+def platformSigningRequested = platformKeystore.isFile()
+        || (platformKeyPk8.toString().trim() && platformKeyPem.toString().trim())
 
 tasks.register("ensurePlatformKeystore") {
     doLast {
         if (!platformKeystore.isFile()) {
+            if (!platformKeyPk8.toString().trim() || !platformKeyPem.toString().trim()) {
+                throw new GradleException(
+                        "Release/platform signing needs SOLAR_PLATFORM_KEY_PK8 and "
+                                + "SOLAR_PLATFORM_KEY_PEM. Debug/unit-test builds use "
+                                + "the normal local Android debug key when they are absent.")
+            }
             exec {
                 workingDir rootProject.projectDir
-                commandLine "bash", "scripts/ensure-platform-keystore.sh"
+                environment "SOLAR_PLATFORM_KEY_PK8", platformKeyPk8.toString()
+                environment "SOLAR_PLATFORM_KEY_PEM", platformKeyPem.toString()
+                commandLine solarBash, "scripts/ensure-platform-keystore.sh"
             }
         }
     }
@@ -23,7 +43,7 @@ tasks.register("syncY1Assets") {
     doLast {
         exec {
             workingDir rootProject.projectDir
-            commandLine "bash", "solar-rom/scripts/sync-y1-assets.sh"
+            commandLine solarBash, "solar-rom/scripts/sync-y1-assets.sh"
         }
     }
 }
@@ -33,12 +53,12 @@ tasks.register("syncReleaseVersion") {
         exec {
             workingDir rootProject.projectDir
             environment "SOLAR_RELEASE_CHANNEL", System.getenv("SOLAR_RELEASE_CHANNEL") ?: ""
-            commandLine "bash", "solar-rom/scripts/sync-gradle-version.sh"
+            commandLine solarBash, "solar-rom/scripts/sync-gradle-version.sh"
         }
     }
 }
 
-tasks.named("preBuild").configure { dependsOn("ensurePlatformKeystore", "syncY1Assets") }
+tasks.named("preBuild").configure { dependsOn("syncY1Assets") }
 
 android {
     namespace 'com.solar.launcher'
@@ -77,12 +97,35 @@ android {
         buildConfigField "String", "SOLAR_DIAG_URL", "\"${solarDiagUrl}\""
         buildConfigField "String", "SOLAR_DIAG_TOKEN", "\"${solarDiagToken}\""
 
+        // Official YouTube Data API only. Values come from ignored Gradle properties or CI.
+        // A TV/limited-input OAuth client secret is a distributed-client identifier, not a
+        // confidential secret; Google currently requires it for device-code polling.
+        def quoteBuildConfig = { Object raw ->
+            def value = raw != null ? raw.toString() : ""
+            return "\"" + value
+                    .replace("\\", "\\\\")
+                    .replace("\"", "\\\"")
+                    .replace("\r", "\\r")
+                    .replace("\n", "\\n") + "\""
+        }
+        def youtubeApiKey = project.findProperty("YOUTUBE_DATA_API_KEY")
+                ?: System.getenv("YOUTUBE_DATA_API_KEY") ?: ""
+        def youtubeOauthClientId = project.findProperty("YOUTUBE_OAUTH_CLIENT_ID")
+                ?: System.getenv("YOUTUBE_OAUTH_CLIENT_ID") ?: ""
+        def youtubeOauthClientSecret = project.findProperty("YOUTUBE_OAUTH_CLIENT_SECRET")
+                ?: System.getenv("YOUTUBE_OAUTH_CLIENT_SECRET") ?: ""
+        buildConfigField "String", "YOUTUBE_DATA_API_KEY", quoteBuildConfig(youtubeApiKey)
+        buildConfigField "String", "YOUTUBE_OAUTH_CLIENT_ID", quoteBuildConfig(youtubeOauthClientId)
+        buildConfigField "String", "YOUTUBE_OAUTH_CLIENT_SECRET", quoteBuildConfig(youtubeOauthClientSecret)
+
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
         debug {
-            signingConfig signingConfigs.platform
+            if (platformSigningRequested) {
+                signingConfig signingConfigs.platform
+            }
         }
         release {
             minifyEnabled false
@@ -98,6 +141,10 @@ android {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
     }
+    lint {
+        // Freeze inherited findings so lint remains a regression gate for new work.
+        baseline = file("lint-baseline.xml")
+    }
     sourceSets {
         main {
             java.srcDirs += 'src/api21/java'
@@ -112,7 +159,9 @@ android {
 }
 
 afterEvaluate {
-    tasks.named("preReleaseBuild").configure { dependsOn("syncReleaseVersion") }
+    tasks.named("preReleaseBuild").configure {
+        dependsOn("syncReleaseVersion", "ensurePlatformKeystore")
+    }
     // adb / local debug APKs get the same UTC build-start stamp as release.
     tasks.named("preDebugBuild").configure { dependsOn("syncReleaseVersion") }
 }
@@ -127,6 +176,7 @@ dependencies {
     testImplementation libs.junit
     testImplementation 'org.json:json:20240303'
     testImplementation 'net.sf.kxml:kxml2:2.3.0'
+    testImplementation 'com.squareup.okhttp3:mockwebserver:3.12.13'
     androidTestImplementation libs.ext.junit
     androidTestImplementation 'androidx.test:runner:1.5.2'
     androidTestImplementation 'androidx.test:core:1.5.0'

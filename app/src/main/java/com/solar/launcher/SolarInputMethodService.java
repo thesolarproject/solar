@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.inputmethodservice.InputMethodService;
 import android.os.SystemClock;
+import android.text.InputType;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
@@ -74,7 +75,8 @@ public class SolarInputMethodService extends InputMethodService implements Solar
                 try {
                     org.json.JSONObject d = new org.json.JSONObject();
                     d.put("idx", wheelKeyboard.getIndex());
-                    d.put("ch", wheelKeyboard.charAt(wheelKeyboard.getIndex()));
+                    d.put("ch", wheelKeyboard.isPasswordMode()
+                            ? "<redacted>" : wheelKeyboard.charAt(wheelKeyboard.getIndex()));
                     Debug670453Log.log(SolarInputMethodService.this,
                             "SolarInputMethodService.touchConfirm", "confirm runnable", "H5", d);
                 } catch (Exception ignored) {}
@@ -265,6 +267,11 @@ public class SolarInputMethodService extends InputMethodService implements Solar
         sessionTitle = attribute != null && attribute.label != null
                 ? attribute.label.toString() : getString(R.string.solar_ime_label);
         wheelKeyboard.reset();
+        wheelKeyboard.setGroupedMode(WheelKeyboardLayout.isGrouped(this));
+        wheelKeyboard.setDigitOnlyMode(attribute != null
+                && isNumericPasswordInputType(attribute.inputType));
+        wheelKeyboard.setPasswordMode(attribute != null
+                && isPasswordInputType(attribute.inputType));
         seedBufferFromInputConnection();
         if (!SolarImeKeyGate.arm(this)) {
             // #region agent log
@@ -325,7 +332,8 @@ public class SolarInputMethodService extends InputMethodService implements Solar
         a5ShellHost.applyShellTheme(sessionTitle);
         String buffer = wheelKeyboard.getBuffer();
         String placeholder = getString(R.string.solar_ime_type_hint);
-        String display = buffer.length() == 0 ? placeholder : buffer;
+        String display = buffer.length() == 0
+                ? placeholder : wheelKeyboard.renderBuffer(true);
         a5ShellHost.getKeyboardUi().setHintText(getString(R.string.keyboard_hint_a5));
         a5ShellHost.getKeyboardUi().refresh(wheelKeyboard, null, display, buffer.length() == 0);
     }
@@ -579,7 +587,8 @@ public class SolarInputMethodService extends InputMethodService implements Solar
         // #region agent log
         try {
             org.json.JSONObject d = new org.json.JSONObject();
-            d.put("selected", selected);
+            d.put("selected", wheelKeyboard.isPasswordMode()
+                    ? "<redacted>" : selected);
             d.put("icNull", getCurrentInputConnection() == null);
             Debug670453Log.log(this, "SolarInputMethodService.applyCenterSelection",
                     "enter", "H4", d);
@@ -587,6 +596,14 @@ public class SolarInputMethodService extends InputMethodService implements Solar
         // #endregion
         if (SolarWheelKeyboardController.TOKEN_DEL.equals(selected)) {
             deleteOneChar();
+        } else if (SolarWheelKeyboardController.TOKEN_WORD.equals(selected)) {
+            deleteOneWord();
+        } else if (SolarWheelKeyboardController.TOKEN_LEFT.equals(selected)) {
+            moveEditorCursor(-1);
+        } else if (SolarWheelKeyboardController.TOKEN_RIGHT.equals(selected)) {
+            moveEditorCursor(1);
+        } else if (SolarWheelKeyboardController.TOKEN_VISIBILITY.equals(selected)) {
+            wheelKeyboard.togglePasswordVisibility();
         } else if (SolarWheelKeyboardController.TOKEN_CONN.equals(selected)) {
             onEnterRequested();
         } else if (SolarWheelKeyboardController.TOKEN_SPC.equals(selected)) {
@@ -598,15 +615,41 @@ public class SolarInputMethodService extends InputMethodService implements Solar
     }
 
     private void insertText(String text) {
-        wheelKeyboard.mediaSpace();
+        wheelKeyboard.insertText(text);
         commitTextTiered(text);
     }
 
     private void deleteOneChar() {
-        if (wheelKeyboard.getBuffer().length() > 0) {
-            wheelKeyboard.mediaDelete();
+        WheelTextEditor.State before = new WheelTextEditor.State(
+                wheelKeyboard.getBuffer(), wheelKeyboard.getCursor());
+        wheelKeyboard.mediaDelete();
+        WheelTextEditor.State after = new WheelTextEditor.State(
+                wheelKeyboard.getBuffer(), wheelKeyboard.getCursor());
+        int count = WheelTextEditor.deletedBeforeCursorCount(before, after);
+        if (count > 0) commitDelete(count);
+    }
+
+    private void deleteOneWord() {
+        WheelTextEditor.State before = new WheelTextEditor.State(
+                wheelKeyboard.getBuffer(), wheelKeyboard.getCursor());
+        wheelKeyboard.deleteWord();
+        WheelTextEditor.State after = new WheelTextEditor.State(
+                wheelKeyboard.getBuffer(), wheelKeyboard.getCursor());
+        int count = WheelTextEditor.deletedBeforeCursorCount(before, after);
+        if (count > 0) commitDelete(count);
+    }
+
+    private void moveEditorCursor(int direction) {
+        InputConnection ic = getCurrentInputConnection();
+        if (ic != null) {
+            int keyCode = direction < 0 ? KeyEvent.KEYCODE_DPAD_LEFT
+                    : KeyEvent.KEYCODE_DPAD_RIGHT;
+            try {
+                ic.sendKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, keyCode));
+                ic.sendKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, keyCode));
+            } catch (Exception ignored) {}
         }
-        commitDelete(1);
+        wheelKeyboard.moveCursor(direction);
     }
 
     private void suppressFrameworkImeWindow() {
@@ -647,10 +690,30 @@ public class SolarInputMethodService extends InputMethodService implements Solar
         if (ic == null) return;
         try {
             CharSequence before = ic.getTextBeforeCursor(512, 0);
-            if (before != null && before.length() > 0) {
-                wheelKeyboard.setBuffer(before.toString());
-            }
+            CharSequence after = ic.getTextAfterCursor(512, 0);
+            String beforeText = before != null ? before.toString() : "";
+            String afterText = after != null ? after.toString() : "";
+            wheelKeyboard.setBuffer(beforeText + afterText);
+            wheelKeyboard.setCursor(beforeText.length());
         } catch (Exception ignored) {}
+    }
+
+    static boolean isPasswordInputType(int inputType) {
+        int inputClass = inputType & InputType.TYPE_MASK_CLASS;
+        int variation = inputType & InputType.TYPE_MASK_VARIATION;
+        if (inputClass == InputType.TYPE_CLASS_TEXT) {
+            return variation == InputType.TYPE_TEXT_VARIATION_PASSWORD
+                    || variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD
+                    || variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD;
+        }
+        return inputClass == InputType.TYPE_CLASS_NUMBER
+                && variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD;
+    }
+
+    static boolean isNumericPasswordInputType(int inputType) {
+        return (inputType & InputType.TYPE_MASK_CLASS) == InputType.TYPE_CLASS_NUMBER
+                && (inputType & InputType.TYPE_MASK_VARIATION)
+                == InputType.TYPE_NUMBER_VARIATION_PASSWORD;
     }
 
     static boolean commitTextTiered(Context ctx, InputConnection ic, CharSequence text) {
@@ -676,7 +739,8 @@ public class SolarInputMethodService extends InputMethodService implements Solar
         // #region agent log
         try {
             org.json.JSONObject d = new org.json.JSONObject();
-            d.put("text", text != null ? text.toString() : "");
+            d.put("text", wheelKeyboard.isPasswordMode()
+                    ? "<redacted>" : (text != null ? text.toString() : ""));
             d.put("icNull", ic == null);
             d.put("ok", ok);
             Debug670453Log.log(this, "SolarInputMethodService.commitTextTiered",

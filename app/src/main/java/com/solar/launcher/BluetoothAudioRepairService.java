@@ -17,6 +17,7 @@ public class BluetoothAudioRepairService extends Service {
     private BluetoothA2dp a2dp;
     private BluetoothDevice target;
     private boolean profileRequested;
+    private boolean shuttingDown;
     private int attempts;
 
     private final BluetoothProfile.ServiceListener profileListener =
@@ -30,7 +31,12 @@ public class BluetoothAudioRepairService extends Service {
 
         @Override
         public void onServiceDisconnected(int profile) {
-            if (profile == BluetoothProfile.A2DP) a2dp = null;
+            if (profile != BluetoothProfile.A2DP) return;
+            a2dp = null;
+            profileRequested = false;
+            if (shuttingDown) return;
+            BluetoothDiagnostics.recordProfileFailure(BluetoothAudioRepairService.this);
+            if (attempts < 5) scheduleRepair(500L);
         }
     };
 
@@ -53,6 +59,7 @@ public class BluetoothAudioRepairService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        shuttingDown = false;
         BluetoothDevice resolved = BluetoothAudioRepair.resolveDevice(this, intent);
         if (resolved != null && BluetoothAudioRepair.isLikelyAudioSink(resolved)) {
             target = resolved;
@@ -60,8 +67,8 @@ public class BluetoothAudioRepairService extends Service {
         }
         BluetoothAudioRepair.cancelDiscovery();
         BluetoothAudioRepair.forceA2dpRoute(this);
-        ensureProfile();
         attempts = 0;
+        ensureProfile();
         scheduleRepair(0);
         handler.removeCallbacks(stopRunnable);
         handler.postDelayed(stopRunnable, 15000L);
@@ -70,6 +77,7 @@ public class BluetoothAudioRepairService extends Service {
 
     @Override
     public void onDestroy() {
+        shuttingDown = true;
         handler.removeCallbacks(repairRunnable);
         handler.removeCallbacks(stopRunnable);
         try {
@@ -112,11 +120,14 @@ public class BluetoothAudioRepairService extends Service {
         if (target != null) {
             boolean ok = BluetoothAudioRepair.connectA2dp(this, a2dp, target, true);
             boolean connected = BluetoothAudioRepair.isA2dpConnected(a2dp, target);
+            BluetoothDiagnostics.recordReconnectAttempt(
+                    this, target, attempts + 1, ok, connected);
             Log.i(BluetoothAudioRepair.TAG, "repair attempt=" + attempts
                     + " ok=" + ok + " connected=" + connected
                     + " address=" + target.getAddress());
             BluetoothAudioRepair.forceA2dpRoute(this);
-            if (connected && attempts >= 2) {
+            if (connected) {
+                stopSelf();
                 return;
             }
         }
@@ -125,13 +136,17 @@ public class BluetoothAudioRepairService extends Service {
 
     private void retryLater() {
         attempts++;
-        long delay;
-        if (attempts == 1) delay = 500L;
-        else if (attempts == 2) delay = 1500L;
-        else if (attempts == 3) delay = 2500L;
-        else if (attempts == 4) delay = 4000L;
-        else if (attempts == 5) delay = 6000L;
-        else return;
+        long delay = retryDelayMs(attempts);
+        if (delay < 0L) return;
         scheduleRepair(delay);
+    }
+
+    static long retryDelayMs(int attempt) {
+        if (attempt == 1) return 500L;
+        if (attempt == 2) return 1500L;
+        if (attempt == 3) return 2500L;
+        if (attempt == 4) return 4000L;
+        if (attempt == 5) return 6000L;
+        return -1L;
     }
 }

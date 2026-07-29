@@ -293,16 +293,18 @@ public final class PodcastLibrary {
         Exception last = null;
         for (String tryUrl : httpsThenHttpVariants(urlStr)) {
             try {
-                SolarHttp.downloadToFile(tryUrl, tmp, progress);
-                if (dest.isFile()) dest.delete();
+                long resumeFrom = tmp.isFile() ? tmp.length() : 0L;
+                SolarHttp.downloadToFile(tryUrl, tmp, progress, 0L, null, null, resumeFrom);
+                if (!tmp.isFile() || tmp.length() <= 0) {
+                    throw new Exception("Podcast download is empty");
+                }
+                if (dest.exists()) throw new Exception("Podcast destination already exists");
                 if (!tmp.renameTo(dest)) {
-                    copyFile(tmp, dest);
-                    tmp.delete();
+                    throw new Exception("Could not publish podcast; partial file was kept");
                 }
                 return;
             } catch (Exception e) {
                 last = e;
-                if (tmp.isFile()) tmp.delete();
             }
         }
         throw last != null ? last : new Exception("Download failed");

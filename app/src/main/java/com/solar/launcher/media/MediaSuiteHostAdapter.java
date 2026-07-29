@@ -72,8 +72,12 @@ public final class MediaSuiteHostAdapter implements MediaSuiteHost.Host {
         act.mediaOpenRadioNetSearchKeyboard(prefill);
     }
 
-    @Override public void requestYouTubeSave(YouTubeVideo video, boolean audioOnly) {
-        act.mediaRequestYouTubeSave(video, audioOnly);
+    @Override public void searchSoulseekForYouTube(YouTubeVideo video) {
+        act.mediaSearchSoulseekForYouTube(video);
+    }
+
+    @Override public void openAuthorizedDirectAudioUrl(String url) {
+        act.mediaOpenAuthorizedDirectAudioUrl(url);
     }
 
     @Override public void playAudioFileInNowPlaying(java.io.File file) {

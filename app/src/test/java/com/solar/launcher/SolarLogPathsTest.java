@@ -50,7 +50,7 @@ public class SolarLogPathsTest {
         boolean sawLegacy = false;
         boolean sawPrivate = false;
         for (java.io.File d : dirs) {
-            String p = d.getAbsolutePath();
+            String p = d.getAbsolutePath().replace('\\', '/');
             if (p.contains("solar/logs")) sawLegacy = true;
             if (p.contains("com.solar.launcher") || p.contains("files")) sawPrivate = true;
         }

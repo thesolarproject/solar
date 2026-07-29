@@ -179,7 +179,7 @@ public final class PlaybackCoordinator {
     }
 
     public static String formatTrackPosition(int index, int total) {
-        if (total <= 0) return "- / -";
+        if (total <= 0) return "— / —";
         int pos = index + 1;
         if (pos < 1) pos = 1;
         if (pos > total) pos = total;
@@ -188,7 +188,7 @@ public final class PlaybackCoordinator {
 
     /** Now Playing line 4 — track position without leading zeros (e.g. "4 / 12"). */
     public static String formatTrackPositionPlain(int index, int total) {
-        if (total <= 0) return "- / -";
+        if (total <= 0) return "— / —";
         int pos = index + 1;
         if (pos < 1) pos = 1;
         if (pos > total) pos = total;
