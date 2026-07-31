@@ -3485,37 +3485,47 @@ public class ThemeManager {
         return getDefaultBatteryIcon(levelIndex, charging);
     }
 
+    private static final java.util.Map<String, Bitmap> defaultBatteryCache = new java.util.concurrent.ConcurrentHashMap<String, Bitmap>();
+
     public static Bitmap getDefaultBatteryIcon(int levelIndex, boolean charging) {
         int idx = levelIndex;
         if (idx < 0) idx = 0;
         if (idx > 4) idx = 4;
+        String key = (charging ? "c_" : "n_") + idx;
+        Bitmap cached = defaultBatteryCache.get(key);
+        if (cached != null && !cached.isRecycled()) return cached;
+
         String fileName = charging
                 ? "icon_statusbar_battery_" + idx + "_c.png"
                 : "icon_statusbar_battery_" + idx + ".png";
         Bitmap bmp = resolveThemeBitmapLoose(fileName);
-        if (bmp != null) return bmp;
-        String altName = charging
-                ? "batterycharge.00" + (idx + 1) + ".png"
-                : "battery.00" + (idx + 1) + ".png";
-        bmp = resolveThemeBitmapLoose(altName);
-        if (bmp != null) return bmp;
-        try {
-            if (assetContext != null) {
+        if (bmp == null) {
+            String altName = charging
+                    ? "batterycharge.00" + (idx + 1) + ".png"
+                    : "battery.00" + (idx + 1) + ".png";
+            bmp = resolveThemeBitmapLoose(altName);
+        }
+        if (bmp == null && assetContext != null) {
+            try {
                 java.io.InputStream is = assetContext.getAssets().open("themes/default/" + fileName);
-                Bitmap b = android.graphics.BitmapFactory.decodeStream(is);
+                bmp = android.graphics.BitmapFactory.decodeStream(is);
                 is.close();
-                if (b != null) return b;
-            }
-        } catch (Exception ignored) {}
-        try {
-            if (assetContext != null) {
+            } catch (Exception ignored) {}
+        }
+        if (bmp == null && assetContext != null) {
+            String altName = charging
+                    ? "batterycharge.00" + (idx + 1) + ".png"
+                    : "battery.00" + (idx + 1) + ".png";
+            try {
                 java.io.InputStream is = assetContext.getAssets().open("themes/default/" + altName);
-                Bitmap b = android.graphics.BitmapFactory.decodeStream(is);
+                bmp = android.graphics.BitmapFactory.decodeStream(is);
                 is.close();
-                if (b != null) return b;
-            }
-        } catch (Exception ignored) {}
-        return null;
+            } catch (Exception ignored) {}
+        }
+        if (bmp != null) {
+            defaultBatteryCache.put(key, bmp);
+        }
+        return bmp;
     }
 
     private static String[] readWifiFrames(JSONObject root) {
