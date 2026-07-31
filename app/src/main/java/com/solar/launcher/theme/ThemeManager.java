@@ -3475,10 +3475,47 @@ public class ThemeManager {
         if (batteryFramesEmpty(frames) && charging) {
             frames = readBatteryFrames(root, false);
         }
-        if (batteryFramesEmpty(frames)) return null;
-        String path = pickBatteryFrame(frames, levelIndex);
-        if (path == null || path.isEmpty()) return null;
-        return resolveThemeBitmapLoose(path);
+        if (!batteryFramesEmpty(frames)) {
+            String path = pickBatteryFrame(frames, levelIndex);
+            if (path != null && !path.isEmpty()) {
+                Bitmap bmp = resolveThemeBitmapLoose(path);
+                if (bmp != null) return bmp;
+            }
+        }
+        return getDefaultBatteryIcon(levelIndex, charging);
+    }
+
+    public static Bitmap getDefaultBatteryIcon(int levelIndex, boolean charging) {
+        int idx = levelIndex;
+        if (idx < 0) idx = 0;
+        if (idx > 4) idx = 4;
+        String fileName = charging
+                ? "icon_statusbar_battery_" + idx + "_c.png"
+                : "icon_statusbar_battery_" + idx + ".png";
+        Bitmap bmp = resolveThemeBitmapLoose(fileName);
+        if (bmp != null) return bmp;
+        String altName = charging
+                ? "batterycharge.00" + (idx + 1) + ".png"
+                : "battery.00" + (idx + 1) + ".png";
+        bmp = resolveThemeBitmapLoose(altName);
+        if (bmp != null) return bmp;
+        try {
+            if (assetContext != null) {
+                java.io.InputStream is = assetContext.getAssets().open("themes/default/" + fileName);
+                Bitmap b = android.graphics.BitmapFactory.decodeStream(is);
+                is.close();
+                if (b != null) return b;
+            }
+        } catch (Exception ignored) {}
+        try {
+            if (assetContext != null) {
+                java.io.InputStream is = assetContext.getAssets().open("themes/default/" + altName);
+                Bitmap b = android.graphics.BitmapFactory.decodeStream(is);
+                is.close();
+                if (b != null) return b;
+            }
+        } catch (Exception ignored) {}
+        return null;
     }
 
     private static String[] readWifiFrames(JSONObject root) {

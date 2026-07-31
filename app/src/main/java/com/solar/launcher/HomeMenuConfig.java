@@ -54,7 +54,7 @@ public final class HomeMenuConfig {
 
     /** Stock Y1 row order (theme homePageConfig keys align to these slots). */
     public static final List<String> STOCK_Y1_HOME_ORDER = Arrays.asList(
-            ID_NOW_PLAYING, ID_MUSIC, ID_VIDEOS, ID_AUDIOBOOKS, ID_PHOTOS, ID_RADIO, ID_BLUETOOTH,
+            ID_NOW_PLAYING, ID_MUSIC, ID_VIDEOS, ID_AUDIOBOOKS, ID_PHOTOS, ID_RADIO,
             ID_SETTINGS);
 
     /**
@@ -72,7 +72,7 @@ public final class HomeMenuConfig {
      * Was: np, music, radio, bt, settings, pc_upload, podcasts, soulseek.
      */
     private static final String DEFAULT_ORDER = String.join(",",
-            ID_NOW_PLAYING, ID_MUSIC, ID_RADIO, ID_BLUETOOTH, ID_SETTINGS,
+            ID_NOW_PLAYING, ID_MUSIC, ID_RADIO, ID_SETTINGS,
             ID_PC_UPLOAD, ID_PODCASTS, ID_SOULSEEK);
 
     /**
@@ -533,7 +533,7 @@ public final class HomeMenuConfig {
             for (String id : order) {
                 if (id == null) continue;
                 id = migrateId(id.trim());
-                if (id.isEmpty() || ID_MORE.equals(id) || seen.contains(id)) continue;
+                if (id.isEmpty() || ID_MORE.equals(id) || ID_BLUETOOTH.equals(id) || seen.contains(id)) continue;
                 if (find(id) == null) continue;
                 out.add(id);
                 seen.add(id);

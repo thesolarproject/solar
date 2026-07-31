@@ -18538,14 +18538,25 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
         if (ba != null) {
             int state = ba.getState();
-            boolean powerOn = isBluetoothPowerOn();
-            if (!powerOn && (btContextPendingEnable || btContextPendingDisable
-                    || state == BluetoothAdapter.STATE_TURNING_ON
-                    || state == BluetoothAdapter.STATE_TURNING_OFF)) {
-                statusText = "Wait...";
-            } else if (powerOn) {
+            boolean powerOn = isBluetoothPowerOnForUi();
+            if (ba.isEnabled() || state == BluetoothAdapter.STATE_ON) {
                 isOn = true;
                 statusText = "ON";
+                btContextPendingEnable = false;
+            } else if (state == BluetoothAdapter.STATE_TURNING_ON || btContextPendingEnable) {
+                statusText = "Wait...";
+                if (state == BluetoothAdapter.STATE_OFF) {
+                    try {
+                        ba.enable();
+                    } catch (Exception ignored) {}
+                }
+            } else if (state == BluetoothAdapter.STATE_TURNING_OFF || btContextPendingDisable) {
+                statusText = "Wait...";
+            } else {
+                statusText = "OFF";
+            }
+            if (powerOn) {
+                isOn = true;
             }
         }
 
@@ -18557,7 +18568,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                 @Override
                 public void onClick(View v) {
                     clickFeedback();
-                    applyBluetoothPowerState(!isBluetoothPowerOn());
+                    applyBluetoothPowerState(!isBluetoothPowerOnForUi());
                     TextView tvRight = (TextView) btnToggle.getChildAt(1);
                     tvRight.setText("Wait...");
                     if (!btnToggle.hasFocus())
@@ -18576,7 +18587,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             }
         }
 
-        if (!isOn) {
+        if (!isOn && (ba == null || !ba.isEnabled())) {
             restoreBluetoothListFocus(restoreFocusAddress, requestFocus);
             updateNetworkRescanLoop();
             return;
@@ -18604,10 +18615,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     @android.annotation.SuppressLint("MissingPermission")
     private void triggerBluetoothDiscovery(boolean requestFocus) {
         final BluetoothAdapter ba = BluetoothAdapter.getDefaultAdapter();
-        if (ba == null || !isBluetoothPowerOn()) return;
+        if (ba == null || (!ba.isEnabled() && !isBluetoothPowerOnForUi())) return;
         // ponytail: MTK BT stack drops A2DP during inquiry — never scan while audio sink is up.
         if (hasActiveBluetoothAudioSink()) {
-            // #region agent log
             if (DebugAgentLog.ENABLED) {
                 try {
                     org.json.JSONObject d = new org.json.JSONObject();
@@ -18617,11 +18627,12 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                             "skip_discovery_a2dp_active", "H-BT5", d);
                 } catch (Exception ignored) {}
             }
-            // #endregion
             return;
         }
         if (ba.isDiscovering()) return;
-        ba.startDiscovery();
+        try {
+            ba.startDiscovery();
+        } catch (Exception ignored) {}
         if (requestFocus && currentScreenState == STATE_BLUETOOTH
                 && containerBtItems != null && containerBtItems.getChildCount() > 0) {
             containerBtItems.getChildAt(0).requestFocus();

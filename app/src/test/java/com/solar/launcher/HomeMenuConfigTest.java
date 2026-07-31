@@ -23,23 +23,22 @@ public class HomeMenuConfigTest {
     @Test
     public void stockHomeOrder_matchesY1Layout() {
         List<String> stock = HomeMenuConfig.STOCK_Y1_HOME_ORDER;
-        if (stock.size() != 8) throw new AssertionError("stock size " + stock.size());
+        if (stock.size() != 7) throw new AssertionError("stock size " + stock.size());
         if (!HomeMenuConfig.ID_NOW_PLAYING.equals(stock.get(0))) throw new AssertionError("now playing");
         if (!HomeMenuConfig.ID_MUSIC.equals(stock.get(1))) throw new AssertionError("music");
         if (!HomeMenuConfig.ID_VIDEOS.equals(stock.get(2))) throw new AssertionError("videos");
         if (!HomeMenuConfig.ID_AUDIOBOOKS.equals(stock.get(3))) throw new AssertionError("audiobooks");
         if (!HomeMenuConfig.ID_PHOTOS.equals(stock.get(4))) throw new AssertionError("photos");
         if (!HomeMenuConfig.ID_RADIO.equals(stock.get(5))) throw new AssertionError("radio");
-        if (!HomeMenuConfig.ID_BLUETOOTH.equals(stock.get(6))) throw new AssertionError("bluetooth");
-        if (!HomeMenuConfig.ID_SETTINGS.equals(stock.get(7))) throw new AssertionError("settings");
+        if (!HomeMenuConfig.ID_SETTINGS.equals(stock.get(6))) throw new AssertionError("settings");
     }
 
     @Test
     public void defaultOrder_mediaThenGetThenSystem() {
         // 2026-07-16 — Radio/FM experiment off: home omits Radio tile.
-        // Default: NP → Music → Get Music → Podcasts → BT → Settings → Transfer.
+        // Default: NP → Music → Get Music → Podcasts → Settings → Transfer.
         List<HomeMenuConfig.Entry> visible = HomeMenuConfig.loadVisible(prefs);
-        if (visible.size() != 7) throw new AssertionError("default size " + visible.size());
+        if (visible.size() != 6) throw new AssertionError("default size " + visible.size());
         if (!HomeMenuConfig.ID_NOW_PLAYING.equals(visible.get(0).id)) {
             throw new AssertionError("now playing position");
         }
@@ -52,13 +51,10 @@ public class HomeMenuConfigTest {
         if (!HomeMenuConfig.ID_PODCASTS.equals(visible.get(3).id)) {
             throw new AssertionError("podcasts position");
         }
-        if (!HomeMenuConfig.ID_BLUETOOTH.equals(visible.get(4).id)) {
-            throw new AssertionError("bluetooth position");
-        }
-        if (!HomeMenuConfig.ID_SETTINGS.equals(visible.get(5).id)) {
+        if (!HomeMenuConfig.ID_SETTINGS.equals(visible.get(4).id)) {
             throw new AssertionError("settings position");
         }
-        if (!HomeMenuConfig.ID_PC_UPLOAD.equals(visible.get(6).id)) {
+        if (!HomeMenuConfig.ID_PC_UPLOAD.equals(visible.get(5).id)) {
             throw new AssertionError("pc upload position");
         }
         for (HomeMenuConfig.Entry e : visible) {
