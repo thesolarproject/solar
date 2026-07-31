@@ -36,13 +36,43 @@ jobs:
           cache-dependency-path: cloudflare/solar-diag/package.json
 
       - name: Install and deploy
+        id: deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           if [ -z "${CLOUDFLARE_API_TOKEN}" ] || [ -z "${CLOUDFLARE_ACCOUNT_ID}" ]; then
             echo "Skip deploy: set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID repo secrets."
+            echo "deployed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           npm install
+          chmod +x smoke-test.sh
+          ./smoke-test.sh
           npx wrangler deploy
+          echo "deployed=true" >> "$GITHUB_OUTPUT"
+
+      # 2026-07-21 — Smoke-test the deployed worker when a URL is configured as a repo variable.
+      # /health now reports whether INGEST_TOKEN + GITHUB_TOKEN are wired, so a 502 root cause
+      # (missing/expired GitHub PAT on the worker) is visible right in the workflow run.
+      - name: Smoke-test deployed worker /health
+        if: steps.deploy.outputs.deployed == 'true' && vars.SOLAR_DIAG_URL != ''
+        env:
+          SOLAR_DIAG_URL: ${{ vars.SOLAR_DIAG_URL }}
+        run: |
+          # Trim trailing slash so a var like https://x.workers.dev/ still hits /health.
+          base="${SOLAR_DIAG_URL%/}"
+          echo "==> GET ${base}/health"
+          code="$(curl -sS -o /tmp/solar-diag-health.json -w '%{http_code}' --max-time 20 "${base}/health" || true)"
+          echo "HTTP ${code}"
+          cat /tmp/solar-diag-health.json
+          if [ "${code}" != "200" ]; then
+            echo "::error::solar-diag /health returned HTTP ${code} — worker may not be deployed or is broken."
+            exit 1
+          fi
+          if ! grep -q '"ingest_token_configured":true' /tmp/solar-diag-health.json; then
+            echo "::warning::INGEST_TOKEN secret is missing on the worker — devices will get 500 server_misconfigured."
+          fi
+          if ! grep -q '"github_token_configured":true' /tmp/solar-diag-health.json; then
+            echo "::warning::GITHUB_TOKEN secret is missing on the worker — reports will 502 github_create_failed. Run: npx wrangler secret put GITHUB_TOKEN"
+          fi

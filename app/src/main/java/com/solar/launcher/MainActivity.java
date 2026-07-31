@@ -25388,15 +25388,19 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         }
         if (item.kind == PlayQueue.ItemKind.REACH_STREAM) {
             int pct = item.file != null ? streamDownloadPercentForFile(item.file) : -1;
-            if (pct >= 0 && pct < 100) {
+            if (pct >= 1 && pct < 100) {
                 return getString(R.string.stream_buffering) + " " + pct + "%";
+            } else if (pct >= 0 && pct < 1) {
+                return getString(R.string.stream_buffering) + "…";
             }
             return getString(R.string.status_soulseek);
         }
         if (item.kind == PlayQueue.ItemKind.DEEZER_STREAM) {
             int pct = item.file != null ? streamDownloadPercentForFile(item.file) : -1;
-            if (pct >= 0 && pct < 100) {
+            if (pct >= 1 && pct < 100) {
                 return getString(R.string.stream_buffering) + " " + pct + "%";
+            } else if (pct >= 0 && pct < 1) {
+                return getString(R.string.stream_buffering) + "…";
             }
             if (item.deezerMeta != null && item.deezerMeta.length() > 0) return item.deezerMeta;
             return getString(R.string.status_deezer);
@@ -55552,8 +55556,11 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     private String formatPodcastDownloadDetail(long read, long total) {
         if (total > 0) {
-            return String.format(Locale.US, "%d%%", (int) (read * 100 / total));
+            int pct = (int) (read * 100 / total);
+            if (pct < 1) return "Connecting…";
+            return String.format(Locale.US, "%d%%", pct);
         }
+        if (read <= 0) return "Connecting…";
         return String.format(Locale.US, "%.1f MB", read / (1024f * 1024f));
     }
 

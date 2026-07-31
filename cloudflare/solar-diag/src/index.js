@@ -13,7 +13,19 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/health" && request.method === "GET") {
-      return json({ ok: true, service: "solar-diag" }, 200);
+      // 2026-07-21 — Report secret wiring so 502/github_create_failed is diagnosable
+      // without exposing the secrets themselves (booleans only).
+      return json(
+        {
+          ok: true,
+          service: "solar-diag",
+          ingest_token_configured: !!env.INGEST_TOKEN,
+          github_token_configured: !!env.GITHUB_TOKEN,
+          repo: env.GITHUB_REPO || "thesolarproject/solar",
+          max_body_bytes: parseInt(env.MAX_BODY_BYTES || "2097152", 10) || 2097152,
+        },
+        200
+      );
     }
     if (url.pathname !== REPORT_PATH) {
       return text("Not Found", 404);
@@ -21,7 +33,20 @@ export default {
     if (request.method !== "POST") {
       return text("Method Not Allowed", 405, { Allow: "POST" });
     }
-    return handleReport(request, env);
+    // 2026-07-21 — Any unexpected exception must answer JSON, not Cloudflare's opaque 502
+    // ("Worker threw exception"). SolarDiagClient parses the body, so keep it structured.
+    try {
+      return await handleReport(request, env);
+    } catch (e) {
+      return json(
+        {
+          ok: false,
+          error: "internal",
+          detail: e && e.message ? e.message : String(e),
+        },
+        500
+      );
+    }
   },
 };
 

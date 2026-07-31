@@ -146,6 +146,11 @@ jobs:
           JAVA_HOME: ${{ env.JAVA_HOME }}
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
           ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
+          # 2026-07-21 — Cloudflare solar-diag error reporting (see cloudflare/solar-diag/SETUP.md).
+          # Empty values → client idle (not_configured), so builds never fail on missing config.
+          # ORG_GRADLE_PROJECT_* env maps to Gradle project properties read in app/build.gradle.
+          ORG_GRADLE_PROJECT_SOLAR_DIAG_URL: ${{ vars.SOLAR_DIAG_URL }}
+          ORG_GRADLE_PROJECT_SOLAR_DIAG_TOKEN: ${{ secrets.SOLAR_DIAG_TOKEN }}
         run: |
           chmod +x gradlew scripts/build.sh
           ./scripts/build.sh

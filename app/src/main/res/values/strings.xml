@@ -495,7 +495,7 @@
     <string name="settings_display_brightness">Brightness</string>
     <string name="settings_storage_info">Storage info</string>
     <string name="settings_y2_hold_ok_to_sleep">Hold OK to sleep</string>
-    <string name="settings_preview_y2_hold_ok_to_sleep">Off (default): hold the center button opens the quick menu, like Back, use the sleep button for screen off. On: holding OK puts the screen to sleep (previous behaviour).</string>
+    <string name="settings_preview_y2_hold_ok_to_sleep">Off (default): the center button just selects — hold Back for the quick menu, use the sleep button for screen off. On: holding OK puts the screen to sleep.</string>
     <string name="settings_a5_menu_nav">Menu buttons</string>
     <string name="settings_a5_menu_nav_face">Face buttons</string>
     <string name="settings_a5_menu_nav_side">Side buttons</string>
