@@ -1003,7 +1003,29 @@ public class ThemeManager {
             // Push fresh cover + Music even when Default already existed (OTA / first-boot seed).
             refreshBundledAuraShowcaseAssets(ctx, dest);
         } catch (Exception ignored) {}
+        ensureBundledAssetThemes(ctx);
         ensureBundledFallback(ctx);
+    }
+
+    public static void ensureBundledAssetThemes(Context ctx) {
+        if (ctx == null) return;
+        try {
+            AssetManager am = ctx.getAssets();
+            String[] themeDirs = am.list("themes");
+            if (themeDirs == null) return;
+            for (String dirName : themeDirs) {
+                if (dirName.equalsIgnoreCase("default")) continue;
+                File dest = new File(themesRootPath, dirName);
+                if (!dest.exists()) dest.mkdirs();
+                copyAssetTree(am, "themes/" + dirName, dest);
+                File internal = internalThemesDir(ctx);
+                if (internal != null && !samePath(new File(themesRootPath), internal)) {
+                    File intDest = new File(internal, dirName);
+                    if (!intDest.exists()) intDest.mkdirs();
+                    copyAssetTree(am, "themes/" + dirName, intDest);
+                }
+            }
+        } catch (Exception ignored) {}
     }
 
     /**
