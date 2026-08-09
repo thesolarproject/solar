@@ -1,6 +1,7 @@
 package com.solar.launcher.stem;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
@@ -76,8 +77,10 @@ public class StemComplicationGeometryTest {
 
     @Test
     public void optionsHoldKeepsWhenClockMissing() {
-        // MTK KeyEvent times → 0 must not dismiss Options. 2026-07-21
-        assertTrue(StemControls.isIntentionalPadOptionsHold(true, 0L));
+        // MTK KeyEvent times → 0: a real hold still measures via the uptime fallback
+        // (600ms → Options kept). A 0ms measurement can only be a tap racing the hold
+        // timer under UI lag — short tap wins, Options closes. 2026-08-01
+        assertFalse(StemControls.isIntentionalPadOptionsHold(true, 0L));
         assertTrue(StemControls.isIntentionalPadOptionsHold(true, 600L));
         assertTrue(!StemControls.isIntentionalPadOptionsHold(true, 100L));
         assertTrue(!StemControls.isIntentionalPadOptionsHold(false, 0L));

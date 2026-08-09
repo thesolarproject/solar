@@ -123,6 +123,58 @@ public final class StemMixQueuePolicy {
     }
 
     /**
+     * StemFM-style Next-up: of the next two upcoming songs, play the one whose
+     * tempo/beat grid best matches the song that just finished.
+     * Layman: when a pad's song ends, peek at the next two in line and pull in
+     * whichever grooves closest to the one that just ended — not just the first row.
+     * Technical: scan candidate indexes [nextUpIndex, nextUpIndex+1]; prefer
+     * stems-ready candidates (existing prep-aware rule); score each eligible
+     * candidate by {@link #tempoMatchError} — DJ harmonic lock means a
+     * half/double-time groove scores as a clean match. Unknown BPMs (≤ 30) are
+     * skipped. Falls back to plain FIFO {@link #advanceSourcePreferReady} when
+     * no candidate has usable tempo data or the window has only one row.
+     * 2026-08-01
+     */
+    public static int advanceSourceClosestTempo(PlayQueue queue, int liveWindow,
+            boolean[] stemsReady, float finishedBpm, float[] candidateBpm) {
+        int next = nextUpIndex(queue, liveWindow);
+        if (next < 0) return -1;
+        if (queue == null || queue.size() <= next) return -1;
+        int last = Math.min(next + 1, queue.size() - 1);
+        float fBpm = finishedBpm > 30f ? finishedBpm : StemBpm.DEFAULT_BPM;
+        int best = -1;
+        float bestErr = Float.MAX_VALUE;
+        for (int i = next; i <= last; i++) {
+            boolean readyOk = stemsReady == null
+                    || (i < stemsReady.length && stemsReady[i]);
+            if (!readyOk) continue;
+            float cBpm = candidateBpm != null && i < candidateBpm.length
+                    ? candidateBpm[i] : 0f;
+            if (cBpm <= 30f) continue;
+            float err = tempoMatchError(fBpm, cBpm);
+            if (err < bestErr) {
+                bestErr = err;
+                best = i;
+            }
+        }
+        if (best >= 0) return best;
+        return advanceSourcePreferReady(queue, liveWindow, stemsReady);
+    }
+
+    /**
+     * Tempo-match error of a candidate vs the finished song (lower = better).
+     * Uses DJ harmonic lock so a half/double-time groove scores as a clean match.
+     * Layman: 120 vs 120 → 0 error; 120 vs 60 (half-time) → 0 error; 120 vs 95 → larger.
+     * Technical: |harmonicRateToMatch(finished, candidate) − 1|.
+     * 2026-08-01
+     */
+    public static float tempoMatchError(float finishedBpm, float candidateBpm) {
+        float f = finishedBpm > 30f ? finishedBpm : StemBpm.DEFAULT_BPM;
+        float c = candidateBpm > 30f ? candidateBpm : StemBpm.DEFAULT_BPM;
+        return Math.abs(StemBpm.harmonicRateToMatch(f, c) - 1f);
+    }
+
+    /**
      * Closed Stem pair (or single): finished song soft-restarts — no Next-up advance.
      * Layman: with only one or two songs queued, a finished track loops so unequal lengths keep mixing.
      * Technical: queueSize ≤ {@link #STEM_LIVE_WINDOW} → seek+fade on existing mixer, not softReplace.
@@ -188,7 +240,29 @@ public final class StemMixQueuePolicy {
         if (queue == null) return false;
         if (liveSlot < 0 || liveSlot >= liveWindow) return false;
         if (sourceIndex < liveWindow || sourceIndex >= queue.size()) return false;
-        // Swap finished live seat with Next-up (or deeper) source. 2026-07-21
+        // DJ chain rule: the END track of pair 1 becomes the START track of pair 2
+        // ([t0,t1] → [t1,t2] → [t2,t3]…). When the SEED (slot 0) finishes, the
+        // survivor keeps playing and becomes the new seed — the incoming source
+        // joins as the new partner at index 1 and the finished seed rotates to the
+        // back of the queue (keeps the Next-up loop forever). Partner-finish keeps
+        // the plain swap (seed stays put, incoming replaces the partner seat).
+        // Was: swap(liveSlot, sourceIndex) inverted the chain on seed finish.
+        // Reversal: seed-finish rotate; partner-finish swap. 2026-08-01
+        if (liveSlot == 0 && liveWindow >= 2 && queue.size() > 1) {
+            java.util.List<PlayQueue.QueueItem> items = queue.items();
+            PlayQueue.QueueItem finished = items.get(0);
+            PlayQueue.QueueItem incoming = items.get(sourceIndex);
+            queue.removeAt(sourceIndex);
+            queue.removeAt(0); // finished seed leaves the live window
+            // Survivors (old 1..liveWindow-1) slid left; seat the source at the
+            // last live index, then rotate the finished seed to the back.
+            java.util.List<PlayQueue.QueueItem> live = queue.items();
+            live.add(Math.min(liveWindow - 1, live.size()), incoming);
+            live.add(finished);
+            queue.setIndex(0);
+            return true;
+        }
+        // Partner (or deeper seat) finished: swap keeps the seed as index 0.
         queue.swap(liveSlot, sourceIndex);
         return true;
     }
@@ -522,5 +596,164 @@ public final class StemMixQueuePolicy {
      */
     public static boolean queueAdvanceLoopsViaSwap(int queueSize, int liveWindow) {
         return queueSize > liveWindow && liveWindow > 0;
+    }
+
+    // ---- Queue “Mix” rows (between stem-capable track pairs) — 2026-08-01 ----
+    // The in-app context-menu queue interleaves a selectable “Mix” divider between an
+    // adjacent track pair ONLY when both tracks have ready stems (mask[i] = pair i,i+1
+    // mixable). Tracks without stems show no Mix divider and are skipped by queue-launched
+    // stem performances. Mix rows are hidden during move sessions (and never in playlist
+    // edit) so the move ribbon keeps its 1:1 adapter↔queue index mapping.
+
+    /**
+     * Interleave Mix dividers while idle: never during moves or playlist edit.
+     * Layman: the Mix word lives between songs until you start dragging rows.
+     * 2026-08-01
+     */
+    public static boolean mixRowsVisible(boolean moveActive, boolean playlistEdit) {
+        return !moveActive && !playlistEdit;
+    }
+
+    /**
+     * All-pairs mask: a Mix row between every adjacent pair (uniform interleave).
+     * Layman: every neighboring song pair shows Mix — the legacy layout.
+     * 2026-08-01
+     */
+    public static boolean[] allPairsMask(int queueSize) {
+        boolean[] m = new boolean[Math.max(0, queueSize - 1)];
+        for (int i = 0; i < m.length; i++) m[i] = true;
+        return m;
+    }
+
+    /**
+     * Number of interleaved Mix rows for a per-pair mask (null → none).
+     * Layman: count of neighboring pairs that are both stem-ready.
+     * 2026-08-01
+     */
+    public static int mixRowCount(boolean[] pairMask) {
+        if (pairMask == null) return 0;
+        int c = 0;
+        for (int i = 0; i < pairMask.length; i++) if (pairMask[i]) c++;
+        return c;
+    }
+
+    /**
+     * Adapter row count including optional footer. A Mix row is interleaved after
+     * track i exactly when pairMask[i] is true; footer (when visible) is the last row.
+     * Without a mask it is the plain N(+1) layout so move/ribbon code stays 1:1.
+     * 2026-08-01
+     */
+    public static int adapterCountWithMix(int queueSize, boolean footerVisible,
+            boolean[] pairMask) {
+        if (queueSize < 0) queueSize = 0;
+        int base = queueSize + mixRowCount(pairMask);
+        return footerVisible ? base + 1 : base;
+    }
+
+    /**
+     * Adapter index for a track: trackIdx plus every Mix row placed before it.
+     * Layman: rows shuffle right past each stem-ready divider pair.
+     * 2026-08-01
+     */
+    public static int trackToAdapter(int trackIdx, boolean[] pairMask) {
+        if (trackIdx <= 0) return 0;
+        int mixBefore = 0;
+        if (pairMask != null) {
+            for (int i = 0; i < trackIdx && i < pairMask.length; i++) {
+                if (pairMask[i]) mixBefore++;
+            }
+        }
+        return trackIdx + mixBefore;
+    }
+
+    /**
+     * Queue (track) index for an adapter row (only valid for track rows). Mix-row
+     * adapters resolve to the lower track of their pair.
+     * 2026-08-01
+     */
+    public static int adapterToTrack(int adapterIdx, boolean[] pairMask) {
+        if (adapterIdx <= 0) return 0;
+        int track = 0;
+        int adapter = 0;
+        int guard = 0;
+        while (guard++ < 1024) {
+            // Track `track` row occupies `adapter`.
+            if (adapter == adapterIdx) return track;
+            adapter++;
+            // Mix row after this track (pair track, track+1) when mask true.
+            if (pairMask != null && track < pairMask.length && pairMask[track]) {
+                if (adapter == adapterIdx) return track;
+                adapter++;
+            }
+            track++;
+            // `adapter` now points at the NEXT track's row; `track` is its index.
+            if (adapter == adapterIdx) return Math.max(0, track);
+            if (adapter > adapterIdx) return Math.max(0, track - 1);
+        }
+        return 0;
+    }
+
+    /**
+     * True when an adapter row is an interleaved Mix divider for a stem-ready pair.
+     * Layman: a row between two songs that blends them on the pads.
+     * 2026-08-01
+     */
+    public static boolean isMixAdapter(int adapterIdx, int queueSize, boolean[] pairMask) {
+        if (adapterIdx < 1 || pairMask == null || queueSize < 2) return false;
+        int n = Math.min(queueSize - 1, pairMask.length);
+        for (int i = 0; i < n; i++) {
+            if (!pairMask[i]) continue;
+            if (trackToAdapter(i, pairMask) + 1 == adapterIdx) return true;
+        }
+        return false;
+    }
+
+    /** Adapter-aware footer (Add song) row check. 2026-08-01 */
+    public static boolean isFooterAdapter(int adapterIdx, int queueSize, boolean footerVisible,
+            boolean[] pairMask) {
+        if (!footerVisible) return false;
+        return adapterIdx == adapterCountWithMix(queueSize, true, pairMask) - 1;
+    }
+
+    /**
+     * Reorder the queue so the given track pair sits at the live front (indices 0,1)
+     * with the rest of the queue following unchanged.
+     * Layman: picking Mix moves those two songs onto the pads; everything else stays Next-up.
+     * 2026-08-01
+     */
+    public static boolean liftPairToLiveFront(PlayQueue q, int lower, int upper) {
+        if (q == null) return false;
+        int size = q.size();
+        if (lower < 0 || upper < 0 || lower >= size || upper >= size || lower == upper) return false;
+        int lo = Math.min(lower, upper);
+        int hi = Math.max(lower, upper);
+        PlayQueue.QueueItem a = q.items().get(lo);
+        PlayQueue.QueueItem b = q.items().get(hi);
+        q.removeAt(hi);
+        q.removeAt(lo);
+        List<PlayQueue.QueueItem> items = q.items();
+        items.add(0, a);
+        items.add(1, b);
+        q.setIndex(0);
+        return true;
+    }
+
+    /**
+     * Lift a single picked queue row to the live seed (index 0); the rest of the
+     * queue follows unchanged so the previous seed slides to index 1.
+     * Layman: picking a song from the queue makes it the new dominant seed track.
+     * Technical: removeAt(pick) then insert at 0, setIndex 0. No-op when already 0.
+     * 2026-08-01
+     */
+    public static boolean liftPickToSeedFront(PlayQueue q, int pick) {
+        if (q == null) return false;
+        int size = q.size();
+        if (pick < 0 || pick >= size) return false;
+        if (pick == 0) return true;
+        PlayQueue.QueueItem a = q.items().get(pick);
+        q.removeAt(pick);
+        q.items().add(0, a);
+        q.setIndex(0);
+        return true;
     }
 }

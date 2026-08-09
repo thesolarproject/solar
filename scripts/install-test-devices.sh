@@ -241,13 +241,6 @@ collect_adb_serials() {
 }
 
 # Staging path for push+pm fallback when `adb install` URI fails over WiFi adb.
-REMOTE_TEST_APK="/data/local/tmp/solar-test.apk"
-
-# Install succeeded only when pm/adb output contains Success (exit code alone lies on WiFi).
-install_output_ok() {
-  [[ "$1" == *Success* ]]
-}
-
 # --- version helpers ---
 
 read_apk_version() {
@@ -542,36 +535,20 @@ show_classification_only() {
 
 # --- per-device install worker (runs in subshell for parallel jobs) ---
 
-# Try adb install; on failure or missing Success, push APK then `pm install` on device.
+# Install rooted Y1/Y2 test APKs by replacing /system/app, never by creating a
+# /data/app updated-system overlay. The helper reboots each device and verifies
+# Package Manager ownership before returning.
 install_apk_to_device() {
   local serial="$1"
   local apk="$2"
-  local -a install_flags=(-r -d -t)
-  local sdk_int out push_out pm_out rc=0
+  local out rc=0
 
-  sdk_int="$(adb_prop "$serial" ro.build.version.sdk)"
-  if [[ "$sdk_int" =~ ^[0-9]+$ && "$sdk_int" -ge 23 ]]; then
-    install_flags+=(-g)
-  fi
-
-  out="$(adb_serial "$serial" install "${install_flags[@]}" "$apk" 2>&1)" || rc=$?
-  if install_output_ok "$out"; then
-    INSTALL_DETAIL="adb install Success"
+  out="$(bash "$ROOT/scripts/install-test-apk.sh" --serial "$serial" --no-launch "$apk" 2>&1)" || rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    INSTALL_DETAIL="system APK replacement verified"
     return 0
   fi
-
-  # WiFi adb often exits 0 with INSTALL_FAILED_INVALID_URI; push+pm avoids URI streaming.
-  push_out="$(adb_serial "$serial" push "$apk" "$REMOTE_TEST_APK" 2>&1)" || {
-    INSTALL_DETAIL="adb install: ${out:-exit $rc}; push failed: ${push_out:-unknown}"
-    return 1
-  }
-  pm_out="$(adb_serial "$serial" shell pm install -r -d -t "$REMOTE_TEST_APK" 2>&1)" || rc=$?
-  if install_output_ok "$pm_out"; then
-    INSTALL_DETAIL="push+pm Success (fallback; adb install: ${out:-exit $rc})"
-    return 0
-  fi
-
-  INSTALL_DETAIL="adb install: ${out:-exit $rc}; push: ok; pm install: ${pm_out:-exit $rc}"
+  INSTALL_DETAIL="system APK replacement failed: ${out:-exit $rc}"
   return 1
 }
 

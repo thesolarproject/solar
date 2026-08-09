@@ -6,8 +6,8 @@ import android.content.Intent;
 /**
  * 2026-07-05 — Emergency Rockbox / crash-loop HOME routing.
  * Layman: when Solar cannot start, HOME opens recovery screen instead of crashing again.
- * Technical: reads persist.solar.emergency_mode; forwards to {@link EmergencyRecoveryActivity}.
- * Reversal: delete; Solar EmergencyRecoveryActivity in main APK owns HOME again.
+ * Technical: reads persist.solar.emergency_mode; Solar explicitly forwards to {@link EmergencyRecoveryActivity}.
+ * Reversal: delete; Solar EmergencyRecoveryActivity in the main APK remains the fallback.
  */
 public final class EmergencyRockboxMode {
 
@@ -20,7 +20,7 @@ public final class EmergencyRockboxMode {
     /** Boot hook — no-op unless emergency flag already set from prior session. */
     public static void onBoot(Context ctx) {
         if (!isEmergencyMode() || ctx == null) return;
-        // HOME intent filter on EmergencyRecoveryActivity handles launcher pick at press time.
+        // Solar launches EmergencyRecoveryActivity explicitly; it is not registered as a HOME app.
     }
 
     /** Launch package-picker tier from recovery activity. */

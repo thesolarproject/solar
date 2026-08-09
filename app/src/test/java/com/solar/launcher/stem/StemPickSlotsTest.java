@@ -79,10 +79,11 @@ public class StemPickSlotsTest {
 
     @Test
     public void transitionPresets() {
-        assertEquals(4000L, StemControls.transitionMsForPreset(StemControls.TRANSITION_PRESET_LONG));
-        assertEquals(8000L, StemControls.transitionMsForPreset(StemControls.TRANSITION_PRESET_OVERLAP));
-        assertEquals(400L, StemControls.transitionMsForPreset(StemControls.TRANSITION_PRESET_WAVE));
-        assertEquals(100, StemControls.transitionFadeSteps(4000L));
+        assertEquals(4000L, StemControls.transitionMsForPreset(StemControls.TRANSITION_PRESET_FULL));
+        assertEquals(2000L, StemControls.transitionMsForPreset(StemControls.TRANSITION_PRESET_BALANCED));
+        assertEquals(400L, StemControls.transitionMsForPreset(StemControls.TRANSITION_PRESET_SHORT));
+        // 4000ms / 32ms tick = 125 steps (was 100 when TICK was 40). 2026-08-01
+        assertEquals(125, StemControls.transitionFadeSteps(4000L));
         assertEquals(1, StemControls.transitionFadeSteps(0L));
         assertTrue(StemControls.stemTransitionHoldOneSide(true, false));
         assertTrue(StemControls.stemTransitionHoldOneSide(false, true));

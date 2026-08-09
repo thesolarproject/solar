@@ -49,6 +49,8 @@ public final class ThemedContextMenu {
     private static final int TAG_QUEUE_CONFIRM = 0x70ca0015;
     private static final int TAG_RIBBON_SLOT = 0x70ca0014;
     private static final int TAG_QUEUE_DROP = 0x70ca0014;
+    private static final int TAG_QUEUE_ART = 0x70ca0019;
+    private static final int TAG_QUEUE_ART2 = 0x70ca001a;
     private static final int TAG_DECOR = 0x70ca0016;
     private static final int TAG_STATE_SPIN = 0x70ca0017;
     /** 2026-07-14 — Option-row index for A5 tap-to-focus / tap-to-confirm. */
@@ -64,18 +66,47 @@ public final class ThemedContextMenu {
         public final String subtitle;
         public final boolean nowPlaying;
         public final boolean playing;
+        /** Queue Mix divider between two tracks — blends the adjacent pair on the pads. 2026-08-01 */
+        public final boolean mixRow;
+        /** Track file whose album art decorates this row (16dp square, left). 2026-08-01 */
+        public final java.io.File artFile;
+        /** Second track file — Mix dividers show the pair that will be blended. 2026-08-01 */
+        public final java.io.File artFile2;
 
         public QueueRowSpec(String title, String subtitle, boolean nowPlaying, boolean playing) {
+            this(title, subtitle, nowPlaying, playing, false, null, null);
+        }
+
+        public QueueRowSpec(String title, String subtitle, boolean nowPlaying, boolean playing,
+                boolean mixRow) {
+            this(title, subtitle, nowPlaying, playing, mixRow, null, null);
+        }
+
+        public QueueRowSpec(String title, String subtitle, boolean nowPlaying, boolean playing,
+                boolean mixRow, java.io.File artFile, java.io.File artFile2) {
             this.title = title != null ? title : "";
             this.subtitle = subtitle != null ? subtitle : "";
             this.nowPlaying = nowPlaying;
             this.playing = playing;
+            this.mixRow = mixRow;
+            this.artFile = artFile;
+            this.artFile2 = artFile2;
         }
 
         public String displayLine() {
             if (subtitle.isEmpty()) return title;
             return title + " · " + subtitle;
         }
+    }
+
+    /**
+     * Supplies tiny row art squares (16dp). Implementations must be main-thread-safe
+     * and synchronous; return null until a bitmap is ready, then call
+     * {@link #refreshQueueArt()} so visible rows repaint.
+     * 2026-08-01
+     */
+    public interface QueueArtProvider {
+        android.graphics.Bitmap artFor(java.io.File file);
     }
 
     public enum FocusZone { OPTIONS_TITLE, QUICK_BAR, LIST, SLIDER, TIER_CONTENT }
@@ -177,6 +208,8 @@ public final class ThemedContextMenu {
     private int maxListHeightPx;
     private boolean queueMode;
     private QueueRowSpec[] queueRows = new QueueRowSpec[0];
+    /** Optional tiny-art source for queue rows (16dp squares). 2026-08-01 */
+    private QueueArtProvider queueArtProvider;
     private int queueMoveFrom = -1;
     /** 2026-07-15 — Touch lift/step/confirm for queue ribbon. */
     private QueueTouchMoveListener queueTouchMoveListener;
@@ -276,6 +309,50 @@ public final class ThemedContextMenu {
             DebugMenuLog.log("ThemedContextMenu.styleOverlayScrim", "scrim styled", "H2-H4", d);
         } catch (Exception ignored) {}
         // #endregion
+    }
+
+    /**
+     * Phone chrome: Solar renders in a 4:3 viewport band above the wheel body, so
+     * context modals must center inside that band — not the whole device display.
+     * Y1/Y2/A5 panels have no chrome (display == viewport), so this is a no-op there.
+     * Was: no constraint — menus centered across the full phone screen.
+     * Reversal: drop this call (or make PhoneChromePolicy.active always false).
+     * 2026-08-01
+     */
+    private void constrainOverlayToChromeViewport() {
+        if (overlay == null || context == null) return;
+        if (!com.solar.launcher.phone.PhoneChromePolicy.active(context)) return;
+        try {
+            android.util.DisplayMetrics dm = context.getResources().getDisplayMetrics();
+            int screenW = dm.widthPixels;
+            int screenH = dm.heightPixels;
+            if (screenW <= 0 || screenH <= 0) return;
+            boolean w480 = com.solar.launcher.phone.PhoneChromePolicy.isW480(screenW, screenH);
+            com.solar.launcher.phone.PhoneChromePolicy.LayoutMetrics m =
+                    com.solar.launcher.phone.PhoneChromePolicy.layoutMetrics(screenW, screenH, w480);
+            int padTop = m.offsetY;
+            int padLeft = m.offsetX;
+            int padRight = Math.max(0, screenW - (m.offsetX + m.viewportW));
+            int padBottom = Math.max(0, screenH - (m.offsetY + m.viewportH));
+            overlay.setPadding(padLeft, padTop, padRight, padBottom);
+        } catch (Throwable ignored) {}
+    }
+
+    /**
+     * Phone chrome: long menu lists must stay inside the 4:3 viewport band.
+     * Y1/Y2/A5: no-op (viewport == display). 2026-08-01
+     */
+    private void capListHeightToChromeViewport() {
+        if (maxListHeightPx <= 0 || context == null) return;
+        if (!com.solar.launcher.phone.PhoneChromePolicy.active(context)) return;
+        try {
+            android.util.DisplayMetrics dm = context.getResources().getDisplayMetrics();
+            if (dm.widthPixels <= 0 || dm.heightPixels <= 0) return;
+            boolean w480 = com.solar.launcher.phone.PhoneChromePolicy.isW480(dm.widthPixels, dm.heightPixels);
+            com.solar.launcher.phone.PhoneChromePolicy.LayoutMetrics m =
+                    com.solar.launcher.phone.PhoneChromePolicy.layoutMetrics(dm.widthPixels, dm.heightPixels, w480);
+            maxListHeightPx = Math.min(maxListHeightPx, (int) (m.viewportH * 0.8f));
+        } catch (Throwable ignored) {}
     }
 
     private void attachOverlayKeyListener() {
@@ -1452,6 +1529,10 @@ public final class ThemedContextMenu {
             if (pp != null) pp.setVisibility(View.GONE);
             ImageView confirm = (ImageView) row.findViewWithTag(TAG_QUEUE_CONFIRM);
             if (confirm != null) confirm.setVisibility(View.GONE);
+            ImageView art = (ImageView) row.findViewWithTag(TAG_QUEUE_ART);
+            if (art != null) art.setVisibility(View.GONE);
+            ImageView art2 = (ImageView) row.findViewWithTag(TAG_QUEUE_ART2);
+            if (art2 != null) art2.setVisibility(View.GONE);
             return;
         }
         row.setTag(Integer.valueOf(queueIndex));
@@ -1676,6 +1757,7 @@ public final class ThemedContextMenu {
 
         overlay = new FrameLayout(context);
         styleOverlayScrim(overlay);
+        constrainOverlayToChromeViewport();
         overlay.setClickable(true);
         overlay.setFocusable(true);
 
@@ -1722,6 +1804,7 @@ public final class ThemedContextMenu {
         itemsScroll.setFillViewport(false);
         Y1ScrollIndicators.applyVerticalScrollView(itemsScroll);
         maxListHeightPx = (int) (context.getResources().getDisplayMetrics().heightPixels * 0.42f);
+        capListHeightToChromeViewport();
         itemsHost = new LinearLayout(context);
         itemsHost.setOrientation(LinearLayout.VERTICAL);
         rebuildListRows(itemIconKeys, itemStateTexts);
@@ -2264,6 +2347,51 @@ public final class ThemedContextMenu {
                 listener, resetFocus);
     }
 
+    public void setQueueArtProvider(QueueArtProvider provider) {
+        this.queueArtProvider = provider;
+        refreshQueueArt();
+    }
+
+    /** Repaint the tiny row art squares from the provider (visible rows only). 2026-08-01 */
+    public void refreshQueueArt() {
+        if (!queueMode || queueArtProvider == null || itemsHost == null) return;
+        int start = 0;
+        int end = queueRows.length;
+        if (useQueueBrowseVirtual()) {
+            start = queueBrowseWindowStart;
+            end = queueBrowseWindowEnd();
+        }
+        for (int i = start; i < end; i++) {
+            View row = findQueueRowByIndex(i);
+            if (row != null) applyQueueRowArt(row, i);
+        }
+    }
+
+    private void applyQueueRowArt(View row, int queueIndex) {
+        if (row == null || queueIndex < 0 || queueIndex >= queueRows.length) return;
+        QueueRowSpec spec = queueRows[queueIndex];
+        applyQueueArtImage(row, TAG_QUEUE_ART, spec.artFile);
+        applyQueueArtImage(row, TAG_QUEUE_ART2, spec.artFile2);
+    }
+
+    private void applyQueueArtImage(View row, int tag, java.io.File file) {
+        ImageView art = (ImageView) row.findViewWithTag(tag);
+        if (art == null) return;
+        android.graphics.Bitmap bmp = null;
+        if (file != null && queueArtProvider != null) {
+            try {
+                bmp = queueArtProvider.artFor(file);
+            } catch (Exception ignored) {}
+        }
+        if (bmp != null && !bmp.isRecycled()) {
+            art.setImageBitmap(bmp);
+            art.setVisibility(View.VISIBLE);
+        } else {
+            art.setImageDrawable(null);
+            art.setVisibility(file != null ? View.INVISIBLE : View.GONE);
+        }
+    }
+
     public void replaceQueueContent(String title, QueueRowSpec[] rows, int focusIndex, int moveFrom) {
         queueMode = true;
         scrollableDetailHeader = false;
@@ -2290,6 +2418,8 @@ public final class ThemedContextMenu {
             bindQueueMoveRibbon(0);
         } else {
             refreshAll();
+            // 2026-08-01 — Queue Mix dividers fade in once the list settles (move end / reopen).
+            animateQueueMixRowsIn();
         }
         ensureQueueListVisible();
         scrollFocusIntoView();
@@ -2405,6 +2535,9 @@ public final class ThemedContextMenu {
                     sub.setVisibility(View.VISIBLE);
                 }
             }
+            // 2026-08-01 — Reorder/seed-lift swaps artFile refs; repaint squares here too
+            // (refreshQueueRowAt is not called on this path). Reversal: skip applyQueueRowArt.
+            applyQueueRowArt(row, i);
         }
     }
 
@@ -2533,6 +2666,66 @@ public final class ThemedContextMenu {
     /** Drop move — restore full list, keep focus, flash checkmark on placed row. */
     public void finishQueueMove(int placedIndex) {
         flashQueueConfirm(placedIndex);
+    }
+
+    /**
+     * True when the current queue rows include interleaved Mix dividers.
+     * Layman: the queue shows the word Mix between songs right now.
+     * 2026-08-01
+     */
+    public boolean hasQueueMixRows() {
+        if (queueRows == null) return false;
+        for (int i = 0; i < queueRows.length; i++) {
+            if (queueRows[i].mixRow) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Fade interleaved Mix dividers out, then run onDone (move ribbon takes over).
+     * Layman: the Mix words dissolve before you start dragging rows.
+     * 2026-08-01
+     */
+    public void fadeQueueMixRows(final Runnable onDone) {
+        if (itemsHost == null || queueRows == null || !hasQueueMixRows()) {
+            if (onDone != null) onDone.run();
+            return;
+        }
+        final int[] remaining = new int[] { 0 };
+        for (int i = 0; i < queueRows.length; i++) {
+            if (!queueRows[i].mixRow) continue;
+            final View row = findQueueRowByIndex(i);
+            if (row == null) continue;
+            remaining[0]++;
+            row.animate().cancel();
+            row.animate().alpha(0f).setDuration(140)
+                    .setListener(new android.animation.AnimatorListenerAdapter() {
+                        @Override
+                        public void onAnimationEnd(android.animation.Animator animation) {
+                            row.animate().setListener(null);
+                            remaining[0]--;
+                            if (remaining[0] <= 0 && onDone != null) onDone.run();
+                        }
+                    });
+        }
+        if (remaining[0] <= 0 && onDone != null) onDone.run();
+    }
+
+    /**
+     * Fade interleaved Mix dividers in after a queue rebuild (move end / reopen).
+     * Layman: the Mix words fade back in when the list settles.
+     * 2026-08-01
+     */
+    private void animateQueueMixRowsIn() {
+        if (itemsHost == null || queueRows == null || !hasQueueMixRows()) return;
+        for (int i = 0; i < queueRows.length; i++) {
+            if (!queueRows[i].mixRow) continue;
+            final View row = findQueueRowByIndex(i);
+            if (row == null) continue;
+            row.setAlpha(0f);
+            row.animate().cancel();
+            row.animate().alpha(1f).setDuration(200).setStartDelay(40).start();
+        }
     }
 
     /** Confirm flash after move — restore browse list (MainActivity also rebuilds; belt-and-braces). */
@@ -3043,50 +3236,98 @@ public final class ThemedContextMenu {
         title.setTypeface(OverlayThemeProvider.get().getCustomFont(), android.graphics.Typeface.BOLD);
         title.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, menuTextPx);
         title.setSingleLine(true);
-        title.setEllipsize(TextUtils.TruncateAt.MARQUEE);
-        title.setMarqueeRepeatLimit(-1);
-        title.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
-        FrameLayout.LayoutParams titleLp = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
-        titleLp.leftMargin = textPadLeft;
-        titleLp.rightMargin = slotW + (int) (8 * density);
-        titleLp.gravity = Gravity.CENTER_VERTICAL;
-        row.addView(title, titleLp);
+        if (spec.mixRow) {
+            // Queue Mix divider — centered accent row that blends the adjacent pair.
+            // 2026-08-01 — the two 16dp art squares flank the label so the user sees
+            // exactly which tracks will be mixed on the pads (StemFM queue arranging).
+            title.setEllipsize(TextUtils.TruncateAt.END);
+            title.setGravity(Gravity.CENTER);
+            title.setTextColor(OverlayThemeProvider.get().getSectionHeaderTextColor());
+            LinearLayout mixLine = new LinearLayout(context);
+            mixLine.setOrientation(LinearLayout.HORIZONTAL);
+            mixLine.setGravity(Gravity.CENTER);
+            FrameLayout.LayoutParams mixLp = new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
+            mixLp.gravity = Gravity.CENTER;
+            row.addView(mixLine, mixLp);
+            int mixArt = (int) (16 * density);
+            ImageView artA = new ImageView(context);
+            artA.setTag(TAG_QUEUE_ART);
+            artA.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            artA.setVisibility(View.GONE);
+            LinearLayout.LayoutParams artALp = new LinearLayout.LayoutParams(mixArt, mixArt);
+            artALp.setMargins(0, 0, (int) (5 * density), 0);
+            mixLine.addView(artA, artALp);
+            title.setTypeface(OverlayThemeProvider.get().getCustomFont(),
+                    android.graphics.Typeface.BOLD);
+            mixLine.addView(title, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT));
+            ImageView artB = new ImageView(context);
+            artB.setTag(TAG_QUEUE_ART2);
+            artB.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            artB.setVisibility(View.GONE);
+            LinearLayout.LayoutParams artBLp = new LinearLayout.LayoutParams(mixArt, mixArt);
+            artBLp.setMargins((int) (5 * density), 0, 0, 0);
+            mixLine.addView(artB, artBLp);
+        } else {
+            title.setEllipsize(TextUtils.TruncateAt.MARQUEE);
+            title.setMarqueeRepeatLimit(-1);
+            title.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+            // 2026-08-01 — 16dp album-art square left of the track name (StemFM-style queue).
+            int artPx = (int) (16 * density);
+            FrameLayout.LayoutParams titleLp = new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
+            titleLp.leftMargin = textPadLeft + artPx + (int) (6 * density);
+            titleLp.rightMargin = slotW + (int) (8 * density);
+            titleLp.gravity = Gravity.CENTER_VERTICAL;
+            row.addView(title, titleLp);
 
-        android.widget.FrameLayout rightSlot = new android.widget.FrameLayout(context);
-        FrameLayout.LayoutParams slotLp = new FrameLayout.LayoutParams(slotW, rowH);
-        slotLp.gravity = Gravity.CENTER_VERTICAL | Gravity.END;
-        rightSlot.setLayoutParams(slotLp);
+            ImageView art = new ImageView(context);
+            art.setTag(TAG_QUEUE_ART);
+            art.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            art.setVisibility(View.GONE);
+            FrameLayout.LayoutParams artLp = new FrameLayout.LayoutParams(artPx, artPx);
+            artLp.gravity = Gravity.CENTER_VERTICAL | Gravity.START;
+            artLp.leftMargin = textPadLeft;
+            row.addView(art, artLp);
 
-        TextView grip = new TextView(context);
-        grip.setTag(TAG_QUEUE_GRIP);
-        grip.setText(context.getString(R.string.home_screen_move_grip));
-        grip.setGravity(Gravity.CENTER);
-        grip.setTypeface(OverlayThemeProvider.get().getCustomFont(), android.graphics.Typeface.BOLD);
-        grip.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, menuTextPx);
-        grip.setVisibility(View.GONE);
-        rightSlot.addView(grip, new android.widget.FrameLayout.LayoutParams(
-                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
-                android.widget.FrameLayout.LayoutParams.MATCH_PARENT));
+            android.widget.FrameLayout rightSlot = new android.widget.FrameLayout(context);
+            FrameLayout.LayoutParams slotLp = new FrameLayout.LayoutParams(slotW, rowH);
+            slotLp.gravity = Gravity.CENTER_VERTICAL | Gravity.END;
+            rightSlot.setLayoutParams(slotLp);
 
-        ImageView pp = new ImageView(context);
-        pp.setTag(TAG_QUEUE_PP);
-        pp.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        pp.setVisibility(View.GONE);
-        int ppSz = (int) (rowHeightPx * 0.42f);
-        rightSlot.addView(pp, new android.widget.FrameLayout.LayoutParams(ppSz, ppSz, Gravity.CENTER));
+            TextView grip = new TextView(context);
+            grip.setTag(TAG_QUEUE_GRIP);
+            grip.setText(context.getString(R.string.home_screen_move_grip));
+            grip.setGravity(Gravity.CENTER);
+            grip.setTypeface(OverlayThemeProvider.get().getCustomFont(), android.graphics.Typeface.BOLD);
+            grip.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, menuTextPx);
+            grip.setVisibility(View.GONE);
+            rightSlot.addView(grip, new android.widget.FrameLayout.LayoutParams(
+                    android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                    android.widget.FrameLayout.LayoutParams.MATCH_PARENT));
 
-        ImageView confirm = new ImageView(context);
-        confirm.setTag(TAG_QUEUE_CONFIRM);
-        confirm.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        confirm.setImageResource(R.drawable.ic_check);
-        confirm.setVisibility(View.GONE);
-        rightSlot.addView(confirm, new android.widget.FrameLayout.LayoutParams(ppSz, ppSz, Gravity.CENTER));
+            ImageView pp = new ImageView(context);
+            pp.setTag(TAG_QUEUE_PP);
+            pp.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            pp.setVisibility(View.GONE);
+            int ppSz = (int) (rowHeightPx * 0.42f);
+            rightSlot.addView(pp, new android.widget.FrameLayout.LayoutParams(ppSz, ppSz, Gravity.CENTER));
 
-        row.addView(rightSlot);
+            ImageView confirm = new ImageView(context);
+            confirm.setTag(TAG_QUEUE_CONFIRM);
+            confirm.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            confirm.setImageResource(R.drawable.ic_check);
+            confirm.setVisibility(View.GONE);
+            rightSlot.addView(confirm, new android.widget.FrameLayout.LayoutParams(ppSz, ppSz, Gravity.CENTER));
+
+            row.addView(rightSlot);
+        }
         attachA5OptionRowTap(row, index);
-        // 2026-07-15 — Touch long-press starts queue move (browse rows only; ribbon slots index -1).
-        if (index >= 0 && queueTouchMoveListener != null && MoveRibbonTouch.touchReorderEnabled()) {
+        // 2026-07-15 — Touch long-press starts queue move (browse rows only; ribbon slots index -1;
+        // Mix dividers are tap-to-blend rows and never move). 2026-08-01
+        if (index >= 0 && !spec.mixRow && queueTouchMoveListener != null && MoveRibbonTouch.touchReorderEnabled()) {
             final int rowIndex = index;
             MoveRibbonTouch.attachBrowseLift(row, MoveRibbonTouch.LIFT_HOLD_MS,
                     new MoveRibbonTouch.Callbacks() {
@@ -3293,6 +3534,7 @@ public final class ThemedContextMenu {
 
         overlay = new FrameLayout(context);
         styleOverlayScrim(overlay);
+        constrainOverlayToChromeViewport();
         overlay.setClickable(true);
         overlay.setFocusable(true);
 
@@ -3352,6 +3594,7 @@ public final class ThemedContextMenu {
 
         overlay = new FrameLayout(context);
         styleOverlayScrim(overlay);
+        constrainOverlayToChromeViewport();
         overlay.setClickable(requestFocus);
         overlay.setFocusable(requestFocus);
 
@@ -3452,6 +3695,7 @@ public final class ThemedContextMenu {
         Y1ScrollIndicators.applyVerticalScrollView(itemsScroll);
         itemsScroll.setVisibility(View.GONE);
         maxListHeightPx = (int) (context.getResources().getDisplayMetrics().heightPixels * 0.42f);
+        capListHeightToChromeViewport();
         itemsHost = new LinearLayout(context);
         itemsHost.setOrientation(LinearLayout.VERTICAL);
         rebuildListRows(itemIconKeys, itemStateTexts);
@@ -3698,6 +3942,7 @@ public final class ThemedContextMenu {
         panelBgColor = OverlayThemeProvider.get().getContextMenuPanelColor();
         overlay = new FrameLayout(context);
         styleOverlayScrim(overlay);
+        constrainOverlayToChromeViewport();
         overlay.setClickable(true);
         overlay.setFocusable(true);
         panel = new LinearLayout(context);
@@ -5047,11 +5292,13 @@ public final class ThemedContextMenu {
         TextView grip = (TextView) row.findViewWithTag(TAG_QUEUE_GRIP);
         ImageView pp = (ImageView) row.findViewWithTag(TAG_QUEUE_PP);
         ImageView confirm = (ImageView) row.findViewWithTag(TAG_QUEUE_CONFIRM);
-        int titleColor = highlighted ? textSelected() : textNormal();
+        boolean mixRow = queueRows[queueIndex].mixRow;
+        int titleColor = highlighted ? textSelected()
+                : (mixRow ? OverlayThemeProvider.get().getSectionHeaderTextColor() : textNormal());
         if (title != null) {
             OverlayThemeProvider.get().applyThemedTextStyle(title, titleColor);
             title.setSelected(highlighted);
-            if (highlighted) {
+            if (highlighted && !mixRow) {
                 title.setEllipsize(TextUtils.TruncateAt.MARQUEE);
                 title.setHorizontallyScrolling(true);
             } else {
@@ -5086,6 +5333,7 @@ public final class ThemedContextMenu {
                 pp.setVisibility(View.GONE);
             }
         }
+        applyQueueRowArt(row, queueIndex);
         ensureQueueDropLine((FrameLayout) row, moving);
     }
 

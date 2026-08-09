@@ -10,6 +10,13 @@ import android.content.Intent;
  * 2026-07-19 — Sole PAIRING_REQUEST owner; notifies coordinator on BOND_BONDED to cancel delayed PIN.
  */
 public class BluetoothAudioRepairReceiver extends BroadcastReceiver {
+    // These extras were added to the public SDK in API 19. Keep the literal names here so
+    // this receiver can still be verified and loaded on the API 17 Y1 runtime.
+    private static final String EXTRA_PAIRING_VARIANT =
+            "android.bluetooth.device.extra.PAIRING_VARIANT";
+    private static final String EXTRA_PAIRING_KEY =
+            "android.bluetooth.device.extra.PAIRING_KEY";
+
     @Override
     public void onReceive(Context context, Intent intent) {
         if (context == null || intent == null) return;
@@ -18,9 +25,8 @@ public class BluetoothAudioRepairReceiver extends BroadcastReceiver {
             device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
         } catch (Exception ignored) {}
         if (BluetoothDevice.ACTION_PAIRING_REQUEST.equals(intent.getAction())) {
-            int variant = intent.getIntExtra(BluetoothDevice.EXTRA_PAIRING_VARIANT,
-                    BluetoothDevice.ERROR);
-            int passkey = intent.getIntExtra(BluetoothDevice.EXTRA_PAIRING_KEY, 0);
+            int variant = intent.getIntExtra(EXTRA_PAIRING_VARIANT, BluetoothDevice.ERROR);
+            int passkey = intent.getIntExtra(EXTRA_PAIRING_KEY, 0);
             if (BluetoothPairingCoordinator.onPairingRequest(context, device, variant, passkey, false)) {
                 abortBroadcast();
             }

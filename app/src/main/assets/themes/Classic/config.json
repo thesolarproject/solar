@@ -107,12 +107,14 @@
         "headsetWithoutMic": "icon_headset_1.png",
         "statusBarColor": "",
         "battery": [
+            "icon_statusbar_battery_0.png",
             "icon_statusbar_battery_1.png",
             "icon_statusbar_battery_2.png",
             "icon_statusbar_battery_3.png",
             "icon_statusbar_battery_4.png"
         ],
         "batteryCharging": [
+            "icon_statusbar_battery_0_c.png",
             "icon_statusbar_battery_1_c.png",
             "icon_statusbar_battery_2_c.png",
             "icon_statusbar_battery_3_c.png",

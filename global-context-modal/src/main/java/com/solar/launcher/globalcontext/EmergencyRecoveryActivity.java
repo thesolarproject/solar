@@ -11,8 +11,8 @@ import android.widget.TextView;
 /**
  * 2026-07-05 — Companion HOME when persist.solar.emergency_mode=1 after crash loop.
  * Layman: explains Solar could not start and offers app picker or streak reset.
- * Technical: lightweight Activity registered as HOME; replaces Solar EmergencyRecoveryActivity when companion installed.
- * Reversal: remove Activity; Solar main APK EmergencyRecoveryActivity owns HOME again.
+ * Technical: lightweight Activity launched explicitly by Solar during emergency recovery; it is not a HOME app.
+ * Reversal: remove Activity; Solar main APK EmergencyRecoveryActivity remains the recovery fallback.
  */
 public final class EmergencyRecoveryActivity extends Activity {
 

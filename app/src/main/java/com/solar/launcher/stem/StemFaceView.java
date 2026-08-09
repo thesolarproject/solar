@@ -19,10 +19,10 @@ import android.view.View;
 public class StemFaceView extends View {
     /** Zone accent for focus ring / status (Watch DNA) — LEDs stay white like hardware. */
     public static final int[] STEM_COLORS = {
-            0xFFFA114F, // Vocals
-            0xFF92E82A, // Drums
-            0xFF00C7BE, // Bass
-            0xFFFF9F0A, // Melody
+            0xFFFA114F, // Vocals (N)
+            0xFF00C7BE, // Bass (W) — StemFM compass
+            0xFFFF9F0A, // Melody (E) — StemFM compass
+            0xFF92E82A, // Drums (S) — StemFM compass
     };
 
     /** Real Stem Player face uses four LEDs per trough. */

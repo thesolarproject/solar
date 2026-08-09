@@ -9,14 +9,14 @@ package com.solar.launcher.stem;
  */
 public final class NpStemPadGains {
 
-    /** Vocals pad index in StemMixer. 2026-07-21 */
+    /** Vocals pad index in StemMixer — StemFM compass (N). 2026-07-21 / 2026-08-02 */
     public static final int ZONE_VOCALS = 0;
-    /** Drums. 2026-07-21 */
-    public static final int ZONE_DRUMS = 1;
-    /** Bass. 2026-07-21 */
-    public static final int ZONE_BASS = 2;
-    /** Melody catch-all (premix). 2026-07-21 */
-    public static final int ZONE_MELODY = 3;
+    /** Bass pad — StemFM compass (W). 2026-08-02 */
+    public static final int ZONE_BASS = 1;
+    /** Melody pad — StemFM compass (E). 2026-08-02 */
+    public static final int ZONE_MELODY = 2;
+    /** Drums pad — StemFM compass (S). 2026-08-02 */
+    public static final int ZONE_DRUMS = 3;
 
     private NpStemPadGains() {}
 

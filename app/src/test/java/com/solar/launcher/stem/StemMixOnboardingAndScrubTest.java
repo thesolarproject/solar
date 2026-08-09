@@ -162,8 +162,9 @@ public class StemMixOnboardingAndScrubTest {
         assertTrue(StemMixSoftScrub.statusLine(1000, 2000).contains("/"));
         assertEquals(0.5f, StemMixSoftScrub.thumbFrac(5000, 10000), 0.001f);
         assertEquals(5000, StemMixSoftScrub.cursorFromThumb(0.5f, 10000));
-        assertEquals(-1000, StemMixSoftScrub.wheelDeltaMs(100_000, 1));
-        assertEquals(1000, StemMixSoftScrub.wheelDeltaMs(100_000, -1));
+        // durationMs/40 = 2500 for 100s, clamped 500..10000. 2026-08-01
+        assertEquals(-2500, StemMixSoftScrub.wheelDeltaMs(100_000, 1));
+        assertEquals(2500, StemMixSoftScrub.wheelDeltaMs(100_000, -1));
     }
 
     /** Circular pad scrub: frac ↔ angle + beat-match snap. 2026-07-21 */
@@ -200,11 +201,12 @@ public class StemMixOnboardingAndScrubTest {
 
     @Test
     public void contextRowsSlotAndSession() {
-        assertEquals(4, StemMixContextRows.slotRows(1).length);
-        assertEquals(6, StemMixContextRows.sessionRows(false).length);
-        assertEquals(StemControls.TRANSITION_PRESET_LONG,
+        // 9 = Replace / Play queue / Start next / Play both / Scrub / 4 TRANSITION. 2026-08-01
+        assertEquals(9, StemMixContextRows.slotRows(1).length);
+        assertEquals(7, StemMixContextRows.sessionRows(false).length);
+        assertEquals(StemControls.TRANSITION_PRESET_FULL,
                 StemMixContextRows.transitionPresetForSessionRow(
-                        StemMixContextRows.SESSION_TRANSITION_LONG));
+                        StemMixContextRows.SESSION_TRANSITION_FULL));
         assertEquals(-1, StemMixContextRows.transitionPresetForSessionRow(
                 StemMixContextRows.SESSION_PLAY_QUEUE));
         assertTrue(StemMixContextRows.isSessionPauseRow(StemMixContextRows.SESSION_PAUSE));

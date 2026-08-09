@@ -123,8 +123,14 @@
     <string name="status_stem_player">Stems</string>
     <string name="status_stems_hub">Stems</string>
     <string name="status_mix">Mix</string>
+    <!-- 2026-08-01 — Queue Mix divider row between every track pair; blends them on the pads. -->
+    <string name="queue_mix_row">Mix</string>
     <!-- 2026-07-21 — Get stems = prep/extract this track. Reversal: Use in Stem Player. -->
     <string name="context_action_get_stems">Get stems</string>
+    <string name="context_action_save_song_stems">Save Song + Stems</string>
+    <string name="save_song_stems_started">Saving song, then preparing stems…</string>
+    <string name="save_song_stems_done">Song + stems saved to your library.</string>
+    <string name="save_song_stems_failed">Song saved, but stems could not be prepared: %1$s</string>
     <!-- 2026-07-21 — Start Stem session = pick numbering browse. Reversal: Select tracks…. -->
     <string name="context_action_start_stem_session">Start Stem session</string>
     <!-- 2026-07-20 — Was: "Stem Player". Kept for older call sites; prefer get_stems. -->
@@ -691,6 +697,7 @@
     <string name="library_search_searching_navidrome">Searching Navidrome…</string>
     <string name="get_music_source_navidrome">Navidrome</string>
     <string name="context_navidrome_download">Save to library</string>
+    <string name="context_navidrome_save_stems">Save Song + Stems</string>
     <string name="context_navidrome_play">Play now</string>
     <string name="path_navidrome_albums">Navidrome / %1$s</string>
     <string name="path_navidrome_songs">Navidrome / %1$s / Songs</string>
@@ -708,6 +715,7 @@
     <string name="library_search_searching_plex">Searching Plex…</string>
     <string name="get_music_source_plex">Plex</string>
     <string name="context_plex_download">Save to library</string>
+    <string name="context_plex_save_stems">Save Song + Stems</string>
     <string name="context_plex_play">Play now</string>
     <string name="path_plex_albums">Plex / %1$s</string>
     <string name="path_plex_songs">Plex / %1$s / Songs</string>
@@ -746,6 +754,7 @@
     <string name="library_search_searching_jellyfin">Searching Jellyfin…</string>
     <string name="get_music_source_jellyfin">Jellyfin</string>
     <string name="context_jellyfin_download">Save to library</string>
+    <string name="context_jellyfin_save_stems">Save Song + Stems</string>
     <string name="context_jellyfin_play">Play now</string>
     <string name="path_jellyfin_albums">Jellyfin / %1$s</string>
     <string name="path_jellyfin_songs">Jellyfin / %1$s / Songs</string>
@@ -947,6 +956,7 @@
     <string name="soulseek_back_results">@string/common_back</string>
     <string name="soulseek_play">▶ Play</string>
     <string name="soulseek_save">Save to Library</string>
+    <string name="soulseek_save_stems">Save Song + Stems</string>
     <string name="soulseek_buffering">Buffering… %1$d%%</string>
     <string name="soulseek_queue_progress">Queuing… %1$d%%</string>
     <string name="soulseek_download_progress">Downloading… %1$d%%</string>
@@ -1143,6 +1153,7 @@ https://github.com/thesolarproject/solar</string>
     <string name="deezer_back_results">@string/common_back</string>
     <string name="deezer_play">▶ Play</string>
     <string name="deezer_save">Save to Library</string>
+    <string name="deezer_save_stems">Save Song + Stems</string>
     <string name="deezer_play_album">Play album</string>
     <string name="deezer_save_album">Save album to library</string>
     <string name="deezer_queue_album">Add album to queue</string>
@@ -1526,6 +1537,9 @@ Press Back to cancel and restore the original order.</string>
     <string name="context_action_show_lyrics">Lyrics</string>
     <string name="np_lyrics_none">No lyrics for this track</string>
     <string name="np_lyrics_loading">Loading lyrics…</string>
+    <string name="np_lyrics_fetching">Fetching lyrics…</string>
+    <string name="np_lyrics_fetched">Lyrics downloaded</string>
+    <string name="np_lyrics_offline">Can’t fetch lyrics — check connection</string>
 
     <!-- Dialogs -->
     <string name="dialog_power_off_title">Power Off</string>
@@ -1860,7 +1874,8 @@ Press Back to cancel and restore the original order.</string>
     <string name="youtube_popular_empty">No suggestions right now. Try Search.</string>
     <!-- 2026-07-18 — Was "Loading videos…"; popular/home fetch is recommendations, not a generic list. -->
     <string name="youtube_loading">Getting recommended videos…</string>
-    <string name="youtube_empty">No videos found.</string>
+    <string name="youtube_empty">No Videos Found</string>
+    <string name="youtube_empty_songs">No Songs Found</string>
     <string name="youtube_error">Could not load YouTube. Check connection and try again.</string>
     <string name="youtube_unavailable">YouTube is unavailable right now.</string>
     <string name="youtube_needs_platform_prep">YouTube needs an internet connection. Check Wi‑Fi and try again.</string>

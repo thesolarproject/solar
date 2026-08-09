@@ -165,6 +165,44 @@ public class ThemeManagerTest {
     }
 
     @Test
+    public void parseBatteryFrameArray_preservesFourFrameThemeOrder() throws Exception {
+        JSONObject root = new JSONObject().put("battery", new org.json.JSONArray()
+                .put("bt1.png").put("bt2.png").put("bt3.png").put("bt4.png"));
+        String[] frames = ThemeManager.parseBatteryFrameArray(root, "battery");
+        if (!"bt1.png".equals(frames[0]) || !"bt4.png".equals(frames[3])
+                || frames[4] != null) {
+            throw new AssertionError("four-frame battery parsing");
+        }
+    }
+
+    @Test
+    public void parseBatteryFrameArray_acceptsFiveFrameThemeOrder() throws Exception {
+        JSONObject root = new JSONObject().put("battery", new org.json.JSONArray()
+                .put("b0.png").put("b1.png").put("b2.png").put("b3.png").put("b4.png"));
+        String[] frames = ThemeManager.parseBatteryFrameArray(root, "battery");
+        if (!"b0.png".equals(frames[0]) || !"b4.png".equals(frames[4])) {
+            throw new AssertionError("five-frame battery parsing");
+        }
+    }
+
+    @Test
+    public void batteryAssetIndex_supportsFourAndFiveFrameThemes() {
+        if (ThemeManager.batteryAssetIndex(0, 5) != 0
+                || ThemeManager.batteryAssetIndex(19, 5) != 0
+                || ThemeManager.batteryAssetIndex(20, 5) != 1
+                || ThemeManager.batteryAssetIndex(99, 5) != 4
+                || ThemeManager.batteryAssetIndex(100, 5) != 4) {
+            throw new AssertionError("five-frame battery mapping");
+        }
+        if (ThemeManager.batteryAssetIndex(0, 4) != 0
+                || ThemeManager.batteryAssetIndex(24, 4) != 0
+                || ThemeManager.batteryAssetIndex(25, 4) != 1
+                || ThemeManager.batteryAssetIndex(100, 4) != 3) {
+            throw new AssertionError("four-frame battery mapping");
+        }
+    }
+
+    @Test
     public void wifiSignalIndex_mapsThreeBars() {
         if (ThemeManager.wifiSignalIndex(-100) != 0) throw new AssertionError("weak");
         if (ThemeManager.wifiSignalIndex(-77) != 1) throw new AssertionError("mid");

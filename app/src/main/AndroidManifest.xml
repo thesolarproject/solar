@@ -6,7 +6,9 @@
     <uses-permission android:name="android.permission.DEVICE_POWER" tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.REORDER_TASKS" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="s" />
     <uses-permission android:name="android.permission.SET_TIME" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
@@ -26,6 +28,7 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.BROADCAST_STICKY" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
@@ -105,6 +108,24 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+        <!-- 2026-07-31 — Keep offline Wi-Fi power policy alive when MainActivity is reclaimed. -->
+        <receiver android:name=".WifiOfflinePowerReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.net.wifi.WIFI_STATE_CHANGED" />
+                <action android:name="android.net.wifi.STATE_CHANGE" />
+                <action android:name="android.net.conn.CONNECTIVITY_CHANGE" />
+                <action android:name="android.intent.action.USER_PRESENT" />
+                <action android:name="android.intent.action.SCREEN_ON" />
+                <action android:name="android.intent.action.SCREEN_OFF" />
+                <action android:name="android.intent.action.ACTION_POWER_CONNECTED" />
+                <action android:name="android.intent.action.ACTION_POWER_DISCONNECTED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.TIME_TICK" />
+                <action android:name="com.solar.launcher.action.WIFI_OFFLINE_POWER_ALARM" />
+            </intent-filter>
+        </receiver>
         <receiver android:name=".UsbHostWakeReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="android.hardware.usb.action.USB_STATE" />
@@ -131,6 +152,16 @@
             </intent-filter>
         </receiver>
         <service android:name=".BluetoothAudioRepairService" android:exported="false" />
+        <!-- 2026-08-05 — Embedded Wolfius TLS 1.3 proxy (wolfSSL, GPLv3).
+             foregroundServiceType keeps targetSdk 35 happy on modern devices; Y1/Y2 (API 17/19) ignore it. -->
+        <service
+            android:name=".WolfiusTlsService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Local TLS 1.3 proxy (Wolfius) for old-Android streaming" />
+        </service>
         <service
             android:name=".SolarHandoffService"
             android:exported="false" />

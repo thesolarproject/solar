@@ -5,9 +5,22 @@ plugins {
 // 2026-07-05 — Standalone companion APK; platform keystore matches Solar for OVERLAY_TRIGGER parity.
 def platformKeystore = file("${rootProject.projectDir}/.gradle/platform.keystore")
 
+// 2026-08-01 — Single-APK installability gate (mirrors :app): platform signing only when
+// keys/keystore are configured or -PplatformSigningRequested=true / SOLAR_PLATFORM_SIGNING=true.
+def platformSigningRequested = {
+    def prop = project.findProperty("platformSigningRequested")
+    if (prop != null) return prop.toString().equalsIgnoreCase("true")
+    def env = System.getenv("SOLAR_PLATFORM_SIGNING")
+    if (env != null && !env.isEmpty()) return env.equalsIgnoreCase("true")
+    def pk8 = System.getenv("SOLAR_PLATFORM_KEY_PK8")
+    def pem = System.getenv("SOLAR_PLATFORM_KEY_PEM")
+    if (pk8 != null && !pk8.isEmpty() && pem != null && !pem.isEmpty()) return true
+    return platformKeystore.isFile()
+}()
+
 tasks.register("ensurePlatformKeystore") {
     doLast {
-        if (!platformKeystore.isFile()) {
+        if (platformSigningRequested && !platformKeystore.isFile()) {
             exec {
                 workingDir rootProject.projectDir
                 commandLine "bash", "scripts/ensure-platform-keystore.sh"
@@ -45,11 +58,11 @@ android {
 
     buildTypes {
         debug {
-            signingConfig signingConfigs.platform
+            signingConfig platformSigningRequested ? signingConfigs.platform : signingConfigs.debug
         }
         release {
             minifyEnabled false
-            signingConfig signingConfigs.platform
+            signingConfig platformSigningRequested ? signingConfigs.platform : signingConfigs.debug
         }
     }
 

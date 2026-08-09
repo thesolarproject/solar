@@ -21,10 +21,25 @@ import com.solar.launcher.Y1InputKeys;
  */
 public final class PhoneClickWheelPad extends View {
 
-    /** Delivers a synthetic key to the activity (DOWN then UP). */
+    /** Delivers a synthetic key to the activity. */
     public interface KeySink {
+        /** Short tap (cardinal button): DOWN then UP. */
         void injectKey(int keyCode);
+        /** Long press: DOWN with repeatCount=1 (marker), then UP. */
         void injectKeyLongPress(int keyCode);
+        /**
+         * 2026-08-02 — Scroll wheel notch: DOWN-only with incrementing repeatCount.
+         * Real hardware sends a stream of DOWN events (repeatCount 0,1,2...) and
+         * one UP when the finger lifts. Phone chrome must match this pattern so
+         * WheelNavPolicy / ListWheelCoalescer work correctly.
+         * The UP (held=false) is sent via {@link #injectWheelUp(int)} on finger lift.
+         */
+        void injectWheelScroll(int keyCode, int repeatCount);
+        /**
+         * 2026-08-02 — Finger lifted from the wheel. Sends UP for the active scroll
+         * direction so wheelKeyHeld clears and the list stops scrolling.
+         */
+        void injectWheelUp(int keyCode);
     }
 
     private KeySink sink;
@@ -42,6 +57,13 @@ public final class PhoneClickWheelPad extends View {
     private float accumRad;
     private boolean dragged;
     private boolean longArmed;
+    /**
+     * 2026-08-02 — Current scroll-wheel keycode for held gesture (127=down, 126=up).
+     * -1 when idle. Used to send UP on finger lift.
+     */
+    private int scrollKeyCode = -1;
+    /** 2026-08-02 — Repeat count for the current scroll gesture (increments per notch). */
+    private int scrollRepeatCount = 0;
     private final Runnable longCenter = new Runnable() {
         @Override
         public void run() {
@@ -57,6 +79,33 @@ public final class PhoneClickWheelPad extends View {
             if (!dragged && downZone == PhoneClickWheel.Zone.MENU && sink != null) {
                 longArmed = true;
                 sink.injectKeyLongPress(Y1InputKeys.KEY_BACK);
+            }
+        }
+    };
+    private final Runnable longPrev = new Runnable() {
+        @Override
+        public void run() {
+            if (!dragged && downZone == PhoneClickWheel.Zone.PREV && sink != null) {
+                longArmed = true;
+                sink.injectKeyLongPress(Y1InputKeys.KEY_TRACK_PREV);
+            }
+        }
+    };
+    private final Runnable longNext = new Runnable() {
+        @Override
+        public void run() {
+            if (!dragged && downZone == PhoneClickWheel.Zone.NEXT && sink != null) {
+                longArmed = true;
+                sink.injectKeyLongPress(Y1InputKeys.KEY_TRACK_NEXT);
+            }
+        }
+    };
+    private final Runnable longPlay = new Runnable() {
+        @Override
+        public void run() {
+            if (!dragged && downZone == PhoneClickWheel.Zone.PLAY && sink != null) {
+                longArmed = true;
+                sink.injectKeyLongPress(Y1InputKeys.KEY_PLAY_PAUSE);
             }
         }
     };
@@ -155,6 +204,12 @@ public final class PhoneClickWheelPad extends View {
                 postDelayed(longCenter, 500);
             } else if (downZone == PhoneClickWheel.Zone.MENU) {
                 postDelayed(longBack, 500);
+            } else if (downZone == PhoneClickWheel.Zone.PREV) {
+                postDelayed(longPrev, 500);
+            } else if (downZone == PhoneClickWheel.Zone.NEXT) {
+                postDelayed(longNext, 500);
+            } else if (downZone == PhoneClickWheel.Zone.PLAY) {
+                postDelayed(longPlay, 500);
             }
             return true;
         }
@@ -170,6 +225,9 @@ public final class PhoneClickWheelPad extends View {
                     dragged = true;
                     removeCallbacks(longCenter);
                     removeCallbacks(longBack);
+                    removeCallbacks(longPrev);
+                    removeCallbacks(longNext);
+                    removeCallbacks(longPlay);
                     // Promote cardinal start into ring drag after movement.
                     downZone = PhoneClickWheel.Zone.RING;
                     accumRad += step;
@@ -179,8 +237,13 @@ public final class PhoneClickWheelPad extends View {
                                 ? PhoneClickWheel.wheelDownKeyCode()
                                 : PhoneClickWheel.wheelUpKeyCode();
                         int abs = Math.abs(notches);
+                        // 2026-08-02 — Reset repeat count when scroll direction changes.
+                        if (key != scrollKeyCode) {
+                            scrollRepeatCount = 0;
+                        }
+                        scrollKeyCode = key;
                         for (int i = 0; i < abs; i++) {
-                            sink.injectKey(key);
+                            sink.injectWheelScroll(key, scrollRepeatCount++);
                         }
                         accumRad -= notches * PhoneClickWheel.NOTCH_RADIANS;
                     }
@@ -193,7 +256,15 @@ public final class PhoneClickWheelPad extends View {
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
             removeCallbacks(longCenter);
             removeCallbacks(longBack);
-            if (!dragged && !longArmed && downZone != null && downZone != PhoneClickWheel.Zone.RING) {
+            removeCallbacks(longPrev);
+            removeCallbacks(longNext);
+            removeCallbacks(longPlay);
+            if (dragged && scrollKeyCode >= 0) {
+                // 2026-08-02 — Finger lifted from ring drag: send UP to clear held state.
+                sink.injectWheelUp(scrollKeyCode);
+                scrollKeyCode = -1;
+                scrollRepeatCount = 0;
+            } else if (!dragged && !longArmed && downZone != null && downZone != PhoneClickWheel.Zone.RING) {
                 int code = PhoneClickWheel.keyCodeForZone(downZone);
                 if (code != 0) sink.injectKey(code);
             }
@@ -209,6 +280,18 @@ public final class PhoneClickWheelPad extends View {
     public static KeyEvent[] downUp(int keyCode) {
         long now = SystemClock.uptimeMillis();
         KeyEvent down = new KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0);
+        KeyEvent up = new KeyEvent(now, now + 1, KeyEvent.ACTION_UP, keyCode, 0);
+        return new KeyEvent[] { down, up };
+    }
+
+    /**
+     * Phone Chrome long press marker: one DOWN with repeat=1 followed by one UP.
+     * The Stem host treats this as a complete one-shot hold, never as a repeating key.
+     * 2026-08-03
+     */
+    public static KeyEvent[] longPressDownUp(int keyCode) {
+        long now = SystemClock.uptimeMillis();
+        KeyEvent down = new KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 1);
         KeyEvent up = new KeyEvent(now, now + 1, KeyEvent.ACTION_UP, keyCode, 0);
         return new KeyEvent[] { down, up };
     }

@@ -42,6 +42,8 @@ public final class DeezerScreen {
     public static final int ACTION_PLAY = 1;
     public static final int ACTION_SAVE = 2;
     public static final int ACTION_QUEUE = 3;
+    /** Save the permanent library copy, then automatically prepare Lalal stems. */
+    public static final int ACTION_SAVE_AND_STEMS = 4;
 
     private static final int PAGE_SIZE = 25;
     private static final long RETRY_DELAY_MIN_MS = 3400;
@@ -94,6 +96,7 @@ public final class DeezerScreen {
         void onGetMusicBackToSearch();
         void onDeezerDownloadProgress(int percent, File growingFile, long doneBytes, long totalBytes);
         void onDeezerStreamDownloadComplete(File completeFile);
+        void onDeezerSaveAndStemsComplete(File completeFile, DeezerResult track);
         void prefetchDeezerCover(File track);
         void onDeezerStreamDownloadFailed();
         void launchGetMusicSearchFromSuggestion(String q, boolean openKeyboard);
@@ -647,6 +650,7 @@ public final class DeezerScreen {
 
         addAction(container, host.string(R.string.deezer_play), r, ACTION_PLAY);
         addAction(container, host.string(R.string.deezer_save), r, ACTION_SAVE);
+        addAction(container, host.string(R.string.context_action_save_song_stems), r, ACTION_SAVE_AND_STEMS);
         addAction(container, host.string(R.string.deezer_add_to_queue), r, ACTION_QUEUE);
 
         List<String> suggestions = SoulseekSearchSuggestions.reSearchQueries(r.displayTitle() + ".mp3");
@@ -717,7 +721,8 @@ public final class DeezerScreen {
         buildDownloadUi(r, action);
         if (downloader != null) downloader.cancel();
         downloader = new DeezerDownloader(client);
-        final File dest = action == ACTION_SAVE ? host.rootFolder() : host.deezerCacheDir();
+        final File dest = (action == ACTION_SAVE || action == ACTION_SAVE_AND_STEMS)
+                ? host.rootFolder() : host.deezerCacheDir();
         final String ext = client.fileExtension();
         downloader.download(r, dest, ext, new DeezerDownloader.Listener() {
             @Override public void onProgress(final long done, final long total) {
@@ -777,9 +782,11 @@ public final class DeezerScreen {
                         downloadPercent = 100;
                         activeDownload = null;
                         UiBusy.clear(UiBusy.REASON_DOWNLOAD);
-                        if (pendingAction == ACTION_SAVE) {
+                        if (pendingAction == ACTION_SAVE || pendingAction == ACTION_SAVE_AND_STEMS) {
                             host.scanMediaLibraryAsync();
-                            if (!host.isDeezerAlbumBatchTransfer()) {
+                            if (pendingAction == ACTION_SAVE_AND_STEMS) {
+                                host.onDeezerSaveAndStemsComplete(destFile, r);
+                            } else if (!host.isDeezerAlbumBatchTransfer()) {
                                 Toast.makeText(host.context(), host.string(R.string.deezer_saved), Toast.LENGTH_SHORT).show();
                             }
                             afterDownloadComplete(r);

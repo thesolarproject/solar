@@ -24,6 +24,26 @@ public class StemBpmTest {
         assertTrue(StemBpm.rateToMatch(120f, 200f) >= StemBpm.MIN_RATE);
     }
 
+    /** Half-time lock: 60 BPM vs 120 BPM master locks at unity (no 2× stretch). 2026-08-01 */
+    @Test
+    public void harmonicLockHalfTime() {
+        assertEquals(1f, StemBpm.harmonicRateToMatch(120f, 60f), 0.001f);
+        assertEquals(1f, StemBpm.harmonicRateToMatch(128f, 64f), 0.001f);
+    }
+
+    /** Double-time lock: 240 BPM vs 120 BPM master locks at unity (no ½× droop). 2026-08-01 */
+    @Test
+    public void harmonicLockDoubleTime() {
+        assertEquals(1f, StemBpm.harmonicRateToMatch(120f, 240f), 0.001f);
+    }
+
+    /** Near-equal grooves still use the plain clamped ratio (harmonics don't hurt). 2026-08-01 */
+    @Test
+    public void harmonicLockNearEqualUsesRatio() {
+        float r = StemBpm.harmonicRateToMatch(140f, 143f);
+        assertTrue(r > 0.97f && r < 1.03f);
+    }
+
     @Test
     public void chopHoldMsNearRealtime() {
         assertEquals(350L, StemControls.STEM_STUTTER_HOLD_MS);
@@ -73,10 +93,10 @@ public class StemBpmTest {
         assertEquals(1700, StemBpm.beatRollCatchUpMs(1000, 1000L, 0.7f, 10_000));
     }
 
-    /** Past end clamps to duration. 2026-07-20 */
+    /** Past end clamps to duration − 100 ms safety margin (sub-100 ms seek storms crash OMX). */
     @Test
     public void beatRollCatchUpClampsPastEnd() {
-        assertEquals(10_000, StemBpm.beatRollCatchUpMs(9000, 2000L, 1f, 10_000));
+        assertEquals(9900, StemBpm.beatRollCatchUpMs(9000, 2000L, 1f, 10_000));
         assertEquals(0, StemBpm.beatRollCatchUpMs(-50, 0L, 1f, 10_000));
     }
 

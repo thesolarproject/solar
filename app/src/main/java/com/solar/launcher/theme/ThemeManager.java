@@ -3317,7 +3317,8 @@ public class ThemeManager {
         return 3;
     }
 
-    static final int BATTERY_FRAME_COUNT = 4;
+    /** Maximum bundled battery frames: some themes use 4 quarters, others 0..4 (five levels). */
+    static final int BATTERY_FRAME_COUNT = 5;
     public static final int WIFI_FRAME_COUNT = 3;
     private static final int WIFI_RSSI_MIN = -100;
     private static final int WIFI_RSSI_MAX = -55;
@@ -3337,7 +3338,7 @@ public class ThemeManager {
         return out;
     }
 
-    /** Parse statusConfig/solarConfig battery[] — array index is the quarter (0 → 0–24%). */
+    /** Parse statusConfig/solarConfig battery[] — supports four quarter or five 20% frames. */
     static String[] parseBatteryFrameArray(JSONObject obj, String primaryKey, String... altKeys) {
         String[] out = new String[BATTERY_FRAME_COUNT];
         if (obj == null) return out;
@@ -3491,6 +3492,20 @@ public class ThemeManager {
         }
     }
 
+    /**
+     * Select a battery asset index for a percentage and a theme's frame count.
+     * Four-frame themes retain the historical quarter mapping; five-frame themes
+     * use 0..4 at 20% steps. This keeps Melody Munchkin-style bt1..bt4 assets
+     * aligned while allowing HoloPebble/Classic's genuine 0..4 assets to render.
+     */
+    static int batteryAssetIndex(int pct, int frameCount) {
+        if (pct < 0) pct = 0;
+        if (pct > 100) pct = 100;
+        if (frameCount >= 5) return Math.min(4, pct / 20);
+        return batteryLevelIndex(pct);
+    }
+
+    /** Existing index-based API retained for callers that already selected a frame. */
     public static Bitmap getBatteryIcon(int levelIndex, boolean charging) {
         JSONObject root = getCurrentTheme().root;
         String[] frames = readBatteryFrames(root, charging);
@@ -3505,6 +3520,26 @@ public class ThemeManager {
             }
         }
         return getDefaultBatteryIcon(levelIndex, charging);
+    }
+
+    /** Percentage-aware battery lookup used by the status bar. */
+    public static Bitmap getBatteryIconForPercent(int pct, boolean charging) {
+        JSONObject root = getCurrentTheme().root;
+        String[] frames = readBatteryFrames(root, charging);
+        if (batteryFramesEmpty(frames) && charging) {
+            frames = readBatteryFrames(root, false);
+        }
+        int frameCount = frames != null && frames.length > 4
+                && frames[4] != null && !frames[4].isEmpty() ? 5 : 4;
+        int index = batteryAssetIndex(pct, frameCount);
+        if (!batteryFramesEmpty(frames)) {
+            String path = pickBatteryFrame(frames, index);
+            if (path != null && !path.isEmpty()) {
+                Bitmap bmp = resolveThemeBitmapLoose(path);
+                if (bmp != null) return bmp;
+            }
+        }
+        return getDefaultBatteryIcon(index, charging);
     }
 
     private static final java.util.Map<String, Bitmap> defaultBatteryCache = new java.util.concurrent.ConcurrentHashMap<String, Bitmap>();
@@ -3757,6 +3792,14 @@ public class ThemeManager {
             if (batteryLevelIndex(25) != 1 || batteryLevelIndex(49) != 1) throw new AssertionError("battery q1");
             if (batteryLevelIndex(50) != 2 || batteryLevelIndex(74) != 2) throw new AssertionError("battery q2");
             if (batteryLevelIndex(75) != 3 || batteryLevelIndex(100) != 3) throw new AssertionError("battery q3");
+            if (batteryAssetIndex(0, 5) != 0 || batteryAssetIndex(19, 5) != 0
+                    || batteryAssetIndex(20, 5) != 1 || batteryAssetIndex(100, 5) != 4) {
+                throw new AssertionError("battery five-frame mapping");
+            }
+            if (batteryAssetIndex(0, 4) != 0 || batteryAssetIndex(25, 4) != 1
+                    || batteryAssetIndex(100, 4) != 3) {
+                throw new AssertionError("battery four-frame mapping");
+            }
             JSONObject acBat = new JSONObject();
             acBat.put("statusConfig", new JSONObject()
                     .put("battery", new org.json.JSONArray()

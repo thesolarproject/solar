@@ -134,7 +134,7 @@ public final class StemBlendGains {
      * 2026-07-21
      */
     public static boolean useEqualPowerForPreset(int transitionPreset) {
-        return transitionPreset != StemControls.TRANSITION_PRESET_WAVE;
+        return transitionPreset != StemControls.TRANSITION_PRESET_SHORT;
     }
 
     /**

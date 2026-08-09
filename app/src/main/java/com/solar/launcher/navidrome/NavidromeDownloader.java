@@ -29,6 +29,18 @@ public final class NavidromeDownloader {
 
     private NavidromeDownloader() {}
 
+    /** Deterministic destination for a downloaded track; shared by Save + Stems UI. */
+    public static File destinationFor(Context ctx, NavidromeArtist artist,
+            NavidromeAlbum album, NavidromeSong song) {
+        File root = new File(DeviceFeatures.getNewMediaRoot(ctx), "Navidrome");
+        String artistDir = safeName(artist != null ? artist.name : (album != null ? album.artist : ""));
+        String albumDir = safeName(album != null ? album.name : (song != null ? song.album : ""));
+        String ext = song != null && song.suffix != null && !song.suffix.isEmpty()
+                ? song.suffix : "mp3";
+        return new File(new File(new File(root, artistDir), albumDir),
+                safeName(song != null ? song.title : "track") + "." + ext.toLowerCase(Locale.US));
+    }
+
     public static void downloadAlbum(final Context ctx, final NavidromeArtist artist,
             final NavidromeAlbum album, final List<NavidromeSong> songs, final Callback cb) {
         executor.execute(new Runnable() {
@@ -49,7 +61,7 @@ public final class NavidromeDownloader {
                     final int trackNum = i + 1;
                     try {
                         String ext = s.suffix != null && !s.suffix.isEmpty() ? s.suffix : "mp3";
-                        File out = new File(dir, safeName(s.title) + "." + ext.toLowerCase(Locale.US));
+                        File out = destinationFor(ctx, artist, album, s);
                         if (out.exists() && out.length() > 1024) {
                             // Already offline-ready — count as saved and report full-byte progress.
                             saved++;

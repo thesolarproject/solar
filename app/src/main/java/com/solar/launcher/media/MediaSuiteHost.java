@@ -581,6 +581,11 @@ public final class MediaSuiteHost {
         radioTuneFreqKhz = defaultFmKhz();
     }
 
+    /** Resource for the YouTube empty state, matching the originating hub. */
+    static int youtubeEmptyLabelRes(boolean audioMode) {
+        return audioMode ? R.string.youtube_empty_songs : R.string.youtube_empty;
+    }
+
     public static boolean isMediaSuiteState(int state) {
         return (state >= STATE_RADIO && state <= STATE_PHOTO_VIEWER)
                 || state == STATE_VIDEO_HUB || state == STATE_YOUTUBE_BROWSE
@@ -3849,7 +3854,7 @@ public final class MediaSuiteHost {
 
         if (youtubeVideos.isEmpty()) {
             virtualLabels.add(youtubePendingSearch != null && !youtubePendingSearch.isEmpty()
-                    ? host.getString(R.string.youtube_empty)
+                    ? host.getString(youtubeEmptyLabelRes(youtubeAudioMode))
                     : host.getString(R.string.youtube_popular_empty));
             virtualSubtitles.add("");
             youtubeBrowseRows.add(new YoutubeBrowseRow(YoutubeBrowseRow.KIND_STATUS));

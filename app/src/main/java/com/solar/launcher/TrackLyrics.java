@@ -45,6 +45,12 @@ public final class TrackLyrics {
         return empty();
     }
 
+    /** True when a .lrc sidecar file exists next to the audio (no embedded-tag read). */
+    public static boolean hasSidecar(File audioFile) {
+        if (audioFile == null || !audioFile.isFile()) return false;
+        return sidecarFor(audioFile) != null;
+    }
+
     private static Document readSidecarLrc(File audioFile) {
         File lrc = sidecarFor(audioFile);
         if (lrc == null || !lrc.isFile()) return null;

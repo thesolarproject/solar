@@ -15,6 +15,8 @@ usage() {
 Usage: $0 [debug|release] [--serial DEVICE_SERIAL] [--no-launch] [--] [gradle-args...]
 
 Builds Solar, installs the APK on a connected Android device, and launches it.
+Rooted Y1/Y2 devices replace /system/app/com.solar.launcher.apk and reboot so
+Package Manager does not leave a /data/app overlay. Phones/emulators use adb install.
 Defaults to debug.
 USAGE
 }
@@ -111,14 +113,8 @@ echo "==> Building $BUILD_TYPE APK with $GRADLE_TASK..."
   exit 1
 }
 
-SDK_INT="$("${ADB[@]}" shell getprop ro.build.version.sdk | tr -d '\r\n' || true)"
-INSTALL_FLAGS=(-r -d -t)
-if [[ "$SDK_INT" =~ ^[0-9]+$ && "$SDK_INT" -ge 23 ]]; then
-  INSTALL_FLAGS+=(-g)
-fi
-
 echo "==> Installing $APK_PATH..."
-"${ADB[@]}" install "${INSTALL_FLAGS[@]}" "$APK_PATH"
+bash "$ROOT/scripts/install-test-apk.sh" --serial "${SERIAL:-$("${ADB[@]}" get-serialno | tr -d '\r\n')}" --no-launch "$APK_PATH"
 
 if [[ "$LAUNCH" -eq 1 ]]; then
   echo "==> Stopping existing Solar Launcher process..."

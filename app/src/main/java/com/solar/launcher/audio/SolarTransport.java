@@ -667,7 +667,14 @@ public final class SolarTransport {
 
             @Override
             public void onError(TransportDeck d, String message) {
-                if (d == active && !layerMode) notifyError(message);
+                if (d == active && !layerMode) {
+                    // Do not leave the process-wide transport ladder claiming a failed
+                    // origin. Prepared-next failures must not disturb the active song.
+                    playing = false;
+                    ownsPlayback = false;
+                    notifyPlaybackStateChanged();
+                    notifyError(message);
+                }
             }
         });
     }

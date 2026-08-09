@@ -72,6 +72,10 @@ if ! "$ADB" devices 2>/dev/null | grep -q emulator; then
   done
 fi
 
+# Target the emulator explicitly — a physical Y1/Y2/A5 may also be on adb.
+EMU_SERIAL="$("$ADB" devices 2>/dev/null | awk '/emulator-[0-9]+/{print $1; exit}')" || EMU_SERIAL=""
+export ANDROID_SERIAL="${EMU_SERIAL:-}"
+
 "$ADB" shell setprop persist.solar.device_family y2 2>/dev/null || true
 echo "persist.solar.device_family=$("$ADB" shell getprop persist.solar.device_family 2>/dev/null | tr -d '\r')"
 
@@ -80,11 +84,12 @@ if [[ "$INSTALL" -eq 1 ]]; then
   if [[ ! -f "$APK" ]]; then
     (cd "$ROOT" && ./gradlew :app:assembleDebug) || exit 1
   fi
-  adb uninstall com.solar.launcher >/dev/null 2>&1 || true
-  adb install -r "$APK" || exit 1
-  adb shell setprop persist.solar.device_family y2 || true
-  adb shell am force-stop com.solar.launcher || true
-  adb shell am start -n com.solar.launcher/.MainActivity || true
+  # Data-preserving install: a plain install -r keeps prefs/databases/files.
+  # ANDROID_SERIAL was exported above — every adb call targets this emulator.
+  "$ROOT/scripts/install-preserve-data.sh" "$APK" || exit 1
+  "$ADB" shell setprop persist.solar.device_family y2 || true
+  "$ADB" shell am force-stop com.solar.launcher || true
+  "$ADB" shell am start -n com.solar.launcher/.MainActivity || true
 fi
 
 echo "Y2 emulator ready. Family pin forces overlay vol/lock chips on emulator."

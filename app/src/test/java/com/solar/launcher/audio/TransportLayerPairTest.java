@@ -122,6 +122,32 @@ public class TransportLayerPairTest {
         assertEquals(1, completes.get());
     }
 
+    /** A user seek must re-arm the completion latch so a later genuine completion still fires. 2026-08-01 */
+    @Test
+    public void seekTo_rearmsCompleteLatch() throws Exception {
+        final AtomicInteger completes = new AtomicInteger(0);
+        prepareAndPlay();
+        pair.setListener(new TransportLayerPair.Listener() {
+            @Override
+            public void onReady() {}
+
+            @Override
+            public void onComplete() {
+                completes.incrementAndGet();
+            }
+
+            @Override
+            public void onError(String message) {}
+        });
+        vocals.fireComplete();
+        instr.fireComplete();
+        assertEquals(1, completes.get());
+        // Scrub (seek) after the first completion — latch must reset.
+        pair.seekTo(12_345);
+        vocals.fireComplete();
+        assertEquals(2, completes.get());
+    }
+
     /** Scrub position/duration stay stable from lead. 2026-07-20 */
     @Test
     public void scrubParity_positionAndDurationFromLead() throws Exception {

@@ -16,4 +16,29 @@ public class ScrubUtilTest {
             throw new AssertionError("buffer cap");
         }
     }
+
+    /** Seek-vs-completion suppression window math. 2026-08-01 */
+    @Test
+    public void userAudioSeekRecentlyForTest_windowBoundary() {
+        // Completion 1ms after a seek is seek noise.
+        if (!MainActivity.userAudioSeekRecentlyForTest(1000L, 1001L, 2000L)) {
+            throw new AssertionError("inside window should suppress");
+        }
+        // Exactly at the boundary (>= window) is NOT suppressed.
+        if (MainActivity.userAudioSeekRecentlyForTest(1000L, 3000L, 2000L)) {
+            throw new AssertionError("boundary should not suppress");
+        }
+        // Long after the seek is a genuine completion.
+        if (MainActivity.userAudioSeekRecentlyForTest(1000L, 9000L, 2000L)) {
+            throw new AssertionError("outside window should not suppress");
+        }
+        // Same timestamp (completion immediately after seek record).
+        if (!MainActivity.userAudioSeekRecentlyForTest(1000L, 1000L, 2000L)) {
+            throw new AssertionError("same tick should suppress");
+        }
+        // Zero window never suppresses.
+        if (MainActivity.userAudioSeekRecentlyForTest(1000L, 1000L, 0L)) {
+            throw new AssertionError("zero window should not suppress");
+        }
+    }
 }

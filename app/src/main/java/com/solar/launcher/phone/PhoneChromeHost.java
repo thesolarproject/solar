@@ -41,6 +41,14 @@ public final class PhoneChromeHost extends FrameLayout {
     public interface HostCallbacks {
         void dispatchInjectedKey(KeyEvent event);
         Activity activity();
+
+        /**
+         * 2026-08-01 — Phone chrome storage root changed (seed/pick/fallback persisted).
+         * Lets MainActivity re-derive the Music media root into the new Internal/MicroSD.
+         * Was: customize panel rebuilt itself only — app rootFolder stayed stale (Deezer saves died).
+         * Reversal: drop the method + the call site below.
+         */
+        void onStorageChanged();
     }
 
     private static final int PENDING_STORAGE_NONE = 0;
@@ -121,6 +129,26 @@ public final class PhoneChromeHost extends FrameLayout {
             public void injectKeyLongPress(int keyCode) {
                 fireKey(keyCode, true);
             }
+
+            @Override
+            public void injectWheelScroll(int keyCode, int repeatCount) {
+                // 2026-08-02 — Scroll notch: DOWN-only, no UP. Real hardware sends
+                // a stream of DOWN events with incrementing repeatCount; phone chrome
+                // must match this so WheelNavPolicy / ListWheelCoalescer work correctly.
+                if (callbacks == null || keyCode == 0) return;
+                long now = android.os.SystemClock.uptimeMillis();
+                KeyEvent down = new KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, repeatCount);
+                callbacks.dispatchInjectedKey(down);
+            }
+
+            @Override
+            public void injectWheelUp(int keyCode) {
+                // 2026-08-02 — Finger lifted: send UP to clear the held state.
+                if (callbacks == null || keyCode == 0) return;
+                long now = android.os.SystemClock.uptimeMillis();
+                KeyEvent up = new KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0);
+                callbacks.dispatchInjectedKey(up);
+            }
         });
 
         customizePanel.setListener(new PhoneChromeCustomizePanel.Listener() {
@@ -138,6 +166,8 @@ public final class PhoneChromeHost extends FrameLayout {
             public void onStorageChanged() {
                 customizePanel.rebuild();
                 // After first-run pick, stay on customize so look options appear.
+                // 2026-08-01 — Tell MainActivity so the Music root re-derives into the new folder.
+                if (callbacks != null) callbacks.onStorageChanged();
             }
 
             @Override
@@ -287,12 +317,17 @@ public final class PhoneChromeHost extends FrameLayout {
             } catch (Throwable ignored) {}
             PhoneChromeCustomizePanel.applyResolvedStorage(ctx, candidate, true);
             customizePanel.rebuild();
+            // 2026-08-01 — Auto-seed path: storage root persisted here, not via the panel
+            // button — tell MainActivity so the Music root re-derives (Deezer/Soulseek saves).
+            if (callbacks != null) callbacks.onStorageChanged();
             return true;
         }
         if (action == PENDING_STORAGE_TREE) {
             File candidate = PhoneChromeCustomizePanel.bestEffortTreeFile(tree);
             PhoneChromeCustomizePanel.applyResolvedStorage(ctx, candidate, true);
             customizePanel.rebuild();
+            // 2026-08-01 — Same notification as the seed path above.
+            if (callbacks != null) callbacks.onStorageChanged();
             return true;
         }
         return true;
@@ -363,17 +398,11 @@ public final class PhoneChromeHost extends FrameLayout {
 
     private void fireKey(int keyCode, boolean longPress) {
         if (callbacks == null || keyCode == 0) return;
-        KeyEvent[] pair = PhoneClickWheelPad.downUp(keyCode);
-        if (longPress) {
-            // Repeat count 1 marks a long-press style DOWN for handlers that check it.
-            long now = android.os.SystemClock.uptimeMillis();
-            KeyEvent down = new KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 1);
-            callbacks.dispatchInjectedKey(down);
-            callbacks.dispatchInjectedKey(pair[1]);
-        } else {
-            callbacks.dispatchInjectedKey(pair[0]);
-            callbacks.dispatchInjectedKey(pair[1]);
-        }
+        KeyEvent[] pair = longPress
+                ? PhoneClickWheelPad.longPressDownUp(keyCode)
+                : PhoneClickWheelPad.downUp(keyCode);
+        callbacks.dispatchInjectedKey(pair[0]);
+        callbacks.dispatchInjectedKey(pair[1]);
     }
 
     /** Flip customize face — W480 flips body band only; else whole host. */

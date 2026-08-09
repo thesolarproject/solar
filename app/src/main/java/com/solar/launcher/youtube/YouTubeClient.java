@@ -6,6 +6,7 @@ import android.os.Looper;
 
 import com.solar.launcher.Debug712c71Log;
 import com.solar.launcher.youtube.api.InstancePool;
+import com.solar.launcher.youtube.api.InstancesConfig;
 import com.solar.launcher.youtube.api.InstancesUpdater;
 import com.solar.launcher.youtube.api.YoutubeBackend;
 
@@ -109,7 +110,17 @@ public final class YouTubeClient {
         runTimed(DEFAULT_TIMEOUT_MS, cb, new Work() {
             @Override
             public String call() throws Exception {
-                List<YouTubeVideo> videos = pool.search(query != null ? query : "");
+                String q = query != null ? query : "";
+                // Do not let the first search race the background catalog refresh.
+                // This is especially important on existing Y2 installs whose old
+                // build stamped the built-in seed list as a completed refresh.
+                InstancesConfig cfg = new InstancesConfig(appCtx);
+                cfg.ensureSeeds();
+                if (cfg.isRemoteRefreshPending()) {
+                    InstancesUpdater.updateIfStale(appCtx, false);
+                    pool.reload(appCtx);
+                }
+                List<YouTubeVideo> videos = pool.search(q);
                 String json = videosToJson(videos);
                 // #region agent log
                 try {

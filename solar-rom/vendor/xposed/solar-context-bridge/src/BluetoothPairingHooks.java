@@ -49,24 +49,29 @@ final class BluetoothPairingHooks {
                     if (ctx == null) return;
                     PairingExtract extract = PairingExtract.fromDialog(dialog);
                     if (extract == null || extract.address == null || extract.device == null) return;
-                    try {
-                        dialog.dismiss();
-                    } catch (Throwable ignored) {}
-
                     // 2026-07-19 — Silent paths match BluetoothPairingCoordinator (no overlay).
                     if (extract.mode == 3 /* MODE_PASSKEY_CONFIRM */
                             || extract.mode == 4 /* MODE_CONSENT */) {
-                        silentConfirm(extract.device, true);
-                        XposedHookKit.skipMethod(param);
-                        SolarContextBridge.log("BluetoothPairingDialog silent confirm mode="
-                                + extract.mode + " addr=" + extract.address);
+                        if (silentConfirm(extract.device, true)) {
+                            try {
+                                dialog.dismiss();
+                            } catch (Throwable ignored) {}
+                            XposedHookKit.skipMethod(param);
+                            SolarContextBridge.log("BluetoothPairingDialog silent confirm mode="
+                                    + extract.mode + " addr=" + extract.address);
+                        }
+                        // If API 17 exposes no confirmation method, leave stock dialog active.
                         return;
                     }
                     if (extract.mode == 1 /* MODE_PIN */) {
-                        silentSetPin(extract.device, "0000");
-                        XposedHookKit.skipMethod(param);
-                        SolarContextBridge.log("BluetoothPairingDialog silent PIN addr="
-                                + extract.address);
+                        if (silentSetPin(extract.device, "0000")) {
+                            try {
+                                dialog.dismiss();
+                            } catch (Throwable ignored) {}
+                            XposedHookKit.skipMethod(param);
+                            SolarContextBridge.log("BluetoothPairingDialog silent PIN addr="
+                                    + extract.address);
+                        }
                         return;
                     }
 
@@ -75,6 +80,9 @@ final class BluetoothPairingHooks {
                     boolean ok = SolarOverlayClient.showBluetoothPairing(ctx, extract.mode,
                             extract.address, extract.name, extract.passkey, extract.pinPrefill);
                     if (ok) {
+                        try {
+                            dialog.dismiss();
+                        } catch (Throwable ignored) {}
                         XposedHookKit.skipMethod(param);
                         SolarContextBridge.log("BluetoothPairingDialog replaced mode="
                                 + extract.mode + " addr=" + extract.address);
@@ -88,16 +96,21 @@ final class BluetoothPairingHooks {
         }
     }
 
-    private static void silentConfirm(BluetoothDevice device, boolean accept) {
+    private static boolean silentConfirm(BluetoothDevice device, boolean accept) {
+        if (device == null) return false;
         try {
             Method m = device.getClass().getMethod("setPairingConfirmation", boolean.class);
-            m.invoke(device, accept);
+            Object result = m.invoke(device, accept);
+            return !(result instanceof Boolean) || ((Boolean) result).booleanValue();
         } catch (Throwable t) {
-            SolarContextBridge.log("silentConfirm failed: " + t.getClass().getSimpleName());
+            SolarContextBridge.log("silentConfirm unavailable/failed: "
+                    + t.getClass().getSimpleName());
+            return false;
         }
     }
 
-    private static void silentSetPin(BluetoothDevice device, String pin) {
+    private static boolean silentSetPin(BluetoothDevice device, String pin) {
+        if (device == null) return false;
         try {
             byte[] bytes;
             try {
@@ -106,10 +119,11 @@ final class BluetoothPairingHooks {
             } catch (Throwable ignored) {
                 bytes = pin.getBytes();
             }
-            Method m = device.getClass().getMethod("setPin", byte[].class);
-            m.invoke(device, bytes);
+            Object result = device.getClass().getMethod("setPin", byte[].class).invoke(device, bytes);
+            return !(result instanceof Boolean) || ((Boolean) result).booleanValue();
         } catch (Throwable t) {
             SolarContextBridge.log("silentSetPin failed: " + t.getClass().getSimpleName());
+            return false;
         }
     }
 
@@ -151,11 +165,14 @@ final class BluetoothPairingHooks {
         }
 
         private static int mapVariantToMode(int variant) {
-            // Align with com.solar.launcher.BluetoothPairingCoordinator overlay modes.
-            if (variant == 0) return 1; // PAIRING_VARIANT_PIN → MODE_PIN
-            if (variant == 1) return 2; // PAIRING_VARIANT_PASSKEY → MODE_PASSKEY_DISPLAY
-            if (variant == 2) return 3; // PAIRING_VARIANT_PASSKEY_CONFIRMATION → MODE_PASSKEY_CONFIRM
-            return 4; // CONSENT / Just Works → MODE_CONSENT
+            // Pairing variant values are stable protocol values across API 17/19.
+            // Keep literals here because this bridge is compiled against old framework stubs.
+            if (variant == 0 || variant == 7) return 1; // PIN / 16-digit PIN → MODE_PIN
+            if (variant == 1 || variant == 4) return 2; // passkey/display-passkey
+            if (variant == 2) return 3; // passkey confirmation
+            if (variant == 3 || variant == 6) return 4; // consent / OOB consent
+            if (variant == 5) return 5; // display-PIN → informational pairing overlay
+            return 4; // unknown → consent-safe fallback
         }
 
         private static Object readField(Object obj, String name) {

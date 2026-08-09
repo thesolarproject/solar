@@ -21,7 +21,9 @@ public final class InstancesConfig {
     private static final String KEY_PIPED = "piped";
     private static final String KEY_YTAPI = "ytapilegacy";
     private static final String KEY_LAST_UPDATE = "last_update_ms";
+    private static final String KEY_YT2009 = "yt2009";
     private static final String KEY_UPDATE_URL = "update_url";
+    private static final String KEY_REMOTE_REFRESHED = "remote_refreshed";
 
     /** Same default updater URL as notPipe 0.3.0. */
     public static final String DEFAULT_UPDATE_URL = "http://144.31.189.129/notPipe.json";
@@ -47,6 +49,11 @@ public final class InstancesConfig {
         return listOf(new String[] { DEFAULT_YTAPI });
     }
 
+    /** 2026-08-01 — yt2009 has no seeds; all instances come from remote JSON. */
+    public static List<String> seedYt2009() {
+        return new ArrayList<String>();
+    }
+
     private final SharedPreferences prefs;
 
     public InstancesConfig(Context ctx) {
@@ -69,25 +76,54 @@ public final class InstancesConfig {
         return readList(KEY_PIPED, new String[0]);
     }
 
+    /** 2026-08-01 — yt2009 video-stream instances from notPipe.json. */
+    public List<String> getYt2009() {
+        return readList(KEY_YT2009, new String[0]);
+    }
+
     public List<String> getYtApiLegacy() {
         return readList(KEY_YTAPI, new String[] { DEFAULT_YTAPI });
     }
 
-    /** Replace all three lists from a successful remote update. */
-    public void saveLists(List<String> invidious, List<String> piped, List<String> ytapi) {
+    /**
+     * True when the persisted catalog is still only the built-in fail-open seeds.
+     * Older builds accidentally stamped those seeds as a successful refresh, so
+     * callers must not honor that timestamp until a remote catalog has replaced them.
+     */
+    public boolean isRemoteRefreshPending() {
+        return !prefs.getBoolean(KEY_REMOTE_REFRESHED, false);
+    }
+
+    /** Replace all four lists from a successful remote update. */
+    public void saveLists(List<String> invidious, List<String> piped,
+                          List<String> ytapi, List<String> yt2009) {
         SharedPreferences.Editor ed = prefs.edit();
         ed.putString(KEY_INVIDIOUS, toJson(invidious));
         ed.putString(KEY_PIPED, toJson(piped));
         ed.putString(KEY_YTAPI, toJson(ytapi));
+        ed.putString(KEY_YT2009, toJson(yt2009));
         ed.putLong(KEY_LAST_UPDATE, System.currentTimeMillis());
+        ed.putBoolean(KEY_REMOTE_REFRESHED, true);
         ed.commit();
     }
 
-    /** Ensure non-empty seed lists exist (first run or wiped prefs). */
+    /**
+     * Ensure non-empty seed lists exist (first run or wiped prefs).
+     *
+     * Seeds are only a fail-open bootstrap; they are not evidence that the remote
+     * instance catalog was refreshed. Do not stamp KEY_LAST_UPDATE here or the
+     * first real refresh can be suppressed for a full day.
+     */
     public void ensureSeeds() {
         if (!prefs.contains(KEY_YTAPI)) {
-            saveLists(listOf(SEED_INVIDIOUS), new ArrayList<String>(),
-                    listOf(new String[] { DEFAULT_YTAPI }));
+            SharedPreferences.Editor ed = prefs.edit();
+            ed.putString(KEY_INVIDIOUS, toJson(listOf(SEED_INVIDIOUS)));
+            ed.putString(KEY_PIPED, toJson(new ArrayList<String>()));
+            ed.putString(KEY_YTAPI, toJson(listOf(new String[] { DEFAULT_YTAPI })));
+            ed.putString(KEY_YT2009, toJson(new ArrayList<String>()));
+            ed.remove(KEY_LAST_UPDATE);
+            ed.putBoolean(KEY_REMOTE_REFRESHED, false);
+            ed.commit();
         }
     }
 

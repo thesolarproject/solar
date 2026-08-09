@@ -8,15 +8,15 @@
     "itemConfig": {
         "itemTextColor": "#000000",
         "itemSelectedTextColor": "#FFFFFF",
-        "itemSelectedBackground": "item_selected_no_arrow.9.png",
+        "itemSelectedBackground": "1.png",
         "itemBackground": "",
         "itemRightArrow": "right_arrow.png",
-        "itemSelectedBackgroundIs9Patch": true
+        "itemSelectedBackgroundIs9Patch": false
     },
     "dialogConfig": {
-        "dialogOptionBackground": "dialog_no_selected.png",
+        "dialogOptionBackground": "3.png",
         "dialogOptionTextColor": "#000000",
-        "dialogOptionSelectedBackground": "dialog_selected.png",
+        "dialogOptionSelectedBackground": "4.png",
         "dialogOptionSelectedTextColor": "#FFFFFF",
         "dialogBackgroundColor": "#FFFFFF",
         "dialogTextColor": "#000000"
@@ -25,7 +25,7 @@
         "menuBackgroundColor": "",
         "menuItemBackground": "",
         "menuItemTextColor": "#000000",
-        "menuItemSelectedBackground": "",
+        "menuItemSelectedBackground": "1.png",
         "menuItemSelectedTextColor": "#FFFFFF"
     },
     "homePageConfig": {
@@ -113,12 +113,14 @@
         "statusBarColor": "",
         "statusTextColor": "#2D2D44",
         "battery": [
+            "icon_statusbar_battery_0.png",
             "icon_statusbar_battery_1.png",
             "icon_statusbar_battery_2.png",
             "icon_statusbar_battery_3.png",
             "icon_statusbar_battery_4.png"
         ],
         "batteryCharging": [
+            "icon_statusbar_battery_0_c.png",
             "icon_statusbar_battery_1_c.png",
             "icon_statusbar_battery_2_c.png",
             "icon_statusbar_battery_3_c.png",

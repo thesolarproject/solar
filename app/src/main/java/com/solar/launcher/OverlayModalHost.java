@@ -864,6 +864,10 @@ public final class OverlayModalHost {
             dialogTitle = context.getString(R.string.bt_pairing_passkey_title, deviceLabel);
             body = context.getString(R.string.bt_pairing_passkey_body,
                     BluetoothPairingCoordinator.formatPasskey(passkey));
+        } else if (mode == BluetoothPairingCoordinator.MODE_DISPLAY_PIN) {
+            dialogTitle = context.getString(R.string.bt_pairing_passkey_title, deviceLabel);
+            body = context.getString(R.string.bt_pairing_passkey_body,
+                    BluetoothPairingCoordinator.formatDisplayPin(passkey));
         } else if (mode == BluetoothPairingCoordinator.MODE_PASSKEY_CONFIRM) {
             dialogTitle = context.getString(R.string.bt_pairing_match_title, deviceLabel);
             body = context.getString(R.string.bt_pairing_match_body,
@@ -874,7 +878,8 @@ public final class OverlayModalHost {
         }
         labels.add(body);
         headers.add(Boolean.TRUE);
-        if (mode == BluetoothPairingCoordinator.MODE_PASSKEY_DISPLAY) {
+        if (mode == BluetoothPairingCoordinator.MODE_PASSKEY_DISPLAY
+                || mode == BluetoothPairingCoordinator.MODE_DISPLAY_PIN) {
             labels.add(context.getString(R.string.bt_pairing_passkey_ok));
             headers.add(Boolean.FALSE);
         } else {
@@ -898,7 +903,8 @@ public final class OverlayModalHost {
     }
 
     private void handleBluetoothPairingRowPick(int mode, int index) {
-        if (mode == BluetoothPairingCoordinator.MODE_PASSKEY_DISPLAY) {
+        if (mode == BluetoothPairingCoordinator.MODE_PASSKEY_DISPLAY
+                || mode == BluetoothPairingCoordinator.MODE_DISPLAY_PIN) {
             if (index == 1) {
                 BluetoothPairingCoordinator.dismissPasskeyDisplaySession();
             }

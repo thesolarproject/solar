@@ -57,6 +57,21 @@ public final class Y1InputKeys {
                 || keyCode == KeyEvent.KEYCODE_MEDIA_STOP || keyCode == 86;
     }
 
+    /**
+     * Physical Stem top/bottom pad aliases. Stock Y1/A5 uses scan codes 103/108 for
+     * DPAD_UP/DOWN; Y1 wheel uses 114/115, so callers must inspect the event scan code.
+     * 2026-08-03
+     */
+    public static boolean isTopPadEvent(KeyEvent event) {
+        return event != null && event.getKeyCode() == KeyEvent.KEYCODE_DPAD_UP
+                && event.getScanCode() == 103;
+    }
+
+    public static boolean isBottomPadEvent(KeyEvent event) {
+        return event != null && event.getKeyCode() == KeyEvent.KEYCODE_DPAD_DOWN
+                && event.getScanCode() == 108;
+    }
+
     /** Wheel up — Y1-Rockbox.kl 114 → DPAD_UP (19) or 105 → MEDIA_PLAY (126). */
     public static boolean isWheelUp(int keyCode) {
         return keyCode == KEY_WHEEL_UP || keyCode == 126
@@ -86,6 +101,22 @@ public final class Y1InputKeys {
 
     public static boolean isY2TrackNextKey(int keyCode) {
         return keyCode == 106;
+    }
+
+    /** 2026-08-02 — Generic Android keymaps: DPAD_LEFT / arrow-left (21) or QWERTY S (47) → previous track. */
+    public static boolean isGenericTrackPreviousKey(int keyCode) {
+        return keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == 21
+                || keyCode == KeyEvent.KEYCODE_S || keyCode == 47;
+    }
+
+    /** 2026-08-02 — Generic Android keymaps: DPAD_RIGHT / arrow-right (22) or QWERTY D (32) → next track. */
+    public static boolean isGenericTrackNextKey(int keyCode) {
+        return keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || keyCode == 22
+                || keyCode == KeyEvent.KEYCODE_D || keyCode == 32;
+    }
+
+    public static boolean isGenericTrackSkipKey(int keyCode) {
+        return isGenericTrackPreviousKey(keyCode) || isGenericTrackNextKey(keyCode);
     }
 
     public static boolean isWheelKey(int keyCode) {
@@ -186,5 +217,22 @@ public final class Y1InputKeys {
         if (!isTrackNextKey(87)) throw new AssertionError("track next media");
         if (isTrackPreviousKey(21)) throw new AssertionError("dpad left not track prev");
         if (isTrackNextKey(22)) throw new AssertionError("dpad right not track next");
+        if (!isTopPadEvent(new KeyEvent(1L, 1L, KeyEvent.ACTION_DOWN,
+                KeyEvent.KEYCODE_DPAD_UP, 0, 0, 0, 103, 0))) {
+            throw new AssertionError("scan103 top pad");
+        }
+        if (!isBottomPadEvent(new KeyEvent(1L, 1L, KeyEvent.ACTION_DOWN,
+                KeyEvent.KEYCODE_DPAD_DOWN, 0, 0, 0, 108, 0))) {
+            throw new AssertionError("scan108 bottom pad");
+        }
+        if (isTopPadEvent(new KeyEvent(1L, 1L, KeyEvent.ACTION_DOWN,
+                KeyEvent.KEYCODE_DPAD_UP, 0, 0, 0, 114, 0))) {
+            throw new AssertionError("scan114 remains wheel");
+        }
+        if (!isGenericTrackPreviousKey(21)) throw new AssertionError("generic dpad-left prev");
+        if (!isGenericTrackPreviousKey(47)) throw new AssertionError("generic S prev");
+        if (!isGenericTrackNextKey(22)) throw new AssertionError("generic dpad-right next");
+        if (!isGenericTrackNextKey(32)) throw new AssertionError("generic D next");
+        if (isGenericTrackSkipKey(88)) throw new AssertionError("media prev not generic");
     }
 }

@@ -8,9 +8,27 @@ plugins {
 
 def platformKeystore = file("${rootProject.projectDir}/.gradle/platform.keystore")
 
+// 2026-08-01 — Single-APK installability: AOSP platform (test-key) signing is used only when the
+// platform keys/keystore are configured or explicitly requested. Machines without them
+// (phones / emulators / desktop) fall back to the normal Android debug key, so a single
+// installable APK builds with zero special setup. Request explicitly with
+//   -PplatformSigningRequested=true   or   SOLAR_PLATFORM_SIGNING=true
+// Reversal: delete block; preBuild then fails again without SOLAR_PLATFORM_KEY_PK8/PEM.
+def platformSigningRequested = {
+    def prop = project.findProperty("platformSigningRequested")
+    if (prop != null) return prop.toString().equalsIgnoreCase("true")
+    def env = System.getenv("SOLAR_PLATFORM_SIGNING")
+    if (env != null && !env.isEmpty()) return env.equalsIgnoreCase("true")
+    def pk8 = System.getenv("SOLAR_PLATFORM_KEY_PK8")
+    def pem = System.getenv("SOLAR_PLATFORM_KEY_PEM")
+    if (pk8 != null && !pk8.isEmpty() && pem != null && !pem.isEmpty()) return true
+    return platformKeystore.isFile()
+}()
+
 tasks.register("ensurePlatformKeystore") {
     doLast {
-        if (!platformKeystore.isFile()) {
+        // No-op when platform signing isn't wanted — phones/emulators build with the debug key.
+        if (platformSigningRequested && !platformKeystore.isFile()) {
             exec {
                 workingDir rootProject.projectDir
                 commandLine "bash", "scripts/ensure-platform-keystore.sh"
@@ -30,10 +48,23 @@ tasks.register("syncY1Assets") {
 
 tasks.register("syncReleaseVersion") {
     doLast {
-        exec {
-            workingDir rootProject.projectDir
-            environment "SOLAR_RELEASE_CHANNEL", System.getenv("SOLAR_RELEASE_CHANNEL") ?: ""
-            commandLine "bash", "solar-rom/scripts/sync-gradle-version.sh"
+        try {
+            exec {
+                workingDir rootProject.projectDir
+                environment "SOLAR_RELEASE_CHANNEL", System.getenv("SOLAR_RELEASE_CHANNEL") ?: ""
+                commandLine "bash", "solar-rom/scripts/sync-gradle-version.sh"
+            }
+        } catch (Exception e) {
+            // Version stamping only matters when a release APK is involved. Pure debug builds
+            // (phones/emulators without python3/git) must still be able to assemble; any task
+            // set that could produce a release/bundle (assemble, build, *Release, *Bundle)
+            // rethrows so a stale versionName never ships silently.
+            boolean releaseInvolved = gradle.startParameter.taskNames.any {
+                def t = it.toLowerCase()
+                t.contains("release") || t.contains("bundle") || t == "assemble" || t == "build"
+            }
+            if (releaseInvolved) throw e
+            logger.warn("syncReleaseVersion skipped (debug-only build): " + e.getMessage())
         }
     }
 }
@@ -57,8 +88,8 @@ android {
         applicationId "com.solar.launcher"
         minSdk 17
         targetSdk 35
-        versionCode 3460896
-        versionName "20260731-0936"
+        versionCode 3474325
+        versionName "20260809-1725"
         buildConfigField "boolean", "FEATURE_OTA_UPDATE", "true"
         buildConfigField "String", "OTA_UPDATES_URL", "\"https://thesolarproject.github.io/solar-update/updates.xml\""
         def podcastIndexKey = project.findProperty("PODCAST_INDEX_API_KEY") ?: ""
@@ -87,12 +118,12 @@ android {
 
     buildTypes {
         debug {
-            signingConfig signingConfigs.platform
+            signingConfig platformSigningRequested ? signingConfigs.platform : signingConfigs.debug
         }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            signingConfig signingConfigs.platform
+            signingConfig platformSigningRequested ? signingConfigs.platform : signingConfigs.debug
         }
     }
     buildFeatures {

@@ -118,6 +118,8 @@ public class MusicLibraryStore extends SolarDbHelper {
 
     private static MusicLibraryStore instance;
     private boolean legacyTrackNumbersMigrated;
+    /** True after legacy stem-pad rows have been removed for this store instance. */
+    private boolean stemArtifactsPurged;
     /** 2026-07-06: DB sentinel — year read, tag has no release year (distinct from legacy 0). */
     static final int YEAR_UNKNOWN_SCANNED = -1;
 
@@ -300,6 +302,7 @@ public class MusicLibraryStore extends SolarDbHelper {
 
     /** All cached tracks (may include files removed from disk until next purge). */
     public List<Track> loadAll() {
+        purgeStemLibraryArtifacts();
         List<Track> out = new ArrayList<Track>();
         SQLiteDatabase db = getReadableDatabase();
         Cursor c = null;
@@ -317,8 +320,12 @@ public class MusicLibraryStore extends SolarDbHelper {
     /**
      * 2026-07-20 — Row count for SEGMENTED browse (no full materialization).
      * Layman: how many songs are in the library DB without loading them all.
+     * 2026-07-31 — Remove legacy Lalal pad rows before counting. Older scans could cache
+     * stem MP3s even though the current filesystem scanner excludes them; exposing those
+     * rows makes segmented All Songs render blank fixed-position entries.
      */
     public int countTracks() {
+        purgeStemLibraryArtifacts();
         SQLiteDatabase db = getReadableDatabase();
         Cursor c = null;
         try {
@@ -331,12 +338,57 @@ public class MusicLibraryStore extends SolarDbHelper {
     }
 
     /**
+     * Remove legacy stem-pad rows that were cached by scans before stem trees were excluded.
+     * This intentionally does not remove the source track or any stem files on disk.
+     * 2026-07-31
+     */
+    public synchronized void purgeStemLibraryArtifacts() {
+        if (stemArtifactsPurged) return;
+        SQLiteDatabase db = getWritableDatabase();
+        Cursor c = null;
+        List<String> stale = new ArrayList<String>();
+        try {
+            c = db.query("tracks", new String[] { "path" }, null, null, null, null, null);
+            while (c.moveToNext()) {
+                String path = c.getString(0);
+                if (isStemLibraryArtifactPath(path)) stale.add(path);
+            }
+        } finally {
+            if (c != null) c.close();
+        }
+        if (stale.isEmpty()) {
+            stemArtifactsPurged = true;
+            return;
+        }
+        db.beginTransaction();
+        try {
+            final int chunk = 500;
+            for (int i = 0; i < stale.size(); i += chunk) {
+                int end = Math.min(i + chunk, stale.size());
+                String[] args = stale.subList(i, end).toArray(new String[0]);
+                db.delete("tracks", "path IN (" + placeholders(args.length) + ")", args);
+            }
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+        }
+        stemArtifactsPurged = true;
+    }
+
+    /** Package-visible for JVM regression tests and path-only callers. */
+    static boolean isStemLibraryArtifactPath(String path) {
+        return path != null && path.length() > 0
+                && com.solar.launcher.stem.LalalClient.isStemLibraryArtifact(new File(path));
+    }
+
+    /**
      * 2026-07-20 — Page of tracks for SEGMENTED ListView (LIMIT/OFFSET, path order).
      * Layman: load one chunk of the big list so scrolling does not need every song in RAM.
      * Technical: same columns as {@link #loadAll}; empty list when offset past end.
      * Reversal: always {@link #loadAll()}.
      */
     public List<Track> loadRange(int offset, int limit) {
+        purgeStemLibraryArtifacts();
         List<Track> out = new ArrayList<Track>();
         if (limit <= 0) return out;
         if (offset < 0) offset = 0;
@@ -362,6 +414,7 @@ public class MusicLibraryStore extends SolarDbHelper {
      * Reversal: loadAll + in-memory date sort.
      */
     public List<Track> loadRangeByMtimeDesc(int offset, int limit) {
+        purgeStemLibraryArtifacts();
         List<Track> out = new ArrayList<Track>();
         limit = normalizePageLimit(limit);
         if (limit <= 0) return out;
@@ -377,6 +430,7 @@ public class MusicLibraryStore extends SolarDbHelper {
      * Reversal: walk customLibrary File.length().
      */
     public Map<String, Long> loadPathSizes() {
+        purgeStemLibraryArtifacts();
         Map<String, Long> out = new HashMap<String, Long>();
         SQLiteDatabase db = getReadableDatabase();
         Cursor c = null;
@@ -588,6 +642,7 @@ public class MusicLibraryStore extends SolarDbHelper {
 
     /** Run a SELECT * page query into Track rows. 2026-07-20 */
     private List<Track> queryTracks(String sql, String[] args) {
+        purgeStemLibraryArtifacts();
         List<Track> out = new ArrayList<Track>();
         SQLiteDatabase db = getReadableDatabase();
         Cursor c = null;
@@ -604,6 +659,7 @@ public class MusicLibraryStore extends SolarDbHelper {
 
     /** Run a COUNT(*) helper. 2026-07-20 */
     private int queryCount(String sql, String[] args) {
+        purgeStemLibraryArtifacts();
         SQLiteDatabase db = getReadableDatabase();
         Cursor c = null;
         try {
@@ -617,6 +673,7 @@ public class MusicLibraryStore extends SolarDbHelper {
 
     /** Run DISTINCT name SELECT into a list. 2026-07-20 */
     private List<String> queryDistinctNames(String sql) {
+        purgeStemLibraryArtifacts();
         List<String> out = new ArrayList<String>();
         SQLiteDatabase db = getReadableDatabase();
         Cursor c = null;
@@ -634,6 +691,7 @@ public class MusicLibraryStore extends SolarDbHelper {
 
     /** Lookup by absolute path; null when not cached. */
     public Track get(String path) {
+        purgeStemLibraryArtifacts();
         if (path == null) return null;
         SQLiteDatabase db = getReadableDatabase();
         Cursor c = null;
@@ -664,6 +722,7 @@ public class MusicLibraryStore extends SolarDbHelper {
      * Returns map path → fresh Track; missing or stale paths omitted.
      */
     public java.util.HashMap<String, Track> getFreshBatch(java.util.List<File> files) {
+        purgeStemLibraryArtifacts();
         java.util.HashMap<String, Track> out = new java.util.HashMap<String, Track>();
         if (files == null || files.isEmpty()) return out;
         migrateLegacyZeroTrackNumbers();
@@ -759,7 +818,7 @@ public class MusicLibraryStore extends SolarDbHelper {
 
     public void upsert(File file, String title, String artist, String album,
             String genre, String albumArtist, String durationMs, int trackNumber, int year) {
-        if (file == null || !file.isFile()) return;
+        if (file == null || !file.isFile() || isStemLibraryArtifactPath(file.getAbsolutePath())) return;
         if (trackNumber == 0) trackNumber = -1;
         // 2026-07-19 — year 0 after ID3 means unknown, not "legacy needs re-tag".
         // Was: stored 0 → isFresh forever false → full library re-scan every launch.
@@ -792,6 +851,8 @@ public class MusicLibraryStore extends SolarDbHelper {
                         + " VALUES (?,?,?,?,?,?,?,?,?,?,?)");
         try {
             for (Upsert t : tracks) {
+                if (t == null || t.file == null || !t.file.isFile()
+                        || isStemLibraryArtifactPath(t.file.getAbsolutePath())) continue;
                 bindUpsert(st, t.file, t.title, t.artist, t.album, t.genre,
                         t.albumArtist, t.durationMs, t.trackNumber, t.year);
                 st.executeInsert();
@@ -871,6 +932,7 @@ public class MusicLibraryStore extends SolarDbHelper {
 
     /** path → durationSec for Soulseek share scan (avoids second MMR pass). */
     public Map<String, Integer> durationSecByPath() {
+        purgeStemLibraryArtifacts();
         Map<String, Integer> out = new HashMap<String, Integer>();
         SQLiteDatabase db = getReadableDatabase();
         Cursor c = null;

@@ -6,9 +6,10 @@ import android.view.MotionEvent;
 
 /**
  * 2026-07-11 — Host keyboard/mouse → Solar actions when running on emulator (or A5 lab).
- * Layman: Esc/Backspace/right-click leave screens; arrows scroll; space plays; -/= volume.
+ * Layman: Esc/Backspace/right-click leave screens; arrows scroll; S/D + space play/skip; -/= volume.
  * Tech: remap KeyEvent keycodes before MainActivity handlers; volume opens Solar HUD.
- * Reversal: delete; stock emulator keys only.
+ * 2026-08-02 — S/D became the scrollwheel's prev/next side buttons (MEDIA_PREVIOUS/NEXT);
+ * arrows (DPAD) still scroll. Reversal: delete; stock emulator keys only.
  */
 public final class EmulatorInputMap {
 
@@ -63,17 +64,25 @@ public final class EmulatorInputMap {
             case KeyEvent.KEYCODE_NUMPAD_ENTER:
                 return KeyEvent.KEYCODE_DPAD_CENTER;
             case KeyEvent.KEYCODE_DPAD_UP:
-            case KeyEvent.KEYCODE_W:
                 return KeyEvent.KEYCODE_DPAD_UP;
+            // Emulator W is the keyboard equivalent of the physical Top/Back pad.
+            // Keep arrow-up as wheel navigation; W remaps to Back so the Stem host
+            // can apply the same one-shot hold menu path as Y1/Y2. 2026-08-03
+            case KeyEvent.KEYCODE_W:
+                return KeyEvent.KEYCODE_BACK;
             case KeyEvent.KEYCODE_DPAD_DOWN:
-            case KeyEvent.KEYCODE_S:
                 return KeyEvent.KEYCODE_DPAD_DOWN;
             case KeyEvent.KEYCODE_DPAD_LEFT:
             case KeyEvent.KEYCODE_A:
                 return KeyEvent.KEYCODE_DPAD_LEFT;
             case KeyEvent.KEYCODE_DPAD_RIGHT:
-            case KeyEvent.KEYCODE_D:
                 return KeyEvent.KEYCODE_DPAD_RIGHT;
+            // 2026-08-02 — S/D are the scrollwheel's prev/next side buttons (DEL/SPACE on
+            // wheel keyboards, track skip during playback). Was: S=DPAD_DOWN, D=DPAD_RIGHT.
+            case KeyEvent.KEYCODE_S:
+                return KeyEvent.KEYCODE_MEDIA_PREVIOUS;
+            case KeyEvent.KEYCODE_D:
+                return KeyEvent.KEYCODE_MEDIA_NEXT;
             case KeyEvent.KEYCODE_SPACE:
                 return KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE;
             case KeyEvent.KEYCODE_COMMA:
@@ -94,7 +103,8 @@ public final class EmulatorInputMap {
 
     /**
      * Remap host key to Solar keycode, or -1 if not ours.
-     * Esc/DEL → BACK; arrows/WASD → DPAD; space → play/pause; brackets → skip; -/= → volume.
+     * Esc/DEL/W → BACK; arrows → DPAD; S/D → MEDIA_PREVIOUS/NEXT; space → play/pause;
+     * brackets → skip; -/= → volume.
      */
     public static int remapToSolarKeyCode(int keyCode) {
         if (!shouldRemap()) return -1;
@@ -123,6 +133,15 @@ public final class EmulatorInputMap {
         }
         if (mapKeyCode(KeyEvent.KEYCODE_MINUS) != KeyEvent.KEYCODE_VOLUME_DOWN) {
             throw new AssertionError("minus→vol");
+        }
+        if (mapKeyCode(KeyEvent.KEYCODE_S) != KeyEvent.KEYCODE_MEDIA_PREVIOUS) {
+            throw new AssertionError("s→prev");
+        }
+        if (mapKeyCode(KeyEvent.KEYCODE_D) != KeyEvent.KEYCODE_MEDIA_NEXT) {
+            throw new AssertionError("d→next");
+        }
+        if (mapKeyCode(KeyEvent.KEYCODE_DPAD_DOWN) != KeyEvent.KEYCODE_DPAD_DOWN) {
+            throw new AssertionError("arrow-down stays");
         }
         if (MotionEvent.BUTTON_SECONDARY == 0) {
             throw new AssertionError("secondary button const");

@@ -32,6 +32,17 @@ public final class StemSession {
         /** Pitch-preserving song bus rate vs Song 1 (IJK SoundTouch). 2026-07-20 */
         public float tempoRate = 1f;
         public float bpm = 120f;
+        /** Real-BPM analysis confidence (0..1); 0 = duration heuristic. 2026-08-01 */
+        public float bpmConfidence = 0f;
+        /** First downbeat offset in ms from track start (real analysis). 2026-08-01 */
+        public int firstBeatMs = 0;
+        /** Detected key (Camelot); empty when unknown. 2026-08-01 */
+        public String keyLabel = "";
+        public String camelot = "";
+        /** Detected key root pitch class (0..11); -1 when unknown. 2026-08-02 */
+        public int keyRoot = -1;
+        /** Detected key mode; true = major. Ignored when keyRoot < 0. 2026-08-02 */
+        public boolean keyMajor = true;
         public File track;
         public File bassBody;
         public List<LalalClient.StemFile> stems;
@@ -55,6 +66,12 @@ public final class StemSession {
             screwRate = 1f;
             // tempoRate/bpm set in beginMixers — leave defaults here. 2026-07-20
             tempoRate = 1f;
+            bpmConfidence = 0f;
+            firstBeatMs = 0;
+            keyLabel = "";
+            camelot = "";
+            keyRoot = -1;
+            keyMajor = true;
             id3Title = "";
             id3Artist = "";
             id3Album = "";
@@ -72,6 +89,13 @@ public final class StemSession {
      * 2026-07-21
      */
     private final float[] padGains = new float[ZONE_COUNT];
+    /**
+     * Play-both per pad — this zone feeds its stem from BOTH songs (stacking).
+     * Layman: vocals from song 1 + song 2 together on one pad.
+     * Was: one-song-per-pad invariant everywhere. Reversal: no flag at all.
+     * 2026-08-01
+     */
+    private final boolean[] bothPerZone = new boolean[ZONE_COUNT];
     /** Song the user is interacting with — follows focused pad’s routed song. 2026-07-19 / 2026-07-20 */
     private int controlSongIndex;
     private int activeZone;
@@ -124,6 +148,24 @@ public final class StemSession {
         for (int z = 0; z < ZONE_COUNT && z < out.length; z++) out[z] = padGains[z];
     }
 
+    /** True when this pad plays its stem from both songs (stacking). 2026-08-01 */
+    public boolean isZoneBoth(int zone) {
+        if (zone < 0 || zone >= ZONE_COUNT) return false;
+        return bothPerZone[zone];
+    }
+
+    /** Toggle play-both for a pad; returns the new state. 2026-08-01 */
+    public boolean toggleZoneBoth(int zone) {
+        if (zone < 0 || zone >= ZONE_COUNT) return false;
+        bothPerZone[zone] = !bothPerZone[zone];
+        return bothPerZone[zone];
+    }
+
+    /** Clear every play-both flag (new session / sole survivor). 2026-08-01 */
+    public void clearBothZones() {
+        for (int z = 0; z < ZONE_COUNT; z++) bothPerZone[z] = false;
+    }
+
     /**
      * Bind prepared tracks (1–2). Clears jam state for each slot.
      * Was: 1–3. Reversal: comment only — MAX_SONGS restores the cap.
@@ -147,6 +189,7 @@ public final class StemSession {
         controlSongIndex = 0;
         seedPadRoutingToControlSong();
         resetPadGains();
+        clearBothZones();
         // No arm focused yet — first stem key focuses without cycling. 2026-07-19
         activeZone = -1;
     }
@@ -191,6 +234,48 @@ public final class StemSession {
 
 
     /**
+     * DJ chain seat swap: exchange two song slots in place (refs only) and
+     * remap per-pad routing + control song so pads keep feeding the same
+     * physical audio.
+     * Layman: when the seed finishes, the survivor keeps playing and is
+     * re-indexed as the new seed; pads don't jump tracks.
+     * 2026-08-01
+     */
+    public void swapSongs(int a, int b) {
+        if (a < 0 || b < 0 || a >= MAX_SONGS || b >= MAX_SONGS || a == b) return;
+        SongState s = songs[a];
+        songs[a] = songs[b];
+        songs[b] = s;
+        for (int z = 0; z < ZONE_COUNT; z++) {
+            if (activeSongPerZone[z] == a) activeSongPerZone[z] = b;
+            else if (activeSongPerZone[z] == b) activeSongPerZone[z] = a;
+        }
+        if (controlSongIndex == a) controlSongIndex = b;
+        else if (controlSongIndex == b) controlSongIndex = a;
+    }
+
+    /**
+     * Deterministic stems-set flip: every pad that fed song A now feeds song B
+     * and vice versa (song 0 ↔ 1 in place), including the control song — the
+     * two tracks trade places on the face. Unlike {@link #swapSongs} (seat swap
+     * keeps pads on the same physical audio), this swaps what the pads play.
+     * Play-both pads keep both feeds; the flip only changes which is primary.
+     * A second flip restores the original set exactly (involution).
+     * Layman: one OK swaps the two songs' pad assignments; a second OK swaps back.
+     * 2026-08-02
+     */
+    public void flipSongAssignments() {
+        if (songCount < 2) return;
+        for (int z = 0; z < ZONE_COUNT; z++) {
+            int s = activeSongPerZone[z];
+            if (s == 0) activeSongPerZone[z] = 1;
+            else if (s == 1) activeSongPerZone[z] = 0;
+        }
+        if (controlSongIndex == 0) controlSongIndex = 1;
+        else if (controlSongIndex == 1) controlSongIndex = 0;
+    }
+
+    /**
      * Point every pad at {@link #controlSongIndex} (usually 0 after bind).
      * Layman: until you repress a focused pad, every arm steers the same song.
      * Was: activeSongPerZone[z] = z % songCount (focus switched track). Reversal: that modulo seed.
@@ -201,6 +286,13 @@ public final class StemSession {
         if (s < 0) s = 0;
         if (songCount > 0 && s >= songCount) s = songCount - 1;
         for (int z = 0; z < ZONE_COUNT; z++) activeSongPerZone[z] = s;
+    }
+
+    /** Set the song index for a specific zone. 2026-08-02 */
+    public void setZoneSong(int zone, int songIndex) {
+        if (zone >= 0 && zone < ZONE_COUNT) {
+            activeSongPerZone[zone] = songIndex;
+        }
     }
 
     /**
@@ -241,6 +333,44 @@ public final class StemSession {
         return s;
     }
 
+    /**
+     * Dominant (tempo/key anchor) song under the pad-majority rule: the song
+     * owning the most pads leads the beat. A 2-2 split (“2 of each”) is a tie
+     * broken by the VOCALS pad (zone 0) — the lead vocal decides the lead beat.
+     * Play-both pads feed both songs so they count as neutral (never break a tie).
+     * Single-song sessions always return 0.
+     * Layman: the song with the most pads leads; vocals settles 2-and-2.
+     * Was: seed (song 0) wins by definition. Reversal: seed-wins only.
+     * 2026-08-02
+     */
+    public int dominantSongIndex() {
+        if (songCount <= 1) return 0;
+        int[] counts = new int[songCount];
+        for (int z = 0; z < ZONE_COUNT; z++) {
+            if (bothPerZone[z]) continue; // feeds both songs — neutral
+            int s = songIndexForZone(z);
+            if (s >= 0 && s < songCount) counts[s]++;
+        }
+        int best = 0;
+        int bestCount = -1;
+        boolean tie = false;
+        for (int s = 0; s < songCount; s++) {
+            if (counts[s] > bestCount) {
+                bestCount = counts[s];
+                best = s;
+                tie = false;
+            } else if (counts[s] == bestCount) {
+                tie = true;
+            }
+        }
+        if (tie) {
+            // 2-2 (or all-neutral) → the VOCALS pad (zone 0) breaks the tie.
+            int vocalsSong = songIndexForZone(0);
+            if (vocalsSong >= 0 && vocalsSong < songCount) return vocalsSong;
+        }
+        return best;
+    }
+
     public SongState activeSongState() {
         return song(songIndexForZone(activeZone));
     }
@@ -261,6 +391,12 @@ public final class StemSession {
         if (!alreadyFocused) {
             // Focus only — keep each pad’s song; wheel steers this pad’s track. 2026-07-20
             // Was: seedPadRoutingToControlSong() on focus (wiped per-pad routing). Reversal: that seed.
+            activeZone = zone;
+            controlSongIndex = songIndexForZone(zone);
+            return false;
+        }
+        // Play-both pad — taps only focus; the stacked feed must not be cycled away. 2026-08-01
+        if (bothPerZone[zone]) {
             activeZone = zone;
             controlSongIndex = songIndexForZone(zone);
             return false;
@@ -348,6 +484,8 @@ public final class StemSession {
         else if (s >= songCount) s = songCount - 1;
         for (int z = 0; z < ZONE_COUNT; z++) activeSongPerZone[z] = s;
         controlSongIndex = s;
+        // One song left — nothing left to stack. 2026-08-01
+        clearBothZones();
     }
 
     /**
@@ -379,9 +517,11 @@ public final class StemSession {
     }
 
     /**
-     * @param initial when true, may invent B pads but keeps ≥1 per live track (no 2:2 force).
-     * 2026-07-21
+     * @param initial legacy cold-start mode — {@link #initialMashupShuffle} only;
+     * the host's session start no longer shuffles (seeds all pads to song 0).
+     * 2026-07-21 / 2026-08-02
      */
+    @SuppressWarnings("deprecation") // initial branch calls the legacy pickInitialMashupPadSongs
     public int shufflePadAssignments(Random rng, boolean initial) {
         lastShuffleChanged = false;
         if (songCount < 2) return -1;
@@ -402,7 +542,13 @@ public final class StemSession {
         return prevZone;
     }
 
-    /** Cold-start shuffle — both tracks get ≥1 pad; any uneven split OK. 2026-07-21 */
+    /**
+     * @deprecated Legacy cold-start shuffle (both tracks get ≥1 pad). The host no
+     * longer calls this at session start — StemFM-style cold start seeds all four
+     * pads to the seed track (song 0) and the second track enters only when the
+     * user mixes it in. Kept for tests + back-compat. 2026-07-21 / 2026-08-02
+     */
+    @Deprecated
     public int initialMashupShuffle(Random rng) {
         return shufflePadAssignments(rng != null ? rng : new Random(), true);
     }

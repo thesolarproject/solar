@@ -20,6 +20,12 @@ public final class MixSession {
         public float bpm = 120f;
         public float rate = 1f;
         public String displayName = "";
+        
+        // Key matching fields
+        public int keyRoot = -1;
+        public boolean keyMajor = true;
+        public String camelot = null;
+        public boolean analyzed = false;
 
         public void clear() {
             track = null;
@@ -27,6 +33,10 @@ public final class MixSession {
             bpm = 120f;
             rate = 1f;
             displayName = "";
+            keyRoot = -1;
+            keyMajor = true;
+            camelot = null;
+            analyzed = false;
         }
 
         public boolean hasTrack() {
@@ -64,6 +74,21 @@ public final class MixSession {
             decks[index].displayName = stripExt(track.getName());
         }
         recount();
+    }
+
+    /**
+     * DJ chain seat swap: exchange two decks in place so the survivor keeps
+     * playing and becomes the new lead deck.
+     * Layman: when deck 1 (the end of pair 1) survives, it takes the start seat.
+     * 2026-08-01
+     */
+    public void swapDecks(int a, int b) {
+        if (a < 0 || b < 0 || a >= DECK_COUNT || b >= DECK_COUNT || a == b) return;
+        DeckState s = decks[a];
+        decks[a] = decks[b];
+        decks[b] = s;
+        if (activeDeck == a) activeDeck = b;
+        else if (activeDeck == b) activeDeck = a;
     }
 
     private void recount() {

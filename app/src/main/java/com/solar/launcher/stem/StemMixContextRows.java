@@ -8,16 +8,19 @@ package com.solar.launcher.stem;
  * 2026-07-21 — Pause + Home rows (Exit was Home chip only).
  */
 public final class StemMixContextRows {
-    /** Hold Prev/Next slot — Replace / Queue / Start next / Scrub. 2026-07-21 */
+    /** Hold Prev/Next slot — Replace / Queue / Start next / Play both / Scrub. 2026-07-21 / 2026-08-01 */
     public static final int SLOT_REPLACE = 0;
     public static final int SLOT_PLAY_QUEUE = 1;
     public static final int SLOT_START_NEXT = 2;
-    public static final int SLOT_SCRUB = 3;
-    public static final int SLOT_TRANSITION_LONG = 4;
-    public static final int SLOT_TRANSITION_OVERLAP = 5;
-    public static final int SLOT_TRANSITION_WAVE = 6;
-    public static final int SLOT_TRANSITION_INSTANT = 7;
-    public static final int SLOT_ROW_COUNT = 8;
+    /** Play-both stacking — this pad feeds its stem from both songs. 2026-08-01 */
+    public static final int SLOT_PLAY_BOTH = 3;
+    public static final int SLOT_SCRUB = 4;
+    /** StemFM pacing modes — Full Tracks / Balanced Mix / Short & Punchy / Instant. 2026-08-01 */
+    public static final int SLOT_TRANSITION_FULL = 5;
+    public static final int SLOT_TRANSITION_BALANCED = 6;
+    public static final int SLOT_TRANSITION_SHORT = 7;
+    public static final int SLOT_TRANSITION_INSTANT = 8;
+    public static final int SLOT_ROW_COUNT = 9;
 
     /**
      * Session / Play context — queue, Pause, TRANSITION, Home exit.
@@ -26,12 +29,18 @@ public final class StemMixContextRows {
      */
     public static final int SESSION_PLAY_QUEUE = 0;
     public static final int SESSION_PAUSE = 1;
-    public static final int SESSION_TRANSITION_LONG = 2;
-    public static final int SESSION_TRANSITION_OVERLAP = 3;
-    public static final int SESSION_TRANSITION_WAVE = 4;
+    /** StemFM pacing modes — Full Tracks / Balanced Mix / Short & Punchy / Instant. 2026-08-01 */
+    public static final int SESSION_TRANSITION_FULL = 2;
+    public static final int SESSION_TRANSITION_BALANCED = 3;
+    public static final int SESSION_TRANSITION_SHORT = 4;
     public static final int SESSION_HOME = 5;
     public static final int SESSION_TRANSITION_INSTANT = 6;
-    public static final int SESSION_ROW_COUNT = 7;
+    /** StemFM Quantize Performance — pad crossfades snap to beat/bar. 2026-08-01 */
+    public static final int SESSION_QUANTIZE_BEAT = 7;
+    public static final int SESSION_QUANTIZE_HALF_BAR = 8;
+    public static final int SESSION_QUANTIZE_BAR = 9;
+    public static final int SESSION_QUANTIZE_OFF = 10;
+    public static final int SESSION_ROW_COUNT = 11;
 
     private StemMixContextRows() {}
 
@@ -46,10 +55,11 @@ public final class StemMixContextRows {
                 "Replace focused track",
                 "Play queue",
                 "Start next track",
+                "Play both",
                 "Scrub",
-                "TRANSITION · LONG (~4s)",
-                "TRANSITION · ∞ (~8s)",
-                "TRANSITION · waveform (~0.4s)",
+                "TRANSITION · FULL TRACKS (~4s)",
+                "TRANSITION · BALANCED (~2s)",
+                "TRANSITION · SHORT & PUNCHY (~0.4s)",
                 "TRANSITION · INSTANT"
         };
     }
@@ -64,27 +74,36 @@ public final class StemMixContextRows {
         return new String[] {
                 "Play queue",
                 "Pause",
-                "TRANSITION · LONG (~4s)",
-                "TRANSITION · ∞ (~8s)",
-                "TRANSITION · waveform (~0.4s)",
+                "TRANSITION · FULL TRACKS (~4s)",
+                "TRANSITION · BALANCED (~2s)",
+                "TRANSITION · SHORT & PUNCHY (~0.4s)",
                 "Home",
-                "TRANSITION · INSTANT"
+                "TRANSITION · INSTANT",
+                "QUANTIZE · BEAT",
+                "QUANTIZE · HALF BAR",
+                "QUANTIZE · BAR",
+                "QUANTIZE · OFF"
         };
     }
 
     public static int transitionPresetForSlotRow(int row) {
-        if (row == SLOT_TRANSITION_LONG) return StemControls.TRANSITION_PRESET_LONG;
-        if (row == SLOT_TRANSITION_OVERLAP) return StemControls.TRANSITION_PRESET_OVERLAP;
-        if (row == SLOT_TRANSITION_WAVE) return StemControls.TRANSITION_PRESET_WAVE;
+        if (row == SLOT_TRANSITION_FULL) return StemControls.TRANSITION_PRESET_FULL;
+        if (row == SLOT_TRANSITION_BALANCED) return StemControls.TRANSITION_PRESET_BALANCED;
+        if (row == SLOT_TRANSITION_SHORT) return StemControls.TRANSITION_PRESET_SHORT;
         if (row == SLOT_TRANSITION_INSTANT) return StemControls.TRANSITION_PRESET_INSTANT;
         return -1;
     }
 
+    /** True when a slot row toggles play-both stacking for that pad. 2026-08-01 */
+    public static boolean isSlotPlayBothRow(int row) {
+        return row == SLOT_PLAY_BOTH;
+    }
+
     /** Map session row → transition preset (−1 = not a preset). 2026-07-21 */
     public static int transitionPresetForSessionRow(int row) {
-        if (row == SESSION_TRANSITION_LONG) return StemControls.TRANSITION_PRESET_LONG;
-        if (row == SESSION_TRANSITION_OVERLAP) return StemControls.TRANSITION_PRESET_OVERLAP;
-        if (row == SESSION_TRANSITION_WAVE) return StemControls.TRANSITION_PRESET_WAVE;
+        if (row == SESSION_TRANSITION_FULL) return StemControls.TRANSITION_PRESET_FULL;
+        if (row == SESSION_TRANSITION_BALANCED) return StemControls.TRANSITION_PRESET_BALANCED;
+        if (row == SESSION_TRANSITION_SHORT) return StemControls.TRANSITION_PRESET_SHORT;
         if (row == SESSION_TRANSITION_INSTANT) return StemControls.TRANSITION_PRESET_INSTANT;
         return -1;
     }
@@ -92,6 +111,15 @@ public final class StemMixContextRows {
     /** True when session row pauses the jam (all decks/songs). 2026-07-21 */
     public static boolean isSessionPauseRow(int row) {
         return row == SESSION_PAUSE;
+    }
+
+    /** Map a session row to a StemQuantizePolicy mode (−1 = not a quantize row). 2026-08-01 */
+    public static int quantizeModeForSessionRow(int row) {
+        if (row == SESSION_QUANTIZE_BEAT) return com.solar.launcher.stem.analysis.StemQuantizePolicy.BEAT;
+        if (row == SESSION_QUANTIZE_HALF_BAR) return com.solar.launcher.stem.analysis.StemQuantizePolicy.HALF_BAR;
+        if (row == SESSION_QUANTIZE_BAR) return com.solar.launcher.stem.analysis.StemQuantizePolicy.BAR;
+        if (row == SESSION_QUANTIZE_OFF) return com.solar.launcher.stem.analysis.StemQuantizePolicy.OFF;
+        return -1;
     }
 
     /** True when session row exits to Solar Home. 2026-07-21 */

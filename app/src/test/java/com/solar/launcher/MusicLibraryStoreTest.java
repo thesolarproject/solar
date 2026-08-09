@@ -61,6 +61,22 @@ public class MusicLibraryStoreTest {
         if (empty.durationSec() != 0) throw new AssertionError("expected zero duration");
     }
 
+    /** 2026-07-31 — Legacy stem-pad DB rows must never be treated as library songs. */
+    @Test
+    public void stemArtifactPathClassification() {
+        if (!MusicLibraryStore.isStemLibraryArtifactPath(
+                "/storage/sdcard0/Music/Track.mp3.stems/vocals.mp3")) {
+            throw new AssertionError("user stem sidecar should be excluded");
+        }
+        if (!MusicLibraryStore.isStemLibraryArtifactPath(
+                "/data/data/com.solar.launcher/cache/lalal_stems/v6_live_abc/drum.mp3")) {
+            throw new AssertionError("Lalal cache pad should be excluded");
+        }
+        if (MusicLibraryStore.isStemLibraryArtifactPath("/storage/sdcard0/Music/Track.mp3")) {
+            throw new AssertionError("source track must remain in library");
+        }
+    }
+
     @Test
     public void normPathLowerCases() {
         String norm = MusicLibraryStore.normPath("/Storage/SD/Music/Song.MP3");

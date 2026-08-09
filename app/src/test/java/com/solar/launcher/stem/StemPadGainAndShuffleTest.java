@@ -20,6 +20,7 @@ public class StemPadGainAndShuffleTest {
     /** Mid-jam shuffle keeps both songs — escapes stuck 4:0. 2026-07-21 */
     @Test
     public void midJamShuffleEscapesFourOhStuck() {
+        // (initialShuffleForcesBothTracksAnySplit below keeps its own suppression.)
         // All pads on song A — old policy returned false forever. 2026-07-21
         int[] zones = new int[] { 0, 0, 0, 0 };
         assertTrue(StemControls.pickShufflePadSongs(zones, 2, new Random(7)));
@@ -79,6 +80,7 @@ public class StemPadGainAndShuffleTest {
     }
 
     /** Initial mashup shuffle invents B pads; any uneven split OK (not forced 2:2). 2026-07-21 */
+    @SuppressWarnings("deprecation") // legacy initial-shuffle helper, kept for regression coverage
     @Test
     public void initialShuffleForcesBothTracksAnySplit() {
         int[] zones = new int[] { 0, 0, 0, 0 };
@@ -155,6 +157,57 @@ public class StemPadGainAndShuffleTest {
         }
     }
 
+    /** Short-OK flip swaps which song feeds each pad — deterministically. 2026-08-02 */
+    @Test
+    public void okFlipSwapsSongAssignmentsDeterministically() {
+        StemSession s = new StemSession();
+        s.bindTracks(fakeTracks(2));
+        s.seedMashupStartPadGains();
+        // Route pads 0/2 → song A, 1/3 → song B (repress each to cycle).
+        s.onStemKey(1);
+        s.onStemKey(1);
+        s.onStemKey(3);
+        s.onStemKey(3);
+        assertEquals(0, s.songIndexForZone(0));
+        assertEquals(1, s.songIndexForZone(1));
+        assertEquals(0, s.songIndexForZone(2));
+        assertEquals(1, s.songIndexForZone(3));
+        // One flip: every pad swaps 0 ↔ 1 — no randomness involved. 2026-08-02
+        s.flipSongAssignments();
+        assertEquals(1, s.songIndexForZone(0));
+        assertEquals(0, s.songIndexForZone(1));
+        assertEquals(1, s.songIndexForZone(2));
+        assertEquals(0, s.songIndexForZone(3));
+        // Flip again restores the original set exactly (involution). 2026-08-02
+        s.flipSongAssignments();
+        assertEquals(0, s.songIndexForZone(0));
+        assertEquals(1, s.songIndexForZone(1));
+        assertEquals(0, s.songIndexForZone(2));
+        assertEquals(1, s.songIndexForZone(3));
+    }
+
+    /** OK flip is a no-op with fewer than two songs (mashup gate). 2026-08-02 */
+    @Test
+    public void okFlipNoOpOnSingleSong() {
+        StemSession s = new StemSession();
+        s.bindTracks(fakeTracks(1));
+        s.flipSongAssignments();
+        for (int z = 0; z < StemSession.ZONE_COUNT; z++) {
+            assertEquals(0, s.songIndexForZone(z));
+        }
+    }
+
+    /** Hold-OK shuffle only arms when no pad is focused in a running mashup. 2026-08-02 */
+    @Test
+    public void holdOkShuffleRequiresNoPadFocusedRunningMashup() {
+        assertTrue(StemControls.centerHoldArmsShuffle(true, true, true, -1));
+        assertFalse(StemControls.centerHoldArmsShuffle(true, true, true, 0));
+        assertFalse(StemControls.centerHoldArmsShuffle(true, true, false, -1));
+        assertFalse(StemControls.centerHoldArmsShuffle(true, false, true, -1));
+        assertFalse(StemControls.centerHoldArmsShuffle(false, true, true, -1));
+        assertFalse(StemControls.centerHoldArmsShuffle(true, true, true, 2));
+    }
+
     /** Silent / 1% pad bumps to ~10% on track-switch; louder pads keep level. 2026-07-21 */
     @Test
     public void silentPadBumpsToTenPercentOnTrackSwitch() {
@@ -174,6 +227,7 @@ public class StemPadGainAndShuffleTest {
 
     /** Two-track start seeds 50% on every pad. 2026-07-21 */
     @Test
+    @SuppressWarnings("deprecation") // legacy initialMashupShuffle — docs old cold start
     public void dualStartSeedsFiftyPercent() {
         StemSession s = new StemSession();
         s.bindTracks(fakeTracks(2));
@@ -181,11 +235,37 @@ public class StemPadGainAndShuffleTest {
         for (int z = 0; z < StemSession.ZONE_COUNT; z++) {
             assertEquals(StemControls.MASHUP_START_PAD_GAIN, s.padGain(z), 0.0001f);
         }
+        // Legacy initial shuffle (no longer used at cold start) keeps levels at 50%
+        // while giving both songs pads — documents the old pre-StemFM behavior. 2026-07-21
         s.initialMashupShuffle(new Random(3));
-        // Levels stay at 50% after initial shuffle. 2026-07-21
         for (int z = 0; z < StemSession.ZONE_COUNT; z++) {
             assertEquals(StemControls.MASHUP_START_PAD_GAIN, s.padGain(z), 0.0001f);
         }
+        assertTrue(StemControls.songHasPad(copyZones(s), 0));
+        assertTrue(StemControls.songHasPad(copyZones(s), 1));
+    }
+
+    /**
+     * StemFM-style cold start: the seed track populates all 4 pads at 50% and the
+     * second track loads SILENT — the user decides when to mix it in (repress a pad,
+     * Play Both, or centre shuffle). Was: host ran initialMashupShuffle at cold start
+     * which split pads across both tracks immediately. 2026-08-02
+     */
+    @Test
+    public void coldStartKeepsAllPadsOnSeedSong() {
+        StemSession s = new StemSession();
+        s.bindTracks(fakeTracks(2));
+        s.seedMashupStartPadGains();
+        // Mirrors the host's onAllMixersReady cold start: seed all pads, no shuffle.
+        // (Session-level routing + gains; the host also zeroes non-routed mixer gains.)
+        for (int z = 0; z < StemSession.ZONE_COUNT; z++) {
+            assertEquals(0, s.songIndexForZone(z));
+            assertEquals(StemControls.MASHUP_START_PAD_GAIN, s.padGain(z), 0.0001f);
+        }
+        // Second track is loaded but silent — no pad points at it until user mixes in.
+        assertFalse(StemControls.songHasPad(copyZones(s), 1));
+        // User-initiated shuffle still spreads pads across both songs (centre tap).
+        s.shufflePadAssignments(new Random(7), false);
         assertTrue(StemControls.songHasPad(copyZones(s), 0));
         assertTrue(StemControls.songHasPad(copyZones(s), 1));
     }
@@ -201,11 +281,16 @@ public class StemPadGainAndShuffleTest {
     @Test
     public void contextRowsHavePauseHomeNoLoop() {
         String[] slot = StemMixContextRows.slotRows(1);
-        assertEquals(4, slot.length);
+        // 9 = Replace / Play queue / Start next / Play both / Scrub / 4 TRANSITION. 2026-08-01
+        assertEquals(9, slot.length);
         assertTrue(slot[0].toLowerCase().contains("replace"));
         assertTrue(slot[0].toLowerCase().contains("focused"));
+        assertTrue(slot[StemMixContextRows.SLOT_PLAY_BOTH].toLowerCase().contains("both"));
+        assertTrue(StemMixContextRows.isSlotPlayBothRow(StemMixContextRows.SLOT_PLAY_BOTH));
+        assertFalse(StemMixContextRows.isSlotPlayBothRow(StemMixContextRows.SLOT_START_NEXT));
         String[] session = StemMixContextRows.sessionRows(false);
-        assertEquals(6, session.length);
+        // 11 = Pause / Home / 4 TRANSITION / 4 QUANTIZE / Play queue. 2026-08-01
+        assertEquals(StemMixContextRows.SESSION_ROW_COUNT, session.length);
         assertTrue(StemMixContextRows.isSessionPauseRow(StemMixContextRows.SESSION_PAUSE));
         assertTrue(StemMixContextRows.isSessionHomeRow(StemMixContextRows.SESSION_HOME));
         boolean sawPause = false;
@@ -227,7 +312,7 @@ public class StemPadGainAndShuffleTest {
     /** Pad repress uses WAVE (~0.4s), not LONG. 2026-07-21 */
     @Test
     public void padRepressIsWaveDuration() {
-        assertEquals(StemControls.TRANSITION_WAVE_MS, StemControls.padRepressTransitionMs());
+        assertEquals(StemControls.TRANSITION_SHORT_MS, StemControls.padRepressTransitionMs());
     }
 
     private static int[] copyZones(StemSession s) {

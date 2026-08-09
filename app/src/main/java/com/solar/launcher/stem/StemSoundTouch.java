@@ -30,4 +30,35 @@ public final class StemSoundTouch {
     public static boolean isSoundTouchEnabled(long soundtouchOptionValue) {
         return soundtouchOptionValue == 1L;
     }
+
+    /**
+     * DJ-style pitch factor shifting song's key onto the master's (Camelot matching).
+     * Layman: nudge the slave's pitch so its key sits near Song 1's, like a harmonic DJ mix.
+     * Technical: relative-minor treated as ±3 semitones; diff clamped to ±6; 2^(diff/12).
+     * Ported verbatim from MixPlayerHost key-alignment (2026-08-02) so Mix and Stem mashup
+     * agree on the same wheel math; returns 1.0 when either key is unknown.
+     */
+    public static float pitchFactorForKeys(int masterKeyRoot, boolean masterKeyMajor,
+            int songKeyRoot, boolean songKeyMajor) {
+        if (masterKeyRoot < 0 || songKeyRoot < 0) return 1f;
+        int targetRoot = masterKeyRoot;
+        if (masterKeyMajor != songKeyMajor) {
+            if (masterKeyMajor) targetRoot -= 3;
+            else targetRoot += 3;
+        }
+        int diff = (targetRoot - songKeyRoot) % 12;
+        if (diff < -6) diff += 12;
+        if (diff > 6) diff -= 12;
+        return (float) Math.pow(2.0, diff / 12.0);
+    }
+
+    /** Wire native pitch shift (soundtouch-pitch) on a live IJK player. 2026-08-02 */
+    public static void applyPitchOption(tv.danmaku.ijk.media.player.IjkMediaPlayer player,
+            float pitchFactor) {
+        if (player == null) return;
+        try {
+            player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "soundtouch-pitch",
+                    String.valueOf(pitchFactor > 0.01f ? pitchFactor : 1f));
+        } catch (Exception ignored) {}
+    }
 }

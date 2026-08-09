@@ -62,8 +62,11 @@ public class StemMixQueuePolicyTest {
         assertEquals(2, StemMixQueuePolicy.nextUpIndex(q, StemMixQueuePolicy.STEM_LIVE_WINDOW));
         String label = StemMixQueuePolicy.nextUpLabel(q, 2);
         assertTrue(label.length() > 0);
+        // DJ chain: seed (slot 0) finishes → survivor becomes the new seed at
+        // index 0, incoming joins as partner at index 1, finished rotates back.
         assertTrue(StemMixQueuePolicy.applyAdvanceOrder(q, 0, 2, 2));
-        assertEquals("next.mp3", q.items().get(0).file.getName());
+        assertEquals("live1.mp3", q.items().get(0).file.getName());
+        assertEquals("next.mp3", q.items().get(1).file.getName());
     }
 
     @Test
@@ -287,10 +290,240 @@ public class StemMixQueuePolicyTest {
         jam.add(track("b.mp3"));
         jam.add(track("c.mp3"));
         StemMixQueuePolicy.clearAndSeed(q, jam);
-        // Cycle through overflow twice — swap keeps Next-up forever. 2026-07-21
+        // Cycle through overflow twice — chain keeps Next-up forever: each seed
+        // finish promotes the survivor and pulls the waiting track in. 2026-08-01
+        assertTrue(StemMixQueuePolicy.applyAdvanceOrder(q, 0, 2, 2));
+        assertEquals("b.mp3", q.items().get(0).file.getName());
+        assertEquals("c.mp3", q.items().get(1).file.getName());
         assertTrue(StemMixQueuePolicy.applyAdvanceOrder(q, 0, 2, 2));
         assertEquals("c.mp3", q.items().get(0).file.getName());
+        assertEquals("a.mp3", q.items().get(1).file.getName());
+    }
+
+    /** DJ chain rule: end of pair 1 becomes the start of pair 2. 2026-08-01 */
+    @Test
+    public void seedFinishChainRulePromotesSurvivor() throws Exception {
+        PlayQueue q = new PlayQueue();
+        List<File> jam = new ArrayList<File>();
+        jam.add(track("seed.mp3"));
+        jam.add(track("survivor.mp3"));
+        jam.add(track("next1.mp3"));
+        jam.add(track("next2.mp3"));
+        StemMixQueuePolicy.clearAndSeed(q, jam);
+        // Seed (slot 0) finishes → [seed, survivor, next1, next2] becomes
+        // [survivor, next1, next2, seed]: the end track of pair 1 (survivor)
+        // transitions into the start of pair 2; finished seed rotates to back.
         assertTrue(StemMixQueuePolicy.applyAdvanceOrder(q, 0, 2, 2));
-        assertEquals("a.mp3", q.items().get(0).file.getName());
+        assertEquals("survivor.mp3", q.items().get(0).file.getName());
+        assertEquals("next1.mp3", q.items().get(1).file.getName());
+        assertEquals("next2.mp3", q.items().get(2).file.getName());
+        assertEquals("seed.mp3", q.items().get(3).file.getName());
+        // Partner (slot 1) finishes → seed stays at 0, incoming joins at 1.
+        assertTrue(StemMixQueuePolicy.applyAdvanceOrder(q, 1, 2, 2));
+        assertEquals("survivor.mp3", q.items().get(0).file.getName());
+        assertEquals("next2.mp3", q.items().get(1).file.getName());
+        assertEquals("next1.mp3", q.items().get(2).file.getName());
+    }
+
+    /** StemFM tempo-match error — harmonic lock treats half/double-time as clean. 2026-08-01 */
+    @Test
+    public void tempoMatchErrorHarmonicLock() {
+        // Same BPM → 0 error.
+        assertEquals(0f, StemMixQueuePolicy.tempoMatchError(120f, 120f), 0.0001f);
+        // Half-time groove (60 vs 120) → clean match too.
+        assertEquals(0f, StemMixQueuePolicy.tempoMatchError(120f, 60f), 0.0001f);
+        // Double-time (240 vs 120) → clean match too.
+        assertEquals(0f, StemMixQueuePolicy.tempoMatchError(120f, 240f), 0.0001f);
+        // Mismatched grooves score larger than a clean pair.
+        float close = StemMixQueuePolicy.tempoMatchError(120f, 128f);
+        float far = StemMixQueuePolicy.tempoMatchError(120f, 95f);
+        assertTrue(close < far);
+        // Degenerate inputs clamp to DEFAULT_BPM rather than NaN. 2026-08-01
+        float d1 = StemMixQueuePolicy.tempoMatchError(0f, 120f);
+        assertTrue(Float.isFinite(d1));
+        float d2 = StemMixQueuePolicy.tempoMatchError(120f, 0f);
+        assertTrue(Float.isFinite(d2));
+    }
+
+    /** StemFM transition: of next two upcoming, closest tempo/beat match plays first. 2026-08-01 */
+    @Test
+    public void advanceClosestTempoPicksBestOfNextTwo() throws Exception {
+        PlayQueue q = new PlayQueue();
+        List<File> jam = new ArrayList<File>();
+        jam.add(track("live0.mp3"));
+        jam.add(track("live1.mp3"));
+        jam.add(track("next1.mp3"));
+        jam.add(track("next2.mp3"));
+        StemMixQueuePolicy.clearAndSeed(q, jam);
+        boolean[] ready = new boolean[] { true, true, true, true };
+        // Finished song ≈ 120 BPM; next1 ≈ 95 BPM (far), next2 ≈ 120 BPM (close) → next2.
+        float[] bpm = new float[] { 0f, 0f, 95f, 120f };
+        int pick = StemMixQueuePolicy.advanceSourceClosestTempo(
+                q, StemMixQueuePolicy.STEM_LIVE_WINDOW, ready, 120f, bpm);
+        assertEquals(3, pick);
+        // Swap: next1 close, next2 far → next1.
+        float[] bpm2 = new float[] { 0f, 0f, 120f, 95f };
+        assertEquals(2, StemMixQueuePolicy.advanceSourceClosestTempo(
+                q, StemMixQueuePolicy.STEM_LIVE_WINDOW, ready, 120f, bpm2));
+    }
+
+    /** Tempo pick only looks at the next two; unready candidate never wins. 2026-08-01 */
+    @Test
+    public void advanceClosestTempoSkipsUnreadyAndFarDown() throws Exception {
+        PlayQueue q = new PlayQueue();
+        List<File> jam = new ArrayList<File>();
+        jam.add(track("live0.mp3"));
+        jam.add(track("live1.mp3"));
+        jam.add(track("next1.mp3"));
+        jam.add(track("next2.mp3"));
+        jam.add(track("far.mp3"));
+        StemMixQueuePolicy.clearAndSeed(q, jam);
+        // next1 (idx2) not ready, next2 (idx3) ready & close → idx3.
+        boolean[] ready = new boolean[] { true, true, false, true, true };
+        float[] bpm = new float[] { 0f, 0f, 120f, 120f, 95f };
+        assertEquals(3, StemMixQueuePolicy.advanceSourceClosestTempo(
+                q, StemMixQueuePolicy.STEM_LIVE_WINDOW, ready, 120f, bpm));
+        // No tempo data at all → FIFO fallback (plain Next-up head).
+        // ready=null is the true-FIFO path (advanceSourcePreferReady returns next).
+        int fifo = StemMixQueuePolicy.advanceSourceClosestTempo(
+                q, StemMixQueuePolicy.STEM_LIVE_WINDOW, null, 120f, null);
+        assertEquals(2, fifo);
+        // Unknown candidate BPMs → FIFO fallback too.
+        float[] unknown = new float[] { 0f, 0f, 0f, 0f, 0f };
+        assertEquals(2, StemMixQueuePolicy.advanceSourceClosestTempo(
+                q, StemMixQueuePolicy.STEM_LIVE_WINDOW, null, 120f, unknown));
+        // With prep-aware ready (next1 unready, next2 ready) the fallback prefers
+        // the first ready row — same as the existing prep-aware FIFO scan.
+        assertEquals(3, StemMixQueuePolicy.advanceSourceClosestTempo(
+                q, StemMixQueuePolicy.STEM_LIVE_WINDOW, ready, 120f, null));
+    }
+
+    /** Closed pair (no overflow) → tempo pick returns −1 like FIFO advance. 2026-08-01 */
+    @Test
+    public void advanceClosestTempoNoOverflow() throws Exception {
+        PlayQueue q = new PlayQueue();
+        List<File> jam = new ArrayList<File>();
+        jam.add(track("a.mp3"));
+        jam.add(track("b.mp3"));
+        StemMixQueuePolicy.clearAndSeed(q, jam);
+        assertEquals(-1, StemMixQueuePolicy.advanceSourceClosestTempo(
+                q, StemMixQueuePolicy.STEM_LIVE_WINDOW,
+                new boolean[] { true, true }, 120f, new float[] { 0f, 0f }));
+    }
+
+    /** Queue Mix-row adapter math — track i at 2i, Mix at 2i+1, footer at 2N−1. 2026-08-01 */
+    @Test
+    public void mixRowAdapterMapping() {
+        // Visibility: hidden during moves / playlist edit; shown when idle. 2026-08-01
+        assertFalse(StemMixQueuePolicy.mixRowsVisible(true, false));
+        assertFalse(StemMixQueuePolicy.mixRowsVisible(false, true));
+        assertTrue(StemMixQueuePolicy.mixRowsVisible(false, false));
+        boolean[] full = StemMixQueuePolicy.allPairsMask(3);
+        assertEquals(0, StemMixQueuePolicy.mixRowCount(null));
+        assertEquals(2, StemMixQueuePolicy.mixRowCount(full));
+        // Adapter count: 3 tracks + 2 mix rows + footer = 6; without footer = 5. 2026-08-01
+        assertEquals(6, StemMixQueuePolicy.adapterCountWithMix(3, true, full));
+        assertEquals(5, StemMixQueuePolicy.adapterCountWithMix(3, false, full));
+        assertEquals(3, StemMixQueuePolicy.adapterCountWithMix(3, false, null));
+        // Track → adapter 2i; adapter → track i. 2026-08-01
+        assertEquals(0, StemMixQueuePolicy.trackToAdapter(0, full));
+        assertEquals(2, StemMixQueuePolicy.trackToAdapter(1, full));
+        assertEquals(4, StemMixQueuePolicy.trackToAdapter(2, full));
+        assertEquals(1, StemMixQueuePolicy.adapterToTrack(2, full));
+        assertEquals(1, StemMixQueuePolicy.adapterToTrack(1, null));
+        // Mix rows are the odd adapters below 2N−1. 2026-08-01
+        assertTrue(StemMixQueuePolicy.isMixAdapter(1, 3, full));
+        assertTrue(StemMixQueuePolicy.isMixAdapter(3, 3, full));
+        assertFalse(StemMixQueuePolicy.isMixAdapter(0, 3, full));
+        assertFalse(StemMixQueuePolicy.isMixAdapter(5, 3, full));
+        assertFalse(StemMixQueuePolicy.isMixAdapter(1, 3, null));
+        assertFalse(StemMixQueuePolicy.isMixAdapter(1, 1, full));
+        // Footer moves to 2N−1 when mixes visible; stays at N otherwise. 2026-08-01
+        assertTrue(StemMixQueuePolicy.isFooterAdapter(5, 3, true, full));
+        assertFalse(StemMixQueuePolicy.isFooterAdapter(3, 3, true, full));
+        assertTrue(StemMixQueuePolicy.isFooterAdapter(3, 3, true, null));
+        assertFalse(StemMixQueuePolicy.isFooterAdapter(5, 3, true, null));
+        assertFalse(StemMixQueuePolicy.isFooterAdapter(5, 3, false, full));
+    }
+
+    /**
+     * Sparse Mix mask — only the pair (0,1) is stem-ready; track 2 has no stems, so no
+     * Mix divider sits between 1 and 2 and adapter math skips it. 2026-08-01
+     */
+    @Test
+    public void mixRowSparseMaskSkipsUnstemmedPairs() {
+        boolean[] sparse = new boolean[] { true, false };
+        assertEquals(1, StemMixQueuePolicy.mixRowCount(sparse));
+        // 3 tracks + 1 mix row, no footer = 4 rows.
+        assertEquals(4, StemMixQueuePolicy.adapterCountWithMix(3, false, sparse));
+        // trackToAdapter: t0=0, t1=2 (one Mix before), t2=3 (still one before).
+        assertEquals(0, StemMixQueuePolicy.trackToAdapter(0, sparse));
+        assertEquals(2, StemMixQueuePolicy.trackToAdapter(1, sparse));
+        assertEquals(3, StemMixQueuePolicy.trackToAdapter(2, sparse));
+        // adapterToTrack: adapter 1 is the Mix row of pair (0,1) → lower track 0.
+        assertEquals(0, StemMixQueuePolicy.adapterToTrack(1, sparse));
+        assertEquals(1, StemMixQueuePolicy.adapterToTrack(2, sparse));
+        assertEquals(2, StemMixQueuePolicy.adapterToTrack(3, sparse));
+        // Only adapter 1 is a Mix row; adapter 2 (track 1) and 3 (track 2) are not.
+        assertTrue(StemMixQueuePolicy.isMixAdapter(1, 3, sparse));
+        assertFalse(StemMixQueuePolicy.isMixAdapter(2, 3, sparse));
+        assertFalse(StemMixQueuePolicy.isMixAdapter(3, 3, sparse));
+        // Footer sits at the last adapter (4 rows → footer at 4).
+        assertTrue(StemMixQueuePolicy.isFooterAdapter(4, 3, true, sparse));
+        assertFalse(StemMixQueuePolicy.isFooterAdapter(3, 3, true, sparse));
+    }
+
+    /** liftPairToLiveFront — selected pair becomes live 0,1; rest keeps order. 2026-08-01 */
+    @Test
+    public void liftPairToLiveFrontOrdersPairFirst() throws Exception {
+        PlayQueue q = new PlayQueue();
+        List<File> jam = new ArrayList<File>();
+        jam.add(track("a.mp3"));
+        jam.add(track("b.mp3"));
+        jam.add(track("c.mp3"));
+        jam.add(track("d.mp3"));
+        StemMixQueuePolicy.clearAndSeed(q, jam);
+        // Lift pair (b,c) = tracks 1,2 to the front. 2026-08-01
+        assertTrue(StemMixQueuePolicy.liftPairToLiveFront(q, 1, 2));
+        assertEquals("b.mp3", q.items().get(0).file.getName());
+        assertEquals("c.mp3", q.items().get(1).file.getName());
+        assertEquals("a.mp3", q.items().get(2).file.getName());
+        assertEquals("d.mp3", q.items().get(3).file.getName());
+        // Reverse order args still ordered b,c (min first). 2026-08-01
+        PlayQueue q2 = new PlayQueue();
+        StemMixQueuePolicy.clearAndSeed(q2, jam);
+        assertTrue(StemMixQueuePolicy.liftPairToLiveFront(q2, 3, 0));
+        assertEquals("a.mp3", q2.items().get(0).file.getName());
+        assertEquals("d.mp3", q2.items().get(1).file.getName());
+        // Invalid indices → no-op. 2026-08-01
+        assertFalse(StemMixQueuePolicy.liftPairToLiveFront(q2, 0, 0));
+        assertFalse(StemMixQueuePolicy.liftPairToLiveFront(q2, -1, 1));
+        assertFalse(StemMixQueuePolicy.liftPairToLiveFront(q2, 0, 99));
+        assertEquals(4, q2.size());
+    }
+
+    /** liftPickToSeedFront — picked queue row becomes the live seed (index 0). 2026-08-01 */
+    @Test
+    public void liftPickToSeedFrontLiftsPickToFront() throws Exception {
+        PlayQueue q = new PlayQueue();
+        List<File> jam = new ArrayList<File>();
+        jam.add(track("a.mp3"));
+        jam.add(track("b.mp3"));
+        jam.add(track("c.mp3"));
+        jam.add(track("d.mp3"));
+        StemMixQueuePolicy.clearAndSeed(q, jam);
+        assertTrue(StemMixQueuePolicy.liftPickToSeedFront(q, 2));
+        assertEquals("c.mp3", q.items().get(0).file.getName());
+        assertEquals("a.mp3", q.items().get(1).file.getName());
+        assertEquals("b.mp3", q.items().get(2).file.getName());
+        assertEquals("d.mp3", q.items().get(3).file.getName());
+        assertEquals(0, q.index());
+        // Already at front → no-op success, size unchanged.
+        assertTrue(StemMixQueuePolicy.liftPickToSeedFront(q, 0));
+        // Invalid indices / null queue → no-op false.
+        assertFalse(StemMixQueuePolicy.liftPickToSeedFront(q, -1));
+        assertFalse(StemMixQueuePolicy.liftPickToSeedFront(q, 99));
+        assertFalse(StemMixQueuePolicy.liftPickToSeedFront(null, 0));
+        assertEquals(4, q.size());
     }
 }

@@ -51,6 +51,13 @@ public final class InstancePool {
             if (raw == null || raw.length() == 0) continue;
             next.add(new PipedBackend(raw));
         }
+        // 2026-08-01 — yt2009 video-stream backends (no metadata/search).
+        List<String> y29 = cfg.getYt2009();
+        for (int i = 0; i < y29.size(); i++) {
+            String raw = y29.get(i);
+            if (raw == null || raw.length() == 0) continue;
+            next.add(new Yt2009Backend(raw));
+        }
         List<String> yt = cfg.getYtApiLegacy();
         for (int i = 0; i < yt.size(); i++) {
             next.add(new YtApiLegacyBackend(yt.get(i)));

@@ -83,6 +83,15 @@ public class BootReceiver extends BroadcastReceiver {
                 GlobalOverlayTrigger.ensureStarted(context);
             }
         });
+        // 2026-08-05 — Embedded Wolfius TLS 1.3 proxy runs automatically on rooted targets.
+        // Starts at boot (and again on app start via MainActivity) and self-configures
+        // CA + iptables; no user-facing switch. Reversal: gate on a pref for opt-in again.
+        SolarBootPacing.schedule(context, 8_000L, new Runnable() {
+            @Override
+            public void run() {
+                WolfiusTlsService.ensureStarted(context);
+            }
+        });
         SolarBootPacing.schedule(context, 10_000L, new Runnable() {
             @Override
             public void run() {

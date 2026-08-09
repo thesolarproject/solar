@@ -78,9 +78,13 @@ if ! "$ADB" devices 2>/dev/null | grep -q emulator; then
   done
 fi
 
+# Target the emulator explicitly — a physical Y1/Y2/A5 may also be on adb.
+EMU_SERIAL="$("$ADB" devices 2>/dev/null | awk '/emulator-[0-9]+/{print $1; exit}')" || EMU_SERIAL=""
+export ANDROID_SERIAL="${EMU_SERIAL:-}"
+
 # Critical: do NOT pin y1/y2/a5 — chrome activates on 480×800 without a family pin.
 # Clear a leftover pin from a prior Y1 AVD session on this emulator instance.
-"$ADB" shell setprop persist.solar.device_family "" 2>/dev/null || true
+"$ADB" shell "setprop persist.solar.device_family ''" 2>/dev/null || true
 echo "persist.solar.device_family=$("$ADB" shell getprop persist.solar.device_family 2>/dev/null | tr -d '\r')"
 echo "(empty pin expected — phone chrome should wrap Solar)"
 
@@ -89,11 +93,12 @@ if [[ "$INSTALL" -eq 1 ]]; then
   if [[ ! -f "$APK" ]]; then
     (cd "$ROOT" && ./gradlew :app:assembleDebug) || exit 1
   fi
-  adb uninstall com.solar.launcher >/dev/null 2>&1 || true
-  adb install -r "$APK" || exit 1
-  adb shell setprop persist.solar.device_family "" 2>/dev/null || true
-  adb shell am force-stop com.solar.launcher || true
-  adb shell am start -n com.solar.launcher/.MainActivity || true
+  # Data-preserving install: a plain install -r keeps prefs/databases/files.
+  # ANDROID_SERIAL was exported above — every adb call targets this emulator.
+  "$ROOT/scripts/install-preserve-data.sh" "$APK" || exit 1
+  "$ADB" shell "setprop persist.solar.device_family ''" 2>/dev/null || true
+  "$ADB" shell am force-stop com.solar.launcher || true
+  "$ADB" shell am start -n com.solar.launcher/.MainActivity || true
 fi
 
 echo "Phone emulator ready. Confirm: Solar viewport + click wheel; (i) opens customize."

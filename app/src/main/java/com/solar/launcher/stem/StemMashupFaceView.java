@@ -20,8 +20,8 @@ import android.view.View;
  * 2026-07-20 / 2026-07-21
  */
 public class StemMashupFaceView extends View {
-    /** Vocals / Drums / Bass / Melody — match {@link StemFaceView#STEM_COLORS}. 2026-07-20 */
-    public static final String[] ZONE_LABELS = { "VOCALS", "DRUMS", "BASS", "MELODY" };
+    /** Vocals / Bass / Melody / Drums — StemFM compass (N=Vocals, W=Bass, E=Melody, S=Drums). 2026-08-02 */
+    public static final String[] ZONE_LABELS = { "VOCALS", "BASS", "MELODY", "DRUMS" };
 
     /** Placeholder / tint colours per song slot. 2026-07-20 */
     private static final int[] SONG_COLORS = {
@@ -95,6 +95,7 @@ public class StemMashupFaceView extends View {
     private boolean padScrubbing;
     private float padScrubFrac;
     private int padScrubMs;
+    private float padScrubTransitionFrac = -1f;
     private final Paint scrubCursorPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final float[] scrubXy = new float[2];
     /**
@@ -104,6 +105,36 @@ public class StemMashupFaceView extends View {
      * 2026-07-21
      */
     private boolean padsIdle;
+    /**
+     * Meatball fold — idle folds the four pads into two overlapping song discs
+     * (StemFM "two discs" view) so both mixed tracks read at a glance.
+     * 0 = four-pad spread · 1 = two-disc meatball. Animated, not a snap.
+     * Was: idle just shrank pads. Reversal: meatballBlend always 0 (no fold).
+     * 2026-08-01
+     */
+    private float meatballBlend;
+    private float meatballFromBlend;
+    private float meatballToBlend;
+    private long meatballAnimStartMs = -1L;
+    private static final long MEATBALL_ANIM_MS = 420L;
+    /**
+     * Dominant (tempo/key lead) song — its disc is larger, brighter and drawn on
+     * top; the subordinate disc dims. Animates smoothly on dominance change.
+     * 0 = song 0 lead · 1 = song 1 lead. Was: no emphasis (equal discs). 2026-08-02
+     */
+    private int dominantSong = 0;
+    private int dominantFromSong = 0;
+    private long dominantAnimStartMs = -1L;
+    private static final long DOMINANT_ANIM_MS = 380L;
+    /** Subordinate disc emphasis multiplier (dims, keeps legible). 2026-08-02 */
+    private static final float SUBORDINATE_EMPHASIS = 0.72f;
+    /**
+     * Play-both stacking — pad feeds its stem from BOTH songs; show A+B badge.
+     * Layman: a stacked pad shows both tracks’ letters so you know vocals are doubled.
+     * Audio path unchanged here (host owns gains). Was: no badge. Reversal: ignore flags.
+     * 2026-08-01
+     */
+    private final boolean[] bothZones = new boolean[4];
 
     public StemMashupFaceView(Context context) {
         super(context);
@@ -149,10 +180,11 @@ public class StemMashupFaceView extends View {
      * Audio: host owns seek; this is face-only. Reversal: ignore calls.
      * 2026-07-21
      */
-    public void setPadScrub(boolean armed, float frac, int scrubMs) {
+    public void setPadScrub(boolean armed, float frac, int scrubMs, float transitionFrac) {
         padScrubbing = armed;
         padScrubFrac = StemMixSoftScrub.clampFrac(frac);
         padScrubMs = scrubMs;
+        padScrubTransitionFrac = transitionFrac >= 0f ? StemMixSoftScrub.clampFrac(transitionFrac) : -1f;
         invalidate();
     }
 
@@ -161,6 +193,7 @@ public class StemMashupFaceView extends View {
         padScrubbing = false;
         padScrubFrac = 0f;
         padScrubMs = 0;
+        padScrubTransitionFrac = -1f;
         invalidate();
     }
 
@@ -250,6 +283,8 @@ public class StemMashupFaceView extends View {
     /** Flash the centre shuffle disc after OK. 2026-07-20 */
     public void pulseShuffle() {
         shufflePulse = true;
+        // Shuffle fans the two-disc meatball back out to the four stems. 2026-08-01
+        animateMeatballTo(false);
         invalidate();
         postDelayed(new Runnable() {
             @Override
@@ -262,9 +297,10 @@ public class StemMashupFaceView extends View {
 
     public void setActiveZone(int zone) {
         activeZone = zone;
-        // Focusing a pad wakes idle shrink. 2026-07-21
+        // Focusing a pad wakes idle shrink + fans the meatball back to four pads. 2026-07-21
         if (zone >= 0 && padsIdle) {
             padsIdle = false;
+            animateMeatballTo(false);
         }
         invalidate();
     }
@@ -283,12 +319,119 @@ public class StemMashupFaceView extends View {
             // No lit bubble while asleep. 2026-07-21
             activeZone = -1;
         }
+        // Idle folds the pads into two song discs; waking fans them back out. 2026-08-01
+        animateMeatballTo(idle);
         invalidate();
     }
 
     /** True when pads are in idle shrink (tests / host). 2026-07-21 */
     public boolean isPadsIdle() {
         return padsIdle;
+    }
+
+    /**
+     * Animate toward the two-disc meatball (true) or the four-pad spread (false).
+     * Layman: pads fold into two big song discs when asleep, fan out on focus.
+     * Audio path unchanged — visual only. Reversal: no-op (snap between layouts).
+     * 2026-08-01
+     */
+    private void animateMeatballTo(boolean meatball) {
+        float from = currentMeatballBlend();
+        float to = meatball ? 1f : 0f;
+        if (Math.abs(from - to) < 0.001f && !meatballAnimRunning()) {
+            meatballBlend = to;
+            return;
+        }
+        meatballFromBlend = from;
+        meatballToBlend = to;
+        meatballBlend = from;
+        meatballAnimStartMs = System.currentTimeMillis();
+        invalidate();
+        postInvalidateDelayed(33);
+    }
+
+    /** True while the fold/fan animation is in flight. 2026-08-01 */
+    private boolean meatballAnimRunning() {
+        return meatballAnimStartMs >= 0L;
+    }
+
+    /** Eased current fold blend 0..1 (0 = spread, 1 = two discs). 2026-08-01 */
+    private float currentMeatballBlend() {
+        if (meatballAnimStartMs < 0L) return meatballBlend;
+        float t = (System.currentTimeMillis() - meatballAnimStartMs) / (float) MEATBALL_ANIM_MS;
+        if (t >= 1f) {
+            meatballAnimStartMs = -1L;
+            meatballBlend = meatballToBlend;
+            return meatballBlend;
+        }
+        if (t < 0f) t = 0f;
+        t = StemControls.meatballEase(t);
+        meatballBlend = meatballFromBlend + (meatballToBlend - meatballFromBlend) * t;
+        return meatballBlend;
+    }
+
+    /**
+     * Push play-both stacking flags for all pads (host refresh).
+     * Layman: which bubbles are doubled up on both tracks.
+     * Audio path unchanged — visual only. 2026-08-01
+     */
+    public void setBothZones(boolean[] both) {
+        if (both == null) return;
+        boolean changed = false;
+        for (int i = 0; i < bothZones.length && i < both.length; i++) {
+            if (bothZones[i] != both[i]) {
+                bothZones[i] = both[i];
+                changed = true;
+            }
+        }
+        if (changed) invalidate();
+    }
+
+    /** True when a pad is stacked on both songs (tests / host). 2026-08-01 */
+    public boolean isZoneBoth(int zone) {
+        if (zone < 0 || zone >= bothZones.length) return false;
+        return bothZones[zone];
+    }
+
+    /**
+     * Set which song leads the mix (pad-majority; vocals breaks 2-2 ties).
+     * The lead song's disc grows with a brighter ring and sits on top; the
+     * other disc dims — animated so the swap reads as one coherent motion.
+     * Audio path unchanged (host owns tempo/key). 2026-08-02
+     */
+    public void setDominantSong(int song) {
+        int s = (song < 0) ? 0 : (song > 1 ? 1 : song);
+        if (s == dominantSong && !dominantAnimRunning()) return;
+        dominantFromSong = dominantSong;
+        dominantSong = s;
+        dominantAnimStartMs = System.currentTimeMillis();
+        invalidate();
+        postInvalidateDelayed(33);
+    }
+
+    /** True while the dominance emphasis animation is in flight. 2026-08-02 */
+    private boolean dominantAnimRunning() {
+        return dominantAnimStartMs >= 0L;
+    }
+
+    /** Eased 0..1 transition progress for the current dominance change. 2026-08-02 */
+    private float currentDominantT() {
+        if (dominantAnimStartMs < 0L) return 1f;
+        float t = (System.currentTimeMillis() - dominantAnimStartMs) / (float) DOMINANT_ANIM_MS;
+        if (t >= 1f) {
+            dominantAnimStartMs = -1L;
+            return 1f;
+        }
+        if (t < 0f) t = 0f;
+        return StemControls.meatballEase(t);
+    }
+
+    /** Per-song disc emphasis — lead 1.0, subordinate 0.72, crossfaded on change. 2026-08-02 */
+    private float discEmphasis(int song) {
+        float t = currentDominantT();
+        if (song == dominantSong) return SUBORDINATE_EMPHASIS + (1f - SUBORDINATE_EMPHASIS) * t;
+        if (song == dominantFromSong) return 1f - (1f - SUBORDINATE_EMPHASIS) * t;
+        return SUBORDINATE_EMPHASIS;
     }
 
     @Override
@@ -343,12 +486,21 @@ public class StemMashupFaceView extends View {
                 prepLabel,
                 null, 'P', resolveSecondaryColor(), false, prepFraction);
 
-        // N=Vocals, W=Drums, E=Bass, S=Melody — Stem Player compass. 2026-07-20
+        // N=Vocals, W=Bass, E=Melody, S=Drums — StemFM compass alignment. 2026-08-02
+        // Was: W=Drums, E=Bass, S=Melody (wrong order for StemFM parity).
         float[][] pos = new float[][] {
                 { cx, cy - reach + breatheY },
                 { cx - reach, cy + breatheY },
                 { cx + reach, cy + breatheY },
                 { cx, cy + reach + breatheY },
+        };
+        // Meatball fold — pads drift toward their song's disc; discs fade up behind. 2026-08-01
+        float meatball = currentMeatballBlend();
+        float discR = minSide * 0.205f * meatball * breatheScale;
+        float d = minSide * 0.10f;
+        float[][] discPos = new float[][] {
+                { cx - d, cy - d },
+                { cx + d, cy + d },
         };
         for (int z = 0; z < 4; z++) {
             // Per-pad: louder = larger + further from centre. 2026-07-21
@@ -356,14 +508,33 @@ public class StemMashupFaceView extends View {
             float outward = 1f + 0.12f * vol;
             float px = cx + (pos[z][0] - cx) * outward;
             float py = cy + (pos[z][1] - cy) * outward;
-            drawPad(canvas, z, px, py, baseR * breatheScale);
+            // Fold toward the song's disc center (top-left song 0 / bottom-right song 1).
+            int song = zoneSong[z];
+            px += (discPos[song][0] - px) * meatball;
+            py += (discPos[song][1] - py) * meatball;
+            drawPad(canvas, z, px, py, baseR * breatheScale * (1f - 0.72f * meatball));
         }
 
-        drawShuffleCentre(canvas, cx, cy + breatheY * 0.5f, baseR * 0.42f * breatheScale);
+        // Two overlapping song discs — the StemFM meatball view, drawn over the folded pads.
+        // Dominant song's disc draws last (on top), larger + brighter; subordinate dims. 2026-08-02
+        int drawFirst = dominantSong == 0 ? 1 : 0;
+        int drawSecond = dominantSong;
+        for (int pass = 0; pass < 2; pass++) {
+            int s = pass == 0 ? drawFirst : drawSecond;
+            if (s == 1 && songTitles[1].length() == 0) continue;
+            drawMeatballDisc(canvas, s, discPos[s][0], discPos[s][1] + breatheY * 0.5f,
+                    discR, discEmphasis(s));
+        }
+
+        // Centre shuffle disc grows a touch at the disc intersection while folded. 2026-08-01
+        drawShuffleCentre(canvas, cx, cy + breatheY * 0.5f,
+                baseR * 0.42f * breatheScale * (1f + 0.3f * meatball));
 
         // ~5fps breathe/marquee — was 50ms (~20fps) and cooked MT6572. Reversal: 50L.
         // Skip while idle (no motion needed). 2026-07-21
-        if (!padsIdle || loading || padScrubbing || alert) {
+        if (meatballAnimRunning() || dominantAnimRunning()) {
+            postInvalidateDelayed(33);
+        } else if (!padsIdle || loading || padScrubbing || alert) {
             postInvalidateDelayed(200);
         }
     }
@@ -601,11 +772,36 @@ public class StemMashupFaceView extends View {
             tintPaint.setAlpha(255);
         }
 
+        // Play-both badge — second song letter in a small circle on the pad’s rim.
+        // Layman: doubled pad shows a second letter chip so stacking is obvious.
+        // Was: no badge. Reversal: drop bothZones block. 2026-08-01
+        if (zone >= 0 && zone < bothZones.length && bothZones[zone]) {
+            int other = 1 - song;
+            float badgeR = r * 0.30f;
+            float bx = cx + r * 0.66f;
+            float by = cy - r * 0.66f;
+            bubblePaint.setShader(null);
+            bubblePaint.setColor(0xFFFFFFFF);
+            canvas.drawCircle(bx, by, badgeR, bubblePaint);
+            letterPaint.setColor(0xFF101014);
+            letterPaint.setTextSize(badgeR * 1.2f);
+            canvas.drawText(String.valueOf(songLetters[other]), bx, by + badgeR * 0.4f, letterPaint);
+            letterPaint.setColor(0xFFFFFFFF);
+        }
+
         // Circular seek cursor on rim — time for whole song seat, not one stem. 2026-07-21
         if (scrubHere) {
             float rim = r + ringW * 0.55f;
-            StemMixSoftScrub.cursorXy(cx, cy, rim, padScrubFrac, scrubXy);
             float ball = Math.max(4f, r * StemMixSoftScrub.scrubCursorRadiusFrac());
+            
+            // Draw transition dot first if it exists
+            if (padScrubTransitionFrac >= 0f) {
+                StemMixSoftScrub.cursorXy(cx, cy, rim, padScrubTransitionFrac, scrubXy);
+                scrubCursorPaint.setColor(0x88FFFFFF); // Semi-transparent white
+                canvas.drawCircle(scrubXy[0], scrubXy[1], ball * 0.8f, scrubCursorPaint);
+            }
+
+            StemMixSoftScrub.cursorXy(cx, cy, rim, padScrubFrac, scrubXy);
             scrubCursorPaint.setColor(0xFFFFCC66);
             canvas.drawCircle(scrubXy[0], scrubXy[1], ball, scrubCursorPaint);
             scrubCursorPaint.setColor(0xFFFFFFFF);
@@ -614,7 +810,8 @@ public class StemMashupFaceView extends View {
 
         // Curved-ish label above/beside pad. 2026-07-20
         labelPaint.setTextSize(Math.max(8f, baseR * 0.28f));
-        labelPaint.setAlpha(Math.round(0xCC * silentMul));
+        // Labels fade as the pad folds into its song disc. 2026-08-01
+        labelPaint.setAlpha(Math.round(0xCC * silentMul * (1f - meatballBlend)));
         float labelY;
         if (zone == 0) labelY = cy - r - ringW * 2.2f;
         else if (zone == 3) labelY = cy + r + ringW * 2.8f;
@@ -709,6 +906,42 @@ public class StemMashupFaceView extends View {
         shufflePath.lineTo(cx + a * 0.35f, cy + a * 0.05f);
         shufflePath.close();
         canvas.drawPath(shufflePath, shufflePaint);
+    }
+
+    /**
+     * One song disc for the two-disc meatball view — ring + art (or letter).
+     * Dominant song: larger radius, brighter/wider ring; subordinate dims.
+     * Layman: the big album-cover disc a track folds into while the pads nap.
+     * Was: no discs (pads just shrank); equal emphasis. Reversal: drop block / equal.
+     * 2026-08-01 / 2026-08-02
+     */
+    private void drawMeatballDisc(Canvas canvas, int song, float cx, float cy, float r,
+            float emphasis) {
+        if (r < 2f) return;
+        // Lead disc ~8% larger + brighter ring; subordinate slightly smaller + dim. 2026-08-02
+        float dr = r * (0.94f + 0.10f * emphasis);
+        float ringW = Math.max(3f, dr * 0.055f) * (0.85f + 0.35f * emphasis);
+        ringPaint.setStrokeWidth(ringW);
+        int ringA = Math.round(0x88 + (0xE6 - 0x88) * emphasis);
+        ringPaint.setColor((SONG_COLORS[song] & 0x00FFFFFF) | (ringA << 24));
+        canvas.drawCircle(cx, cy, dr + ringW * 0.55f, ringPaint);
+
+        Bitmap art = songArts[song];
+        boolean hasArt = art != null && !art.isRecycled();
+        if (hasArt) {
+            drawCircleArt(canvas, art, cx, cy, dr);
+            // Same album on both tracks — tint + letter keeps the discs distinct. 2026-08-01
+            if (sameAlbumArt) {
+                tintPaint.setColor((SONG_COLORS[song] & 0x00FFFFFF) | 0x66000000);
+                canvas.drawCircle(cx, cy, dr, tintPaint);
+                drawLetter(canvas, songLetters[song], cx, cy, dr * 0.75f);
+            }
+        } else {
+            bubblePaint.setShader(null);
+            bubblePaint.setColor(SONG_COLORS[song]);
+            canvas.drawCircle(cx, cy, dr, bubblePaint);
+            drawLetter(canvas, songLetters[song], cx, cy, dr);
+        }
     }
 
     /** Circle-crop bitmap into pad. 2026-07-20 */

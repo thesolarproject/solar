@@ -73,16 +73,15 @@
             </intent-filter>
         </receiver>
 
+        <!--
+            Emergency recovery is launched explicitly by Solar BootReceiver. It is deliberately
+            not a HOME activity: advertising a second MAIN+HOME app makes API 17/19 show the
+            system launcher chooser, which cannot be operated reliably with Solar's wheel.
+        -->
         <activity
             android:name=".EmergencyRecoveryActivity"
             android:exported="true"
             android:launchMode="singleTask"
-            android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.HOME" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-        </activity>
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
     </application>
 </manifest>

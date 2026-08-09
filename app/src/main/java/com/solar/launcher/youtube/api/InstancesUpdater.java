@@ -35,27 +35,37 @@ public final class InstancesUpdater {
         InstancesConfig cfg = new InstancesConfig(ctx);
         cfg.ensureSeeds();
         long last = cfg.getLastUpdateMs();
-        if (!force && last > 0 && (System.currentTimeMillis() - last) < MIN_INTERVAL_MS) {
+        // Older builds stamped the built-in seeds as if they came from the remote
+        // catalog. Treat that state as stale so existing devices recover on the
+        // next YouTube request without requiring a data wipe.
+        boolean refreshPending = cfg.isRemoteRefreshPending();
+        if (!force && !refreshPending && last > 0
+                && (System.currentTimeMillis() - last) < MIN_INTERVAL_MS) {
             return false;
         }
         return updateNow(ctx, cfg);
     }
 
-    /** Parse notPipe.json body into three string lists (package-private for tests). */
+    /** Parse notPipe.json body into four string lists (package-private for tests). */
     static ParsedInstances parseNotPipeJson(String body) throws Exception {
         JSONObject obj = new JSONObject(body);
         return new ParsedInstances(
                 readStringArray(obj, "invidious"),
                 readStringArray(obj, "piped"),
-                readStringArray(obj, "ytapilegacy"));
+                readStringArray(obj, "ytapilegacy"),
+                readStringArray(obj, "yt2009"));
     }
 
     private static boolean updateNow(Context ctx, InstancesConfig cfg) {
         try {
-            String body = SolarHttp.getText(cfg.getUpdateUrl());
+            // Keep catalog refresh bounded so a dead registry cannot consume the
+            // entire YouTube search timeout budget on API-19 devices.
+            String body = new String(SolarHttp.getBytesQuick(
+                    cfg.getUpdateUrl(), "application/json", "SolarLauncher/YouTube", 3, 6),
+                    "UTF-8");
             ParsedInstances parsed = parseNotPipeJson(body);
             if (parsed.invidious.isEmpty() && parsed.piped.isEmpty()
-                    && parsed.ytapi.isEmpty()) {
+                    && parsed.ytapi.isEmpty() && parsed.yt2009.isEmpty()) {
                 SolarLog.w(TAG, "remote instance JSON empty — keep seeds");
                 return false;
             }
@@ -71,9 +81,12 @@ public final class InstancesUpdater {
             List<String> yt = parsed.ytapi.isEmpty()
                     ? cfg.getYtApiLegacy()
                     : mergeWithSeeds(parsed.ytapi, InstancesConfig.seedYtApi());
-            cfg.saveLists(inv, piped, yt);
+            List<String> y29 = parsed.yt2009.isEmpty()
+                    ? cfg.getYt2009() : parsed.yt2009;
+            cfg.saveLists(inv, piped, yt, y29);
             SolarLog.i(TAG, "updated instances inv=" + inv.size()
-                    + " piped=" + piped.size() + " ytapi=" + yt.size());
+                    + " piped=" + piped.size() + " ytapi=" + yt.size()
+                    + " yt2009=" + y29.size());
             return true;
         } catch (Exception e) {
             SolarLog.w(TAG, "instance update failed: " + e.getMessage());
@@ -119,11 +132,14 @@ public final class InstancesUpdater {
         final List<String> invidious;
         final List<String> piped;
         final List<String> ytapi;
+        final List<String> yt2009;
 
-        ParsedInstances(List<String> invidious, List<String> piped, List<String> ytapi) {
+        ParsedInstances(List<String> invidious, List<String> piped,
+                        List<String> ytapi, List<String> yt2009) {
             this.invidious = invidious;
             this.piped = piped;
             this.ytapi = ytapi;
+            this.yt2009 = yt2009;
         }
     }
 }

@@ -262,6 +262,13 @@ public final class MixDeck {
         } catch (Exception ignored) {}
     }
 
+    public void setPitch(float pitchFactor) {
+        if (player == null) return;
+        try {
+            player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "soundtouch-pitch", String.valueOf(pitchFactor));
+        } catch (Exception ignored) {}
+    }
+
     public void release() {
         released = true;
         audio.removeCallbacks(fadeTick);

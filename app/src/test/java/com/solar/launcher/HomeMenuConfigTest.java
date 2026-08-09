@@ -36,7 +36,7 @@ public class HomeMenuConfigTest {
     @Test
     public void defaultOrder_mediaThenGetThenSystem() {
         // 2026-07-16 — Radio/FM experiment off: home omits Radio tile.
-        // Default: NP → Music → Get Music → Podcasts → Settings → Transfer.
+        // 2026-08-02 — Default (radio gated): NP → Music → Settings → Transfer → Podcasts → Get Music.
         List<HomeMenuConfig.Entry> visible = HomeMenuConfig.loadVisible(prefs);
         if (visible.size() != 6) throw new AssertionError("default size " + visible.size());
         if (!HomeMenuConfig.ID_NOW_PLAYING.equals(visible.get(0).id)) {
@@ -45,17 +45,17 @@ public class HomeMenuConfigTest {
         if (!HomeMenuConfig.ID_MUSIC.equals(visible.get(1).id)) {
             throw new AssertionError("music position");
         }
-        if (!HomeMenuConfig.ID_SOULSEEK.equals(visible.get(2).id)) {
-            throw new AssertionError("get music position");
-        }
-        if (!HomeMenuConfig.ID_PODCASTS.equals(visible.get(3).id)) {
-            throw new AssertionError("podcasts position");
-        }
-        if (!HomeMenuConfig.ID_SETTINGS.equals(visible.get(4).id)) {
+        if (!HomeMenuConfig.ID_SETTINGS.equals(visible.get(2).id)) {
             throw new AssertionError("settings position");
         }
-        if (!HomeMenuConfig.ID_PC_UPLOAD.equals(visible.get(5).id)) {
+        if (!HomeMenuConfig.ID_PC_UPLOAD.equals(visible.get(3).id)) {
             throw new AssertionError("pc upload position");
+        }
+        if (!HomeMenuConfig.ID_PODCASTS.equals(visible.get(4).id)) {
+            throw new AssertionError("podcasts position");
+        }
+        if (!HomeMenuConfig.ID_SOULSEEK.equals(visible.get(5).id)) {
+            throw new AssertionError("get music position");
         }
         for (HomeMenuConfig.Entry e : visible) {
             if (HomeMenuConfig.ID_RADIO.equals(e.id)) {
@@ -347,8 +347,10 @@ public class HomeMenuConfigTest {
     public void editorCatalogEntries_followFixedOrder() {
         List<HomeMenuConfig.Entry> editor = HomeMenuConfig.loadEditorCatalogEntries();
         // 2026-07-15 — schema 8 dropped youtube_audio from SOLAR_HOME_EXTRAS.
+        // 2026-08-02 — Home rows lead the editor (NP, Music, Settings, Transfer, Podcasts,
+        // Get Music), then the fixed stock catalog — audiobooks moved to index 7.
         if (editor.size() < 11) throw new AssertionError("catalog too small " + editor.size());
-        if (!HomeMenuConfig.ID_AUDIOBOOKS.equals(editor.get(3).id)) {
+        if (!HomeMenuConfig.ID_AUDIOBOOKS.equals(editor.get(7).id)) {
             throw new AssertionError("audiobooks slot in editor");
         }
     }
@@ -425,6 +427,40 @@ public class HomeMenuConfigTest {
         HomeMenuConfig.setVisible(prefs, HomeMenuConfig.ID_SETTINGS, false);
         if (!HomeMenuConfig.isVisible(prefs, HomeMenuConfig.ID_SETTINGS)) {
             throw new AssertionError("settings must stay visible");
+        }
+    }
+
+    @Test
+    public void editorDisplayOrder_startsWithActualHomeRows() {
+        HomeMenuConfig.saveOrder(prefs, Arrays.asList(
+                HomeMenuConfig.ID_MUSIC, HomeMenuConfig.ID_PODCASTS, HomeMenuConfig.ID_SETTINGS));
+        List<String> display = HomeMenuConfig.loadHomeDisplayIds(prefs, false, false, true);
+        List<HomeMenuConfig.Entry> editor = HomeMenuConfig.loadEditorCatalogEntries(
+                prefs, false, false, true);
+        if (display.isEmpty() || !HomeMenuConfig.ID_NOW_PLAYING.equals(display.get(0))) {
+            throw new AssertionError("dynamic Now Playing row missing");
+        }
+        for (int i = 0; i < display.size(); i++) {
+            String id = display.get(i);
+            if (HomeMenuConfig.ID_MORE.equals(id)) continue;
+            if (i >= editor.size() || !id.equals(editor.get(i).id)) {
+                throw new AssertionError("editor/display mismatch at " + i);
+            }
+        }
+    }
+
+    @Test
+    public void saveVisibleHomeOrder_reordersOnlyDisplayedSlots() {
+        HomeMenuConfig.saveOrder(prefs, Arrays.asList(
+                HomeMenuConfig.ID_MUSIC, HomeMenuConfig.ID_PODCASTS, HomeMenuConfig.ID_SETTINGS));
+        if (!HomeMenuConfig.saveVisibleHomeOrder(prefs, Arrays.asList(
+                HomeMenuConfig.ID_PODCASTS, HomeMenuConfig.ID_MUSIC, HomeMenuConfig.ID_SETTINGS))) {
+            throw new AssertionError("visible order should save");
+        }
+        List<String> saved = HomeMenuConfig.loadHomeOrderIds(prefs);
+        if (!HomeMenuConfig.ID_PODCASTS.equals(saved.get(0))
+                || !HomeMenuConfig.ID_MUSIC.equals(saved.get(1))) {
+            throw new AssertionError("visible slots were not reordered");
         }
     }
 

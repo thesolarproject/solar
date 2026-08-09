@@ -1,5 +1,7 @@
 package com.solar.launcher.phone;
 
+import android.view.KeyEvent;
+
 import org.junit.Test;
 
 import com.solar.launcher.Y1InputKeys;
@@ -45,6 +47,24 @@ public class PhoneClickWheelTest {
         if (prev != PhoneClickWheel.Zone.PREV) throw new AssertionError("prev got " + prev);
         if (PhoneClickWheel.keyCodeForZone(prev) != Y1InputKeys.KEY_TRACK_PREV) {
             throw new AssertionError("prev key");
+        }
+    }
+
+    @Test
+    public void chromeLongPressMarkerIsOneDownThenUp() {
+        KeyEvent[] events = PhoneClickWheelPad.longPressDownUp(Y1InputKeys.KEY_TRACK_PREV);
+        if (events.length != 2) throw new AssertionError("long press pair");
+        if (events[0].getAction() != KeyEvent.ACTION_DOWN
+                || events[0].getRepeatCount() != 1) {
+            throw new AssertionError("long press marker");
+        }
+        if (events[1].getAction() != KeyEvent.ACTION_UP
+                || events[1].getRepeatCount() != 0) {
+            throw new AssertionError("long press release");
+        }
+        if (events[0].getKeyCode() != Y1InputKeys.KEY_TRACK_PREV
+                || events[1].getKeyCode() != Y1InputKeys.KEY_TRACK_PREV) {
+            throw new AssertionError("long press key");
         }
     }
 

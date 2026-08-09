@@ -49,6 +49,44 @@ public class SolarDataResetTest {
     }
 
     @Test
+    public void clearCacheKeepingStems_keepsStemVaults() throws Exception {
+        File cache = File.createTempFile("solar_cache_", "");
+        assertTrue(cache.delete());
+        assertTrue(cache.mkdir());
+        File stems = new File(cache, "lalal_stems");
+        assertTrue(stems.mkdir());
+        File work = new File(cache, "lalal_work");
+        assertTrue(work.mkdir());
+        File solo = new File(cache, "lalal_solo_cache");
+        assertTrue(solo.mkdir());
+        File pad = new File(stems, "vocals.mp3");
+        FileOutputStream fos = new FileOutputStream(pad);
+        fos.write("stem".getBytes("UTF-8"));
+        fos.close();
+        File disposable = new File(cache, "deezer");
+        assertTrue(disposable.mkdir());
+        File tmp = new File(cache, "stream.tmp");
+        FileOutputStream fos2 = new FileOutputStream(tmp);
+        fos2.write("x".getBytes("UTF-8"));
+        fos2.close();
+
+        SolarDataReset.clearCacheKeepingStems(cache);
+
+        // Stem vaults and their pads must survive a generic cache clear.
+        assertTrue("lalal_stems kept", stems.isDirectory());
+        assertTrue("lalal_work kept", work.isDirectory());
+        assertTrue("lalal_solo_cache kept", solo.isDirectory());
+        assertTrue("pad file kept", pad.isFile());
+        // Disposable cache contents must still be removed.
+        assertFalse("deezer cleared", disposable.exists());
+        assertFalse("stream tmp cleared", tmp.exists());
+
+        // Temp hygiene — match sibling tests' cleanup.
+        SolarDataReset.deleteTree(cache, false);
+        assertFalse(cache.exists());
+    }
+
+    @Test
     public void deleteTree_removesNestedFiles() throws Exception {
         File root = File.createTempFile("solar_reset_dir_", "");
         assertTrue(root.delete());

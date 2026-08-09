@@ -74,13 +74,17 @@ if ! "$ADB" devices 2>/dev/null | grep -q emulator; then
   done
 fi
 
+# Target the emulator explicitly — a physical Y1/Y2/A5 may also be on adb.
+EMU_SERIAL="$("$ADB" devices 2>/dev/null | awk '/emulator-[0-9]+/{print $1; exit}')" || EMU_SERIAL=""
+export ANDROID_SERIAL="${EMU_SERIAL:-}"
+
 # Pin family so Solar treats the AVD as A5 even without Timmkoo build props.
 "$ADB" shell setprop persist.solar.device_family a5 2>/dev/null \
   || "$ADB" shell "setprop persist.solar.device_family a5" || true
 echo "persist.solar.device_family=$("$ADB" shell getprop persist.solar.device_family 2>/dev/null | tr -d '\r')"
 
 if [[ "$INSTALL" -eq 1 ]]; then
-  echo "Installing fresh debug APK (uninstall first so an old build cannot linger)…"
+  echo "Installing debug APK (data-preserving — no uninstall, so prefs/downloads survive)…"
   APK="$ROOT/app/build/outputs/apk/debug/app-debug.apk"
   if [[ ! -f "$APK" ]]; then
     (cd "$ROOT" && ./gradlew :app:assembleDebug) || exit 1
@@ -89,14 +93,15 @@ if [[ "$INSTALL" -eq 1 ]]; then
   if [[ -n "$AAPT" ]]; then
     "$AAPT" dump badging "$APK" 2>/dev/null | grep -E 'versionName|versionCode' | head -2 || true
   fi
-  adb uninstall com.solar.launcher >/dev/null 2>&1 || true
-  adb install -r "$APK" || {
+  # Data-preserving install: a plain install -r keeps prefs/databases/files.
+  # ANDROID_SERIAL was exported above — every adb call targets this emulator.
+  "$ROOT/scripts/install-preserve-data.sh" "$APK" || {
     echo "install failed; try: ./gradlew :app:installDebug" >&2
     exit 1
   }
-  adb shell setprop persist.solar.device_family a5 || true
-  adb shell am force-stop com.solar.launcher || true
-  adb shell am start -n com.solar.launcher/.MainActivity || true
+  "$ADB" shell setprop persist.solar.device_family a5 || true
+  "$ADB" shell am force-stop com.solar.launcher || true
+  "$ADB" shell am start -n com.solar.launcher/.MainActivity || true
   echo "Installed + launched. Confirm versionName via: adb shell dumpsys package com.solar.launcher | grep versionName"
 fi
 

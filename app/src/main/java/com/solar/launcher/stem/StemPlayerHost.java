@@ -81,7 +81,7 @@ public final class StemPlayerHost {
          * Must NOT call stopCompetingAudio / pauseMainMusic.
          * 2026-07-21
          */
-        void openStemMixContextMenu(int slotSongIndex);
+        void openStemMixContextMenu(int slotSongIndex, int slotZone);
 
         /**
          * Close jam Options if a short tap raced the hold timer.
@@ -98,6 +98,11 @@ public final class StemPlayerHost {
     private final HostCallbacks host;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newSingleThreadExecutor();
+    /**
+     * Dedicated analysis executor — a 60 s stem decode must never stall stem prep or
+     * deferred publish queued on {@link #io}. 2026-08-01
+     */
+    private final ExecutorService analysisIo = Executors.newSingleThreadExecutor();
     private final AtomicInteger jobGen = new AtomicInteger(0);
     private final AtomicBoolean cancelled = new AtomicBoolean(false);
     /**
@@ -155,6 +160,8 @@ public final class StemPlayerHost {
     private static final int CTX_SESSION = 1;
     private static final int CTX_SCRUB = 2;
     private int slotContextSong = 0;
+    /** Zone (pad) the slot menu was opened for — Play both targets it. 2026-08-01 */
+    private int slotContextZone = -1;
     private int contextRowCount = StemMixContextRows.SESSION_ROW_COUNT;
     /** Soft-scrub dual timeline (same song, new seek). 2026-07-21 */
     private int scrubSong = -1;
@@ -191,6 +198,20 @@ public final class StemPlayerHost {
             notePadInteraction();
         }
     };
+    /** Hold-OK with no pad focused randomises the pads (short OK flips). 2026-08-02 */
+    private boolean centerShuffleHoldFired;
+    private final Runnable centerShuffleHoldRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!centerDown || !ready || faceScrubArmed) return;
+            if (transitionPanel != null) return;
+            if (!StemControls.centerHoldArmsShuffle(ready, session.isMulti(),
+                    playbackStarted, activeZone)) return;
+            shuffleMashupPads();
+            centerShuffleHoldFired = true;
+            notePadInteraction();
+        }
+    };
     /**
      * 2s quiet → clear pad focus + shrink face (anti-accident).
      * Layman: hands off long enough and the bubbles go small / unlit.
@@ -216,7 +237,12 @@ public final class StemPlayerHost {
     };
     /** Active mashup crossfade duration (TRANSITION preset). 2026-07-20 */
     private long transitionMs = StemControls.TRANSITION_DEFAULT_MS;
-    private int transitionPreset = StemControls.TRANSITION_PRESET_LONG;
+    private int transitionPreset = StemControls.TRANSITION_PRESET_BALANCED;
+    /**
+     * StemFM Quantize Performance — stem-switch crossfades wait for the next beat/bar.
+     * 0 = off; 1 = beat; 2 = half bar; 3 = bar (StemQuantizePolicy). 2026-08-01
+     */
+    private int quantizeMode = com.solar.launcher.stem.analysis.StemQuantizePolicy.OFF;
     /** Zone gain crossfade between two song mixers. 2026-07-20 */
     private int xfadeZone = -1;
     private int xfadeFromSong = -1;
@@ -227,14 +253,120 @@ public final class StemPlayerHost {
     private int xfadeStep;
     private int xfadeSteps;
     /** Preset for in-flight pad xfade (WAVE for repress; song TRANSITION for replace). 2026-07-21 */
-    private int xfadePreset = StemControls.TRANSITION_PRESET_WAVE;
+    private int xfadePreset = StemControls.TRANSITION_PRESET_SHORT;
     private boolean transitionHoldFired;
     /** 2026-07-20 — Host for status text + inline prep spinner (RowBusyChrome). */
     private LinearLayout statusBusyHost;
     /** One StemMixer per song — all timelines run; gains audition stems. 2026-07-19 */
     private StemMixer[] mixers;
     private final StemSession session = new StemSession();
-    /** Soft cross-song playhead nudge (song0 lead). 2026-07-19 */
+    
+    /** The dynamic live anchor BPM. Tracks the currently dominant song or drifts during transitions. */
+    private float currentMasterBpm = 0f;
+    /** The BPM we are smoothly drifting towards. */
+    private float targetMasterBpm = 0f;
+    /** Dominant song under the pad-majority rule (vocals breaks 2-2 ties). 2026-08-02 */
+    private int dominantSong = 0;
+
+    /** 
+     * Lightweight background drift: steps the anchor BPM toward the target BPM smoothly 
+     * without choking low-end ARM32 audio pipelines (as requested for Android 4.4).
+     */
+    private final Runnable tempoDriftRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!ready || mixers == null || currentMasterBpm <= 0f) return;
+            if (Math.abs(currentMasterBpm - targetMasterBpm) < 0.1f) {
+                currentMasterBpm = targetMasterBpm;
+                return; // done drifting
+            }
+            // Step 0.25 BPM per 250ms (1 BPM per sec)
+            if (currentMasterBpm < targetMasterBpm) {
+                currentMasterBpm = Math.min(targetMasterBpm, currentMasterBpm + 0.25f);
+            } else {
+                currentMasterBpm = Math.max(targetMasterBpm, currentMasterBpm - 0.25f);
+            }
+            
+            // Push rates to mixers
+            for (int i = 0; i < mixers.length; i++) {
+                StemMixer m = mixers[i];
+                StemSession.SongState st = session.song(i);
+                if (m == null || st == null || st.bpm <= 30f) continue;
+                float newRate = StemTempoSync.rateToMatchMaster(currentMasterBpm, st.bpm);
+                if (Math.abs(m.getTargetRate() - newRate) >= 0.005f) {
+                    m.setTargetRate(newRate);
+                    st.tempoRate = newRate;
+                }
+            }
+            main.postDelayed(this, 250);
+        }
+    };
+
+    /**
+     * Re-derive the dominant song from pad routing (majority; vocals breaks
+     * 2-2) and animate the master anchor + face emphasis + key pitch onto it.
+     * Layman: the song with more pads leads; on an even split the vocals pad decides.
+     * Was: seed (song 0) always led. Reversal: seed-led only.
+     * 2026-08-02
+     */
+    private void recomputeDominantSong() {
+        if (!ready || mixers == null || session == null) return;
+        int next = session.dominantSongIndex();
+        if (next == dominantSong) return;
+        dominantSong = next;
+        // Tempo anchor drifts smoothly (tempoDriftRunnable). 2026-08-02
+        StemSession.SongState st = session.song(dominantSong);
+        if (st != null && st.bpm > 30f) {
+            targetMasterBpm = st.bpm;
+            main.removeCallbacks(tempoDriftRunnable);
+            main.postDelayed(tempoDriftRunnable, 50);
+        }
+        // Key anchor: re-pitch every mixer toward the new dominant's key. 2026-08-02
+        applyDominantKeyPitch();
+        if (mashupFace != null) mashupFace.setDominantSong(dominantSong);
+        refreshFace();
+        updateStatusLine();
+    }
+
+    /**
+     * Re-pitch every mixer so the dominant song's key is the anchor (M1
+     * Camelot match); the dominant song itself stays unity pitch.
+     * Layman: switch which song the other stems stretch their pitch toward.
+     * 2026-08-02
+     */
+    private void applyDominantKeyPitch() {
+        if (mixers == null || session == null) return;
+        StemSession.SongState dom = session.song(dominantSong);
+        if (dom == null) return;
+        for (int i = 0; i < mixers.length; i++) {
+            StemMixer m = mixers[i];
+            StemSession.SongState st = session.song(i);
+            if (m == null || st == null) continue;
+            float p = i == dominantSong ? 1f
+                    : StemSoundTouch.pitchFactorForKeys(
+                            dom.keyRoot, dom.keyMajor, st.keyRoot, st.keyMajor);
+            m.setPitch(p);
+        }
+    }
+
+    /**
+     * Master BPM for the current mix under the dominant-song rule: the dominant
+     * song's BPM when known, else seed-first fallback (unknown dominant defers).
+     * Layman: the lead song's pulse sets the tempo everything else stretches to.
+     * 2026-08-02
+     */
+    private float dominantMasterBpm() {
+        if (session == null || session.songCount() < 2) {
+            StemSession.SongState only = session != null ? session.song(0) : null;
+            return only != null && only.bpm > 30f ? only.bpm : StemBpm.DEFAULT_BPM;
+        }
+        int dom = session.dominantSongIndex();
+        StemSession.SongState st = session.song(dom);
+        if (st != null && st.bpm > 30f) return st.bpm;
+        return StemTempoSync.seedMasterBpm(session.song(0).bpm, session.song(1).bpm);
+    }
+
+    /** Soft cross-song playhead nudge (tempo-master lead). 2026-07-19 / 2026-08-01 */
     private final Runnable mashDriftRunnable = new Runnable() {
         @Override
         public void run() {
@@ -250,33 +382,73 @@ public final class StemPlayerHost {
                 main.postDelayed(this, 3000);
                 return;
             }
-            StemMixer lead = mixers[0];
-            if (lead == null) return;
-            int pos = lead.getPositionMs();
-            if (pos < 0) {
-                main.postDelayed(this, 3000);
-                return;
-            }
             long now = android.os.SystemClock.uptimeMillis();
-            for (int i = 1; i < mixers.length; i++) {
-                StemMixer m = mixers[i];
-                // Don't yank a song that is in a pad-local loop. 2026-07-19
-                if (m == null || m.isLooping()) continue;
-                // Soft-restart grace: leave this mixer at its new 0 until fade settles. 2026-07-21
-                if (i == softRestartSkipDriftSong && now < softRestartSkipDriftUntilMs) continue;
-                try {
-                    // Scale by tempo rate — SoundTouch slaves run media clock ≠ wall. 2026-07-20
-                    float rate = m.getTargetRate();
-                    StemSession.SongState st = session.song(i);
-                    if (st != null && st.tempoRate > 0.1f) rate = st.tempoRate;
-                    int expect = StemTempoSync.expectedSlavePosMs(pos, rate);
-                    int d = Math.abs(m.getPositionMs() - expect);
-                    if (d > 400) m.seekAllPlaying(expect);
-                } catch (Exception ignored) {}
-            }
+            forceSyncSlaves(now, 400);
             main.postDelayed(this, 3000);
         }
     };
+
+    /**
+     * Snap background slave tracks to the master track's beat grid.
+     * @param now Current uptimeMillis
+     * @param toleranceMs Threshold difference before seeking. Use 400 for background drift, 10 for aggressive quantized swap snap.
+     */
+    private void forceSyncSlaves(long now, int toleranceMs) {
+        if (!ready || mixers == null || mixers.length < 2) return;
+        
+        StemMixer lead = null;
+        int leadIndex = -1;
+        
+        // When crossfading, the anchor might be drifting. 
+        // Identify the "anchor" mixer by checking which one is closest to the currentMasterBpm.
+        for (int i = 0; i < mixers.length; i++) {
+            if (mixers[i] == null) continue;
+            StemSession.SongState st = session.song(i);
+            float r = st != null && st.tempoRate > 0.1f ? st.tempoRate : 1f;
+            if (Math.abs(r - 1f) < StemTempoSync.RATE_EPSILON) {
+                lead = mixers[i];
+                leadIndex = i;
+                break;
+            }
+        }
+        
+        // If dynamic drifting has pushed both rates away from 1.0 temporarily, 
+        // fallback to the actively controlled song as the anchor.
+        if (lead == null && mixers.length > 0) {
+            leadIndex = session.controlSongIndex() >= 0 && session.controlSongIndex() < mixers.length 
+                        ? session.controlSongIndex() : 0;
+            lead = mixers[leadIndex];
+        }
+        
+        if (lead == null) return;
+        int pos = lead.getPositionMs();
+        if (pos < 0) return;
+        
+        for (int i = 0; i < mixers.length; i++) {
+            if (i == leadIndex) continue;
+            StemMixer m = mixers[i];
+            if (m == null || m.isLooping()) continue;
+            if (i == softRestartSkipDriftSong && now < softRestartSkipDriftUntilMs) continue;
+            try {
+                float rate = m.getTargetRate();
+                StemSession.SongState st = session.song(i);
+                StemSession.SongState leadSt = session.song(leadIndex);
+                if (st != null && st.tempoRate > 0.1f) rate = st.tempoRate;
+                float slaveBpm = st != null && st.bpm > 30f ? st.bpm : StemBpm.DEFAULT_BPM;
+                
+                int leadFirstBeat = leadSt != null ? leadSt.firstBeatMs : 0;
+                int slaveFirstBeat = st != null ? st.firstBeatMs : 0;
+                float leadRate = lead.getTargetRate();
+                if (leadSt != null && leadSt.tempoRate > 0.1f) leadRate = leadSt.tempoRate;
+                
+                int expect = StemTempoSync.expectedSlavePosMsQuantized(
+                        pos, leadRate, leadFirstBeat, rate, slaveFirstBeat, slaveBpm);
+                int d = Math.abs(m.getPositionMs() - expect);
+                if (d > toleranceMs) m.seekAllPlaying(expect);
+            } catch (Exception ignored) {}
+        }
+    }
+    
     private File track;
     private java.util.ArrayList<File> tracks = new java.util.ArrayList<File>();
     private int activeZone;
@@ -301,12 +473,16 @@ public final class StemPlayerHost {
     private boolean nextDown;
     /** Local uptime when pad Options key went down (MTK KeyEvent times lie). 2026-07-21 */
     private long padOptionsDownUptimeMs;
+    /** Kernel event time captured at ACTION_DOWN — UI-lag immune hold baseline. 2026-08-01 */
+    private long padOptionsDownEventTimeMs;
     /** Active zone right before ACTION_DOWN so raced hold timers can be cleanly restored. 2026-07-21 */
     private int prePressActiveZone = -1;
     /** Hardware debounce check against switch contact bounce on Y1/Y2 buttons (~35ms). 2026-07-21 */
     private long lastHardwareKeyUpTimeMs;
     private int lastHardwareKeyUpCode = -1;
     private boolean exitHoldFired;
+    /** Phone Chrome long-press marker currently being completed by ACTION_UP. 2026-08-03 */
+    private int syntheticPadHoldKeyCode = -1;
     /** Stem key hold → chop/screw (zone while held). 2026-07-19 */
     private int stemHoldZone = -1;
     private boolean stemStutterArmed;
@@ -374,9 +550,9 @@ public final class StemPlayerHost {
             if (!StemControls.stemSlotHoldOneSide(prevDown, nextDown)) return;
             transitionHoldFired = true;
             stopStemStutter();
-            // Prev=Drums(1), Next=Bass(2) → song currently on that pad. 2026-07-21
-            int zone = StemControls.padZoneForOptionsHoldKey(false, prevDown, nextDown, false);
-            openPadSongOptions(zone);
+            // Menu opens at UP via the intentional-hold gate — never eagerly from the
+            // timer, so a short tap racing this runnable can never leave Options stuck
+            // open (Y2 single press was opening the context menu). 2026-08-01
         }
     };
 
@@ -392,7 +568,7 @@ public final class StemPlayerHost {
             if (!backDown) return;
             if (!StemControls.mashupPadHoldOpensSlotContext(session.isMulti())) return;
             backContextHoldFired = true;
-            openPadSongOptions(0);
+            // Menu opens at UP via the intentional-hold gate. 2026-08-01
         }
     };
 
@@ -408,7 +584,7 @@ public final class StemPlayerHost {
             if (!playDown) return;
             if (!StemControls.mashupPlayHoldOpensContext(session.isMulti())) return;
             playContextHoldFired = true;
-            openPadSongOptions(3);
+            // Menu opens at UP via the intentional-hold gate. 2026-08-01
         }
     };
 
@@ -425,9 +601,9 @@ public final class StemPlayerHost {
         int song = session.songIndexForZone(zone);
         song = StemControls.clampSongIndex(song, session.songCount());
         try {
-            host.openStemMixContextMenu(song);
+            host.openStemMixContextMenu(song, zone);
         } catch (Exception e) {
-            openSlotContextMenu(song);
+            openSlotContextMenu(song, zone);
         }
     }
 
@@ -506,11 +682,15 @@ public final class StemPlayerHost {
      * 2026-07-21
      */
     private boolean finishPadOptionsHoldIfSpurious(boolean holdFired, boolean exitFired,
-            KeyEvent event) {
+            boolean syntheticHold, KeyEvent event, int zone) {
         if (exitFired) return true;
+        // Prefer the UP event's own kernel (downTime, eventTime) pair — both stamps are
+        // kernel interrupt times, immune to main-thread lag that inflates the uptime
+        // fallback and to the shared field being clobbered by a second pad's DOWN. 2026-08-01
         long held = StemControls.bestPhysicalHoldMs(
                 padOptionsDownUptimeMs,
                 android.os.SystemClock.uptimeMillis(),
+                padOptionsDownEventTimeMs,
                 event != null ? event.getDownTime() : 0L,
                 event != null ? event.getEventTime() : 0L);
         // #region agent log
@@ -524,22 +704,30 @@ public final class StemPlayerHost {
                     "StemPlayerHost.finishPadOptionsHoldIfSpurious", "options hold gate", "G", d);
         } catch (Exception ignored) {}
         // #endregion
-        if (StemControls.isIntentionalPadOptionsHold(holdFired, held)) {
+        if (syntheticHold || StemControls.isIntentionalPadOptionsHold(holdFired, held)) {
+            // Intentional hold confirmed at UP — open Options here, never eagerly from
+            // the hold timer. Was: the timer opened the menu, then MainActivity's
+            // themedContextMenuOwnsKeys() swallowed the UP before the gate could run,
+            // leaving a single-press menu stuck open on Y2. 2026-08-01
+            openPadSongOptions(zone);
+            // Restore pre-press zone AFTER opening — openPadSongOptions →
+            // focusPadForOptions(zone) focuses the held pad, and the pre-press zone
+            // must win (same final state as the old timer-open + UP-restore flow). 2026-08-01
             if (prePressActiveZone >= 0) {
                 session.setActiveZone(prePressActiveZone);
             }
             return true;
         }
-        if (holdFired) {
-            // Timer already opened ThemedContextMenu — put it away. 2026-07-21
-            try {
-                host.dismissStemMixContextMenu();
-            } catch (Exception ignored) {}
-            closeTransitionMenu();
-            if (prePressActiveZone >= 0 && prePressActiveZone < StemMixer.STEM_COUNT) {
-                session.setActiveZone(prePressActiveZone);
-                activeZone = prePressActiveZone;
-            }
+        // Not an intentional hold — clear any open jam/context menu so the tap can
+        // focus the pad. Was: only dismissed when this press's own timer had fired,
+        // leaving a stale modal to block all four pads. 2026-08-01
+        try {
+            host.dismissStemMixContextMenu();
+        } catch (Exception ignored) {}
+        closeTransitionMenu();
+        if (prePressActiveZone >= 0 && prePressActiveZone < StemMixer.STEM_COUNT) {
+            session.setActiveZone(prePressActiveZone);
+            activeZone = prePressActiveZone;
         }
         return false;
     }
@@ -727,7 +915,9 @@ public final class StemPlayerHost {
         session.bindTracks(tracks);
         this.track = tracks.isEmpty() ? null : tracks.get(0);
         // No pad focused yet — first stem key focuses only (must match session −1). 2026-07-19
+        // Fresh bind seeds every pad on song 0 → dominance resets to seat 0 too. 2026-08-02
         this.activeZone = -1;
+        this.dominantSong = 0;
         this.loading = true;
         this.ready = false;
         this.armed = false;
@@ -739,6 +929,7 @@ public final class StemPlayerHost {
         this.songFinished = false;
         this.savedLoopBars = StemControls.DEFAULT_LOOP_BARS;
         this.transitionMs = StemControls.TRANSITION_DEFAULT_MS;
+        this.transitionPreset = StemControls.TRANSITION_PRESET_BALANCED;
         this.transitionHoldFired = false;
         cancelZoneCrossfade();
 
@@ -846,10 +1037,12 @@ public final class StemPlayerHost {
         main.removeCallbacks(playContextHoldRunnable);
         playDown = false;
         playContextHoldFired = false;
+        syntheticPadHoldKeyCode = -1;
         main.removeCallbacks(stemStutterHoldRunnable);
         main.removeCallbacks(chopGainFadeRunnable);
         main.removeCallbacks(zoneCrossfadeRunnable);
         main.removeCallbacks(mashDriftRunnable);
+        main.removeCallbacks(tempoDriftRunnable);
         main.removeCallbacks(faceInvalidateRunnable);
         faceInvalidatePending = false;
         softRestartSkipDriftSong = -1;
@@ -864,7 +1057,9 @@ public final class StemPlayerHost {
         centerDown = false;
         centerScrewPeeked = false;
         centerScrubHoldFired = false;
+        centerShuffleHoldFired = false;
         main.removeCallbacks(centerScrubHoldRunnable);
+        main.removeCallbacks(centerShuffleHoldRunnable);
         cancelPadIdleTimer();
         releaseMixers();
         // After mixers stop — copy work stems to durable (or discard temps). 2026-07-21
@@ -911,6 +1106,7 @@ public final class StemPlayerHost {
     /** Release every song mixer — stop mash drift first. 2026-07-19 */
     private void releaseMixers() {
         main.removeCallbacks(mashDriftRunnable);
+        main.removeCallbacks(tempoDriftRunnable);
         if (mixers == null) return;
         final StemMixer[] toRelease = mixers;
         mixers = null;
@@ -1013,6 +1209,7 @@ public final class StemPlayerHost {
     public void shutdown() {
         detach();
         io.shutdownNow();
+        analysisIo.shutdownNow();
     }
 
     /**
@@ -1056,9 +1253,14 @@ public final class StemPlayerHost {
         // Was: mashup one-side TRANSITION; dual unused. Reversal: that branch.
         // 2026-07-19 / 2026-07-20 / 2026-07-21
         if (isPrevKey(keyCode)) {
-            if (action == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+            if (action == KeyEvent.ACTION_DOWN
+                    && StemControls.startsPadHoldDown(event.getRepeatCount(), prevDown)) {
+                boolean syntheticHold = StemControls.isSyntheticPadHold(
+                        event.getRepeatCount(), prevDown);
+                if (!syntheticHold) syntheticPadHoldKeyCode = -1;
                 prevDown = true;
                 padOptionsDownUptimeMs = android.os.SystemClock.uptimeMillis();
+                padOptionsDownEventTimeMs = event != null ? event.getEventTime() : 0L;
                 prePressActiveZone = activeZone;
                 exitHoldFired = false;
                 transitionHoldFired = false;
@@ -1079,6 +1281,10 @@ public final class StemPlayerHost {
                 } else {
                     beginStemHold(1);
                 }
+                if (syntheticHold && session.isMulti()) {
+                    syntheticPadHoldKeyCode = keyCode;
+                    transitionHoldRunnable.run();
+                }
                 return true;
             }
             if (action == KeyEvent.ACTION_UP) {
@@ -1088,7 +1294,8 @@ public final class StemPlayerHost {
                 if (session.isMulti()) {
                     // Short tap = focus pad only; undo Options if hold timer raced UP. 2026-07-21
                     boolean intentional = finishPadOptionsHoldIfSpurious(
-                            transitionHoldFired, exitHoldFired, event);
+                            transitionHoldFired, exitHoldFired,
+                            syntheticPadHoldKeyCode == keyCode, event, 1);
                     if (!intentional && !exitHoldFired && !nextDown) {
                         onStemKey(1);
                     } else {
@@ -1112,6 +1319,7 @@ public final class StemPlayerHost {
                     }
                     transitionHoldFired = false;
                     exitHoldFired = false;
+                    if (syntheticPadHoldKeyCode == keyCode) syntheticPadHoldKeyCode = -1;
                     return true;
                 }
                 boolean stuttered = endStemHold(1);
@@ -1119,14 +1327,20 @@ public final class StemPlayerHost {
                     onStemKey(1);
                 }
                 exitHoldFired = false;
+                if (syntheticPadHoldKeyCode == keyCode) syntheticPadHoldKeyCode = -1;
                 return true;
             }
             return true;
         }
         if (isNextKey(keyCode)) {
-            if (action == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+            if (action == KeyEvent.ACTION_DOWN
+                    && StemControls.startsPadHoldDown(event.getRepeatCount(), nextDown)) {
+                boolean syntheticHold = StemControls.isSyntheticPadHold(
+                        event.getRepeatCount(), nextDown);
+                if (!syntheticHold) syntheticPadHoldKeyCode = -1;
                 nextDown = true;
                 padOptionsDownUptimeMs = android.os.SystemClock.uptimeMillis();
+                padOptionsDownEventTimeMs = event != null ? event.getEventTime() : 0L;
                 prePressActiveZone = activeZone;
                 exitHoldFired = false;
                 transitionHoldFired = false;
@@ -1147,6 +1361,10 @@ public final class StemPlayerHost {
                 } else {
                     beginStemHold(2);
                 }
+                if (syntheticHold && session.isMulti()) {
+                    syntheticPadHoldKeyCode = keyCode;
+                    transitionHoldRunnable.run();
+                }
                 return true;
             }
             if (action == KeyEvent.ACTION_UP) {
@@ -1155,7 +1373,8 @@ public final class StemPlayerHost {
                 main.removeCallbacks(transitionHoldRunnable);
                 if (session.isMulti()) {
                     boolean intentional = finishPadOptionsHoldIfSpurious(
-                            transitionHoldFired, exitHoldFired, event);
+                            transitionHoldFired, exitHoldFired,
+                            syntheticPadHoldKeyCode == keyCode, event, 2);
                     if (!intentional && !exitHoldFired && !prevDown) {
                         onStemKey(2);
                     } else {
@@ -1178,6 +1397,7 @@ public final class StemPlayerHost {
                     }
                     transitionHoldFired = false;
                     exitHoldFired = false;
+                    if (syntheticPadHoldKeyCode == keyCode) syntheticPadHoldKeyCode = -1;
                     return true;
                 }
                 boolean stuttered = endStemHold(2);
@@ -1185,6 +1405,7 @@ public final class StemPlayerHost {
                     onStemKey(2);
                 }
                 exitHoldFired = false;
+                if (syntheticPadHoldKeyCode == keyCode) syntheticPadHoldKeyCode = -1;
                 return true;
             }
             return true;
@@ -1203,26 +1424,42 @@ public final class StemPlayerHost {
             if (action == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
                 centerDown = true;
                 centerScrubHoldFired = false;
+                centerShuffleHoldFired = false;
                 if (stemStutterArmed) {
                     centerScrewPeeked = true;
                     updateStatusLine();
                 } else if (!faceScrubArmed
                         && StemControls.centerHoldArmsPadScrub(ready, activeZone)) {
-                    // Arm circular scrub after intentional hold — short OK still shuffles. 2026-07-21
+                    // Arm circular scrub after intentional hold — short OK still flips. 2026-07-21 / 2026-08-02
                     main.removeCallbacks(centerScrubHoldRunnable);
                     main.postDelayed(centerScrubHoldRunnable,
+                            StemControls.mashupCenterScrubHoldMs());
+                } else if (!faceScrubArmed
+                        && StemControls.centerHoldArmsShuffle(ready, session.isMulti(),
+                                playbackStarted, activeZone)) {
+                    // Hold OK with no pad focused randomises; short OK flips the set. 2026-08-02
+                    main.removeCallbacks(centerShuffleHoldRunnable);
+                    main.postDelayed(centerShuffleHoldRunnable,
                             StemControls.mashupCenterScrubHoldMs());
                 }
                 return true;
             }
             if (action == KeyEvent.ACTION_UP) {
                 main.removeCallbacks(centerScrubHoldRunnable);
+                main.removeCallbacks(centerShuffleHoldRunnable);
                 // Peeked during chop (even if stem released first) — no loop toggle. 2026-07-20
                 boolean skipTap = centerScrewPeeked;
                 boolean holdEntered = centerScrubHoldFired;
+                boolean shuffleHoldEntered = centerShuffleHoldFired;
                 centerDown = false;
                 centerScrewPeeked = false;
                 centerScrubHoldFired = false;
+                centerShuffleHoldFired = false;
+                // Hold-OK already shuffled — release must not also flip. 2026-08-02
+                if (shuffleHoldEntered) {
+                    updateStatusLine();
+                    return true;
+                }
                 if (skipTap) {
                     updateStatusLine();
                     return true;
@@ -1273,14 +1510,20 @@ public final class StemPlayerHost {
         // Exit = dual PREV+NEXT only (single) / session menu (mashup dual).
         // Was: mashup Back hold → session (−1). Reversal: openStemMixContextMenu(-1).
         // 2026-07-19 / 2026-07-21
-        if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE) {
+        if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE
+                || (isDpadPadUp(keyCode) && session.isMulti())) {
             if (faceScrubArmed) {
                 if (action == KeyEvent.ACTION_UP) cancelFaceScrub(true);
                 return true;
             }
-            if (action == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+            if (action == KeyEvent.ACTION_DOWN
+                    && StemControls.startsPadHoldDown(event.getRepeatCount(), backDown)) {
+                boolean syntheticHold = StemControls.isSyntheticPadHold(
+                        event.getRepeatCount(), backDown);
+                if (!syntheticHold) syntheticPadHoldKeyCode = -1;
                 backDown = true;
                 padOptionsDownUptimeMs = android.os.SystemClock.uptimeMillis();
+                padOptionsDownEventTimeMs = event != null ? event.getEventTime() : 0L;
                 prePressActiveZone = activeZone;
                 backContextHoldFired = false;
                 main.removeCallbacks(backContextHoldRunnable);
@@ -1292,16 +1535,22 @@ public final class StemPlayerHost {
                 } else {
                     beginStemHold(0);
                 }
+                if (syntheticHold && session.isMulti()) {
+                    syntheticPadHoldKeyCode = keyCode;
+                    backContextHoldRunnable.run();
+                }
                 return true;
             }
             if (action == KeyEvent.ACTION_UP) {
                 main.removeCallbacks(backContextHoldRunnable);
                 boolean intentional = finishPadOptionsHoldIfSpurious(
-                        backContextHoldFired, false, event);
+                        backContextHoldFired, false,
+                        syntheticPadHoldKeyCode == keyCode, event, 0);
                 boolean stuttered = endStemHold(0);
                 if (!intentional && !stuttered) onStemKey(0);
                 backDown = false;
                 backContextHoldFired = false;
+                if (syntheticPadHoldKeyCode == keyCode) syntheticPadHoldKeyCode = -1;
                 return true;
             }
             return true;
@@ -1312,7 +1561,8 @@ public final class StemPlayerHost {
         // Was: mashup short Play UP opened Options; hold → session (−1).
         // Reversal: mashupPlayOpensContext UP + openStemMixContextMenu(-1).
         // 2026-07-19 / 2026-07-21
-        if (com.solar.launcher.SolarPadKeys.isPadPlayKey(keyCode)) {
+        if (com.solar.launcher.SolarPadKeys.isPadPlayKey(keyCode)
+                || (isDpadPadDown(keyCode) && session.isMulti())) {
             // BT transport only when AVRCP — don’t steal wheel. 2026-07-21
             if (event != null
                     && com.solar.launcher.Y1BluetoothInput.isBluetoothTransportKey(event)) {
@@ -1320,9 +1570,14 @@ public final class StemPlayerHost {
             }
             // Mashup: hold opens Melody-song Options; short tap focuses pad 3. 2026-07-21
             if (StemControls.mashupPlayHoldOpensContext(session.isMulti())) {
-                if (action == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+                if (action == KeyEvent.ACTION_DOWN
+                        && StemControls.startsPadHoldDown(event.getRepeatCount(), playDown)) {
+                    boolean syntheticHold = StemControls.isSyntheticPadHold(
+                            event.getRepeatCount(), playDown);
+                    if (!syntheticHold) syntheticPadHoldKeyCode = -1;
                     playDown = true;
                     padOptionsDownUptimeMs = android.os.SystemClock.uptimeMillis();
+                    padOptionsDownEventTimeMs = event != null ? event.getEventTime() : 0L;
                     prePressActiveZone = activeZone;
                     playContextHoldFired = false;
                     if (face != null) face.setActiveZone(3);
@@ -1330,15 +1585,21 @@ public final class StemPlayerHost {
                     main.removeCallbacks(playContextHoldRunnable);
                     main.postDelayed(playContextHoldRunnable,
                             StemControls.mashupOptionsHoldMs());
+                    if (syntheticHold && session.isMulti()) {
+                        syntheticPadHoldKeyCode = keyCode;
+                        playContextHoldRunnable.run();
+                    }
                     return true;
                 }
                 if (action == KeyEvent.ACTION_UP) {
                     main.removeCallbacks(playContextHoldRunnable);
                     boolean intentional = finishPadOptionsHoldIfSpurious(
-                            playContextHoldFired, false, event);
+                            playContextHoldFired, false,
+                            syntheticPadHoldKeyCode == keyCode, event, 3);
                     if (!intentional) onStemKey(3);
                     playDown = false;
                     playContextHoldFired = false;
+                    if (syntheticPadHoldKeyCode == keyCode) syntheticPadHoldKeyCode = -1;
                     return true;
                 }
                 return true;
@@ -1351,6 +1612,38 @@ public final class StemPlayerHost {
             if (action == KeyEvent.ACTION_UP) {
                 boolean stuttered = endStemHold(3);
                 if (!stuttered) onStemKey(3);
+                return true;
+            }
+            return true;
+        }
+
+        // DPAD directional → StemFM compass pad focus (direct, no hold timer).
+        // DPAD_UP → Vocals (N), DPAD_DOWN → Drums (S).
+        // DPAD_LEFT/DPAD_RIGHT are already handled by isPrevKey/isNextKey above
+        // but with hold-timer logic; these are simpler paths for the two remaining pads.
+        // 2026-08-02
+        if (isDpadPadUp(keyCode)) {
+            if (action == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+                // Direct focus: Vocals (top, zone 0). No hold timer, no stutter.
+                if (mashupFace != null) mashupFace.setActiveZone(0);
+                if (face != null) face.setActiveZone(0);
+                return true;
+            }
+            if (action == KeyEvent.ACTION_UP) {
+                onStemKey(0);
+                return true;
+            }
+            return true;
+        }
+        if (isDpadPadDown(keyCode)) {
+            if (action == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+                // Direct focus: Drums (bottom, zone 3). No hold timer, no stutter.
+                if (mashupFace != null) mashupFace.setActiveZone(3);
+                if (face != null) face.setActiveZone(3);
+                return true;
+            }
+            if (action == KeyEvent.ACTION_UP) {
+                onStemKey(3);
                 return true;
             }
             return true;
@@ -1466,22 +1759,69 @@ public final class StemPlayerHost {
         } catch (Exception ignored) {}
         // #endregion
         if (cycled && session.isMulti()) {
+            // 2026-08-02 — The instant forceSyncSlaves(now, 10) that used to run here
+            // hard-sought the whole slave song (10ms tolerance) on EVERY pad cycle, even
+            // with quantize OFF — that is the audible skip/stutter when switching stems
+            // between songs. Repress is documented as a timed gain fade that never seeks
+            // (drift runnable already fixed the same bug: "Was: always seek slaves to
+            // lead → stutter"). Snap now only rides the quantized boundary, with the
+            // crossfade; quantize OFF = pure gain fade.
             // Timed gain crossfade this zone SongA→SongB; other pads keep playing. 2026-07-20
-            // Was: toast song name only (instant mute/steer). Reversal: toast block above.
             int toSong = session.songIndexForZone(zone);
             int fromSong = StemControls.otherSongIndex(toSong, session.songCount());
-            startZoneCrossfade(zone, fromSong, toSong);
             String name = session.trackDisplayNameForZone(zone);
             if (name == null || name.length() == 0) {
                 name = "Song " + session.displaySongNumber(zone);
             }
-            host.toast(name);
+            // StemFM Quantize Performance: delay the audible crossfade to the next beat
+            // or bar boundary so stem switches lock to the groove. 2026-08-01
+            if (quantizeMode != com.solar.launcher.stem.analysis.StemQuantizePolicy.OFF) {
+                int delay = beatDelayForQuantize(toSong);
+                if (delay > 0) {
+                    final int fZone = zone;
+                    final int fFrom = fromSong;
+                    final int fTo = toSong;
+                    final String fName = name;
+                    main.postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (cancelled.get() || !sessionActive) return;
+                            // StemFM-style: only fire when the pad still points at the
+                            // quantized target — a re-press during the wait flips routing
+                            // back, so a stale crossfade would land on the wrong song.
+                            if (session.songIndexForZone(fZone) != fTo) return;
+                            // Snap slave to the beat grid AT the boundary, together with
+                            // the crossfade — not before it (audible skip). 2026-08-02
+                            forceSyncSlaves(android.os.SystemClock.uptimeMillis(), 10);
+                            startZoneCrossfade(fZone, fFrom, fTo);
+                            host.toast(fName + " · quantized");
+                        }
+                    }, delay);
+                    // Keep the rest of the tap instant (focus/title) — only audio is deferred.
+                } else {
+                    // Boundary is effectively now — snap + crossfade together. 2026-08-02
+                    forceSyncSlaves(android.os.SystemClock.uptimeMillis(), 10);
+                    startZoneCrossfade(zone, fromSong, toSong);
+                    host.toast(name);
+                }
+            } else {
+                // Quantize OFF (default): pure timed gain fade — no seek. The old
+                // 10ms snap fired on every press (constant stutter) and even a wider
+                // tolerance still yanks the whole slave song when drift lands in its
+                // window; repress is documented as "never seek". The 3 s drift
+                // runnable already holds gentle lockstep (400 ms tolerance).
+                // Users who want beat-locked switching enable QUANTIZE. 2026-08-02
+                startZoneCrossfade(zone, fromSong, toSong);
+                host.toast(name);
+            }
         }
         syncHostFromActiveSong();
         selectZone(activeZone);
         updateInteractedTrackTitle();
         // Restart idle countdown — first press after sleep only focused (no cycle). 2026-07-21
         notePadInteraction();
+        // Pad routing changed (cycle) → dominance may flip. 2026-08-02
+        recomputeDominantSong();
         // #region agent log
         if (session.songCount() >= 2) {
             try {
@@ -1531,10 +1871,45 @@ public final class StemPlayerHost {
             if (z == xfadeZone) continue;
             float level = session.padGain(z);
             int active = session.songIndexForZone(z);
+            // Play-both pads feed that stem from BOTH songs at pad level (stacking). 2026-08-01
+            boolean both = session.isZoneBoth(z);
             for (int s = 0; s < mixers.length; s++) {
-                applySongZoneGain(s, z, s == active ? level : 0f);
+                applySongZoneGain(s, z, both ? (level * 0.707f) : (s == active ? level : 0f));
             }
         }
+    }
+
+    /**
+     * Toggle play-both stacking for one pad — that stem now plays from both songs.
+     * Layman: vocals from two songs together on one pad; tap again to un-stack.
+     * Technical: session flag + re-sync gains (both songs at pad level).
+     * Audio unchanged otherwise; sibling pads untouched.
+     * Was: one-song-per-pad invariant everywhere. Reversal: toggleZoneBoth flag.
+     * @return new state (true = both songs feed this pad)
+     * 2026-08-01
+     */
+    public boolean toggleZonePlayBoth(int zone) {
+        if (zone < 0 || zone >= StemMixer.STEM_COUNT || !session.isMulti()) return false;
+        boolean both = session.toggleZoneBoth(zone);
+        // One pass handles both directions: stacked = every song at pad level;
+        // un-stacked = routed song at pad level, others muted. 2026-08-01
+        float level = session.padGain(zone);
+        int active = session.songIndexForZone(zone);
+        for (int s = 0; s < mixers.length; s++) {
+            applySongZoneGain(s, zone, both ? (level * 0.707f) : (s == active ? level : 0f));
+        }
+        
+        // Quantized stem swapping: snap slave track onto beat grid instantly
+        forceSyncSlaves(android.os.SystemClock.uptimeMillis(), 10);
+
+        // Both-pad neutralises a pad — counts may change → dominance re-anchors. 2026-08-02
+        recomputeDominantSong();
+
+        refreshFace();
+        updateStatusLine();
+        notePadInteraction();
+        host.toast(both ? "Both songs on this pad" : "One song on this pad");
+        return both;
     }
 
     /**
@@ -1552,6 +1927,28 @@ public final class StemPlayerHost {
     }
 
     /**
+     * Live mixer gain for one song zone — what the ears actually hear right now.
+     * Layman: the real fader position, not the stored target.
+     * Technical: prefers the StemMixer's applied gain; falls back to SongState.
+     * 2026-08-01
+     */
+    private float liveZoneGain(int songIndex, int zone) {
+        // SongState gains are written by applySongZoneGain on every crossfade tick, so they
+        // are exactly what the ears hear — no dependency on StemMixer.getGain semantics.
+        StemSession.SongState st = session.song(songIndex);
+        if (st != null && zone >= 0 && zone < st.gains.length) {
+            return StemControls.clampGain(st.gains[zone]);
+        }
+        StemMixer m = mixerAt(songIndex);
+        if (m != null) {
+            try {
+                return StemControls.clampGain(m.getGain(zone));
+            } catch (Exception ignored) {}
+        }
+        return 0f;
+    }
+
+    /**
      * Start timed crossfade of one pad zone from song A → song B at the **pad’s** level.
      * Layman: blend that stem into the other track — pad dial stays unless it was silent.
      * Silent / ~1% pads auto-bump to ~10% so the new stem is heard; louder pads unchanged.
@@ -1562,6 +1959,31 @@ public final class StemPlayerHost {
     private void startZoneCrossfade(int zone, int fromSong, int toSong) {
         if (zone < 0 || zone >= StemMixer.STEM_COUNT) return;
         if (fromSong < 0 || toSong < 0 || fromSong == toSong) return;
+        // Rapid rhythmic re-press mid-fade: reverse the blend from the LIVE gains instead
+        // of hard-soloing — the overlap keeps both stems audible, so fast pad-toggling
+        // sounds like both tracks' pads are playing (StemFM vocal-mix illusion).
+        // Was: cancelZoneCrossfade() hard-solo + restart from padGain (audible click).
+        // Reversal: always cancelZoneCrossfade() first. 2026-08-01
+        if (xfadeZone == zone && xfadeFromSong >= 0 && xfadeToSong >= 0
+                && fromSong == xfadeToSong && toSong == xfadeFromSong) {
+            main.removeCallbacks(zoneCrossfadeRunnable);
+            float liveFrom = liveZoneGain(fromSong, zone);
+            float liveTo = liveZoneGain(toSong, zone);
+            float prior = session.padGain(zone);
+            float level = StemControls.padGainAfterTrackSwitch(prior);
+            if (level != prior) session.setPadGain(zone, level);
+            xfadeFromGain = liveFrom;
+            xfadeToStartGain = liveTo;
+            xfadeToTargetGain = level;
+            xfadeZone = zone;
+            xfadeFromSong = fromSong;
+            xfadeToSong = toSong;
+            xfadeStep = 0;
+            xfadePreset = StemControls.TRANSITION_PRESET_SHORT;
+            xfadeSteps = StemControls.transitionFadeSteps(StemControls.padRepressTransitionMs());
+            main.post(zoneCrossfadeRunnable);
+            return;
+        }
         cancelZoneCrossfade();
         // Pad-owned level; bump only when at/below dual-start floor. 2026-07-21
         float prior = session.padGain(zone);
@@ -1574,7 +1996,7 @@ public final class StemPlayerHost {
         xfadeFromSong = fromSong;
         xfadeToSong = toSong;
         xfadeStep = 0;
-        xfadePreset = StemControls.TRANSITION_PRESET_WAVE;
+        xfadePreset = StemControls.TRANSITION_PRESET_SHORT;
         xfadeSteps = StemControls.transitionFadeSteps(StemControls.padRepressTransitionMs());
         main.post(zoneCrossfadeRunnable);
     }
@@ -1589,6 +2011,13 @@ public final class StemPlayerHost {
         // Prefer live padGain so cancel mid-fade doesn’t invent a level. 2026-07-21
         float level = session.padGain(zone);
         if (toGain > 0.001f) level = toGain;
+        // Play-both pads stay stacked — solo only when the pad is one-song. 2026-08-01
+        if (session.isZoneBoth(zone)) {
+            if (fromSong >= 0) applySongZoneGain(fromSong, zone, level);
+            if (toSong >= 0) applySongZoneGain(toSong, zone, level);
+            refreshFace();
+            return;
+        }
         float[] g = StemControls.padZoneSoloFinalGains(level);
         if (fromSong >= 0) applySongZoneGain(fromSong, zone, g[0]);
         if (toSong >= 0) applySongZoneGain(toSong, zone, g[1]);
@@ -1696,6 +2125,75 @@ public final class StemPlayerHost {
      * 2026-07-20 / 2026-07-21
      */
     public void softReplaceSong(int songIndex, File trackFile) {
+        softReplaceSong(songIndex, trackFile, false, null);
+    }
+
+    /**
+     * DJ chain advance: when the SEED (slot 0) finishes, the survivor (slot 1)
+     * is re-indexed as the new seed — its mixer keeps playing, no reload — and
+     * the incoming track loads into the partner seat. Non-seed slots keep the
+     * plain soft-replace. Mirrors StemMixQueuePolicy.applyAdvanceOrder's chain
+     * reorder so the live pair always reads [survivor, incoming].
+     * Layman: the track that was the end of the current pair becomes the start
+     * of the next pair; the new song joins as the partner.
+     * 2026-08-01
+     */
+    public void chainAdvanceSong(int songIndex, File trackFile, boolean fromStart) {
+        if (songIndex == 0 && session.isMulti() && session.songCount() >= 2) {
+            swapSongSeats(0, 1);
+            softReplaceSong(1, trackFile, fromStart);
+        } else {
+            softReplaceSong(songIndex, trackFile, fromStart);
+        }
+        
+        // Dynamic Drifting: The new survivor (seat 0) becomes the master anchor.
+        StemSession.SongState st = session.song(0);
+        if (st != null && st.bpm > 30f) {
+            targetMasterBpm = st.bpm;
+        }
+        // Seat swap moved the new survivor into the dominant seat — re-anchor the
+        // key pitch (the song at seat 0 changed, so old pitch targets are stale). 2026-08-02
+        dominantSong = 0;
+        applyDominantKeyPitch();
+        if (mashupFace != null) mashupFace.setDominantSong(0);
+    }
+
+    /**
+     * Exchange two song seats in place (mixer refs + session songs + host
+     * tracks) so the playing survivor becomes the new seed without a reload.
+     * 2026-08-01
+     */
+    private void swapSongSeats(int a, int b) {
+        if (mixers == null || a < 0 || b < 0 || a >= mixers.length || b >= mixers.length) return;
+        if (a == b) return;
+        StemMixer m = mixers[a];
+        mixers[a] = mixers[b];
+        mixers[b] = m;
+        session.swapSongs(a, b);
+        if (a < tracks.size() && b < tracks.size()) {
+            File t = tracks.get(a);
+            tracks.set(a, tracks.get(b));
+            tracks.set(b, t);
+        }
+    }
+
+    /**
+     * Soft-replace with a from-start hint. True for the natural song-end advance
+     * (the next queued track starts at ITS beginning on the survivor's next bar
+     * line — StemFM-style). False for user swaps/Next (keep beat-phase lock).
+     * 2026-08-01
+     */
+    public void softReplaceSong(int songIndex, File trackFile, boolean fromStart) {
+        softReplaceSong(songIndex, trackFile, fromStart, null);
+    }
+
+    /**
+     * Soft-replace with an optional completion callback fired once the new pads
+     * are loaded and the fade-in is underway (used by chained pair transitions).
+     * 2026-08-01
+     */
+    public void softReplaceSong(int songIndex, File trackFile, boolean fromStart,
+            final Runnable onFadeIn) {
         if (!session.isMulti() || trackFile == null || !trackFile.isFile()) return;
         if (songIndex < 0 || songIndex >= session.songCount()) return;
         // #region agent log
@@ -1752,6 +2250,8 @@ public final class StemPlayerHost {
         job.gen = gen;
         job.song = song;
         job.prior = prior;
+        job.fromStart = fromStart;
+        job.onFadeIn = onFadeIn;
         softReplaceJob = job;
         // Fade out audible pads first (TRANSITION length / equal-power). 2026-07-21
         fadeSongGainsOut(song, prior, new Runnable() {
@@ -1793,6 +2293,7 @@ public final class StemPlayerHost {
                         public void run() {
                             if (gen != jobGen.get()) return;
                             SoftReplaceJob j = softReplaceJob;
+                            final Runnable hook = j != null && j.gen == gen ? j.onFadeIn : null;
                             if (j != null && j.gen == gen) j.failed = true;
                             softReplaceJob = null;
                             replacingSongIndex = -1;
@@ -1800,11 +2301,145 @@ public final class StemPlayerHost {
                             syncPrepBusyChrome();
                             host.toast("Could not load track");
                             refreshFace();
+                            // Chained pair transition: still let seat 1 try. 2026-08-01
+                            fireFadeInHook(hook);
                         }
                     });
                 }
             }
         });
+    }
+
+    /**
+     * StemFM-style pair transition: crossfade the live pair into a new song set.
+     * Seed lock — the currently-playing track keeps mixing while seat 0 fades to
+     * track A, then seat 1 fades to track B once A is in. No hard cut.
+     * Layman: both new songs melt in over the old pair, one pad at a time.
+     * Technical: chained {@link #softReplaceSong} with onFadeIn hooks; the second
+     * replacement begins as the first's fade-in lands, so the two overlap.
+     * 2026-08-01
+     */
+    public void transitionPairTo(File trackA, File trackB, final Runnable onComplete) {
+        if (trackA == null || !trackA.isFile()) {
+            fireFadeInHook(onComplete);
+            return;
+        }
+        if (trackB == null || !trackB.isFile()) {
+            softReplaceSong(0, trackA, false, onComplete);
+            return;
+        }
+        // StemFM seed lock — never let the chain abort on a “cannot mix with itself”
+        // toast. If a new track already lives on the sibling seat, swap the seat
+        // assignment so both seats end up on the new pair without a duplicate.
+        boolean aOnSeat0 = session != null && session.song(0) != null
+                && session.song(0).track != null
+                && session.song(0).track.getAbsolutePath().equals(trackA.getAbsolutePath());
+        boolean bOnSeat1 = session != null && session.song(1) != null
+                && session.song(1).track != null
+                && session.song(1).track.getAbsolutePath().equals(trackB.getAbsolutePath());
+        if (aOnSeat0 && bOnSeat1) {
+            // Exact pair already live — nothing to transition.
+            fireFadeInHook(onComplete);
+            return;
+        }
+        // 2026-08-01 — Skip a seat that already owns its target (no redundant reload).
+        if (aOnSeat0) {
+            softReplaceSong(1, trackB, false, onComplete);
+            return;
+        }
+        if (bOnSeat1) {
+            softReplaceSong(0, trackA, false, onComplete);
+            return;
+        }
+        boolean aDupForSeat0 = session != null && session.isDuplicateTrack(0, trackA);
+        boolean bDupForSeat1 = session != null && session.isDuplicateTrack(1, trackB);
+        if (aDupForSeat0 || bDupForSeat1) {
+            if (aDupForSeat0 && bDupForSeat1) {
+                // Both new tracks already live, swapped — no-op.
+                fireFadeInHook(onComplete);
+            } else if (aDupForSeat0) {
+                // A already lives on seat 1 → seat 0 takes B.
+                softReplaceSong(0, trackB, false, onComplete);
+            } else {
+                // B already lives on seat 0 → seat 1 takes A.
+                softReplaceSong(1, trackA, false, onComplete);
+            }
+            return;
+        }
+        softReplaceSong(0, trackA, false, new Runnable() {
+            @Override
+            public void run() {
+                softReplaceSong(1, trackB, false, onComplete);
+            }
+        });
+    }
+
+    /**
+     * StemFM queue-pick restart: the picked queue track becomes the new dominant
+     * seed (tempo/BPM master) and BOTH stems restart from the top.
+     * Layman: choose a song in the play queue → the mashup restarts with that
+     * song leading the beat; the other stem stretches onto its pulse.
+     * Technical: re-bind the live pair from the queue front (picked at 0, previous
+     * seed at 1), then re-run the resolve→beginMixers flow so tempoRate is
+     * re-derived from seedMasterBpm (seed = song 0). Was: single-seat soft-replace.
+     * Reversal: softReplaceSong only. 2026-08-01
+     */
+    public void restartPairFromQueueSeed(File seedFile) {
+        if (!sessionActive || root == null) return;
+        if (seedFile == null || !seedFile.isFile()) return;
+        java.util.ArrayList<File> pair = new java.util.ArrayList<File>();
+        pair.add(seedFile);
+        try {
+            PlayQueue q = host.stemMixPlayQueue();
+            if (q != null && q.size() > 1) {
+                PlayQueue.QueueItem it = q.items().get(1);
+                if (it != null && it.file != null && it.file.isFile()
+                        && !seedFile.getAbsolutePath().equals(it.file.getAbsolutePath())) {
+                    pair.add(it.file);
+                }
+            }
+        } catch (Exception ignored) {}
+        restartLivePair(pair);
+    }
+
+    /**
+     * Re-bind the live pair and re-run the jam start (resolve → beginMixers) so
+     * both stems reload from 0 with the new seed leading the tempo.
+     * Layman: a fresh two-pad start on the songs you just picked.
+     * Technical: same slate reset as attach(), then startJob() — beginMixers folds
+     * seedMasterBpm so song 0's BPM is the master and the partner is stretched.
+     * 2026-08-01
+     */
+    private void restartLivePair(java.util.List<File> pair) {
+        if (pair == null || pair.isEmpty()) return;
+        cancelled.set(false);
+        tracks.clear();
+        for (int i = 0; i < pair.size() && tracks.size() < StemSession.MAX_SONGS; i++) {
+            File f = pair.get(i);
+            if (f != null && f.isFile()) tracks.add(f);
+        }
+        if (tracks.isEmpty()) return;
+        session.bindTracks(tracks);
+        this.track = tracks.get(0);
+        // Same jam slate as attach() — audio keeps its view, mixers reload fresh.
+        // Fresh bind seeds every pad on song 0 → dominance resets to seat 0 too. 2026-08-02
+        this.activeZone = -1;
+        this.dominantSong = 0;
+        this.loading = true;
+        this.ready = false;
+        this.armed = false;
+        this.wheelLoopMode = false;
+        this.stutterChopStep = StemControls.DEFAULT_STUTTER_CHOP_STEP;
+        this.editLoopBars = StemControls.LOOP_BARS_NONE;
+        clearZoneLoopCtrl();
+        stopStemStutter();
+        this.songFinished = false;
+        this.savedLoopBars = StemControls.DEFAULT_LOOP_BARS;
+        this.transitionMs = StemControls.TRANSITION_DEFAULT_MS;
+        this.transitionPreset = StemControls.TRANSITION_PRESET_BALANCED;
+        this.transitionHoldFired = false;
+        cancelZoneCrossfade();
+        startJob();
     }
 
     /**
@@ -1821,6 +2456,10 @@ public final class StemPlayerHost {
         boolean fadeOutDone;
         boolean stemsReady;
         boolean failed;
+        /** True for the natural song-end advance → next track starts from ITS start. 2026-08-01 */
+        boolean fromStart;
+        /** Chained-transition hook — fired once the new pads fade in. 2026-08-01 */
+        Runnable onFadeIn;
     }
 
     private SoftReplaceJob softReplaceJob;
@@ -1846,11 +2485,13 @@ public final class StemPlayerHost {
         } catch (Exception ignored) {}
         // #endregion
         softReplaceJob = null;
+        final Runnable fadeInHook = j.onFadeIn;
         StemSession.SongState st = session.song(j.song);
         if (st == null) {
             replacingSongIndex = -1;
             loading = false;
             syncPrepBusyChrome();
+            fireFadeInHook(fadeInHook);
             return;
         }
         st.stems = j.stems;
@@ -1861,7 +2502,20 @@ public final class StemPlayerHost {
                     + session.trackDisplayNameForSong(j.song));
             statusView.setTextColor(0xFFB0B0B8);
         }
-        reloadMixerAt(j.song, j.prior, gen);
+        reloadMixerAt(j.song, j.prior, gen, j.fromStart, fadeInHook);
+    }
+
+    /** Fire a chained-transition hook once, safely. 2026-08-01 */
+    private void fireFadeInHook(final Runnable hook) {
+        if (hook == null) return;
+        try {
+            main.post(new Runnable() {
+                @Override
+                public void run() {
+                    try { hook.run(); } catch (Exception ignored) {}
+                }
+            });
+        } catch (Exception ignored) {}
     }
 
     /**
@@ -1927,11 +2581,18 @@ public final class StemPlayerHost {
      * Never touches sibling mixers — live jam on the other song stays uninterrupted.
      * 2026-07-20
      */
-    private void reloadMixerAt(final int songIndex, final float[] targetGains, final int gen) {
+    private void reloadMixerAt(final int songIndex, final float[] targetGains,
+            final int gen, final boolean fromStart) {
+        reloadMixerAt(songIndex, targetGains, gen, fromStart, null);
+    }
+
+    private void reloadMixerAt(final int songIndex, final float[] targetGains,
+            final int gen, final boolean fromStart, final Runnable onFadeIn) {
         if (mixers == null || songIndex < 0 || songIndex >= mixers.length || root == null) {
             replacingSongIndex = -1;
             loading = false;
             syncPrepBusyChrome();
+            fireFadeInHook(onFadeIn);
             return;
         }
         StemSession.SongState st = session.song(songIndex);
@@ -1939,6 +2600,7 @@ public final class StemPlayerHost {
             replacingSongIndex = -1;
             loading = false;
             syncPrepBusyChrome();
+            fireFadeInHook(onFadeIn);
             return;
         }
         // Release ONLY this slot after fade-out — sibling StemMixer keeps playing. 2026-07-20
@@ -1961,13 +2623,24 @@ public final class StemPlayerHost {
                         replacingSongIndex = -1;
                         loading = false;
                         syncPrepBusyChrome();
-                        try { m.play(); } catch (Exception ignored) {}
-                        // Timed fade-in to prior pad levels (equal-power when LONG). 2026-07-20 / 2026-07-21
-                        fadeSongGainsIn(songIndex, targetGains);
+                        if (fromStart) {
+                            // StemFM: the next queued track starts at ITS beginning and fades
+                            // in over the configured Transition duration — no mid-track
+                            // beat-lock seek (that stays for user swaps). 2026-08-01
+                            startFromBeginning(songIndex, m, targetGains, gen);
+                        } else {
+                            try { m.play(); } catch (Exception ignored) {}
+                            // Beat-phase lock the replacement to the surviving master's pulse.
+                            beatLockReplacementStart(songIndex, m);
+                            // Timed fade-in to prior pad levels (equal-power when LONG). 2026-07-20 / 2026-07-21
+                            fadeSongGainsIn(songIndex, targetGains);
+                        }
                         loadMashupMetaAndArt();
                         refreshFace();
                         updateStatusLine();
                         updateInteractedTrackTitle();
+                        // Chained pair transition: next seat may start its fade-out now. 2026-08-01
+                        fireFadeInHook(onFadeIn);
                     }
 
                     @Override
@@ -1976,6 +2649,7 @@ public final class StemPlayerHost {
                         replacingSongIndex = -1;
                         loading = false;
                         syncPrepBusyChrome();
+                        fireFadeInHook(onFadeIn);
                         host.toast(message != null ? message : "Stem load failed");
                     }
 
@@ -1985,8 +2659,22 @@ public final class StemPlayerHost {
                         onSongPlaybackComplete(songIndex);
                     }
                 });
+                // Native pitch (Camelot matching) on pad reload, same rules as beginMixers:
+                // SoundTouch path when tempo differs OR a key shift is wanted. 2026-08-02
+                StemSession.SongState seed = session.song(dominantSong);
+                float keyPitch = seed != null && seed != stFinal
+                        ? StemSoundTouch.pitchFactorForKeys(
+                                seed.keyRoot, seed.keyMajor, stFinal.keyRoot, stFinal.keyMajor)
+                        : 1f;
+                m.setPitch(keyPitch);
                 try {
-                    m.load(stFinal.stems, stFinal.bassBody);
+                    if (StemTempoSync.needsSoundTouch(stFinal.tempoRate)
+                            || Math.abs(keyPitch - 1f) > 0.001f) {
+                        m.loadWithSoundTouch(stFinal.stems, stFinal.bassBody, stFinal.tempoRate);
+                    } else {
+                        m.load(stFinal.stems, stFinal.bassBody);
+                        m.setTargetRate(stFinal.tempoRate);
+                    }
                 } catch (Exception e) {
                     replacingSongIndex = -1;
                     loading = false;
@@ -2006,6 +2694,92 @@ public final class StemPlayerHost {
         } else {
             doLoad.run();
         }
+    }
+
+    /**
+     * Beat-phase lock: immediately after a soft-replaced song's mixer comes up,
+     * seek it so its pulse lands on the surviving master's beat grid at fade-in.
+     * Layman: the new track drops in already stepping on the same beat as the one
+     * still playing — no audible re-lock during the crossfade.
+     * Technical: survivorPos × survivorRate / myRate, snapped to the new song's own
+     * beat grid via StemTempoSync.phaseAlignedStartMs. Inaudible because pad gains
+     * are 0 until the timed fade-in begins.
+     * Was: new song always started from 0 → off-beat crossfade. Reversal: no seek.
+     * 2026-08-01
+     */
+    private void beatLockReplacementStart(int songIndex, StemMixer m) {
+        if (mixers == null || session == null || !session.isMulti()) return;
+        StemMixer lead = null;
+        for (int i = 0; i < mixers.length; i++) {
+            if (i == songIndex) continue;
+            if (mixers[i] != null) {
+                lead = mixers[i];
+                break;
+            }
+        }
+        if (lead == null || m == null) return;
+        int leadPos;
+        try {
+            leadPos = lead.getPositionMs();
+        } catch (Exception ignored) {
+            return;
+        }
+        if (leadPos <= 0) return;
+        StemSession.SongState leadSt = session.song(songIndex == 0 ? 1 : 0);
+        float leadRate = leadSt != null && leadSt.tempoRate > 0.1f
+                ? leadSt.tempoRate : 1f;
+        int leadFirstBeatMs = leadSt != null ? leadSt.firstBeatMs : 0;
+        
+        float myRate = 1f;
+        StemSession.SongState mySt = session.song(songIndex);
+        if (mySt != null && mySt.tempoRate > 0.1f) myRate = mySt.tempoRate;
+        float myBpm = mySt != null && mySt.bpm > 30f ? mySt.bpm : StemBpm.DEFAULT_BPM;
+        int myFirstBeatMs = mySt != null ? mySt.firstBeatMs : 0;
+        
+        int start = StemTempoSync.phaseAlignedStartMs(
+                leadPos, leadRate, leadFirstBeatMs, myRate, myFirstBeatMs, myBpm);
+        try {
+            m.seekAllPlaying(start);
+        } catch (Exception ignored) {}
+    }
+
+    /**
+     * StemFM-style from-start transition for the natural song-end advance: the
+     * incoming queued track begins at its own position 0 and fades in across the
+     * configured Transition duration — no extra beat wait (strict timeframe).
+     * Layman: the song that ends hands over to the next one from the top of the
+     * record, swelling in over the Transition duration like a DJ fade.
+     * Technical: seek 0 → zero gains → play → fadeSongGainsIn(transitionMs).
+     * Drift lockstep skips the seat while the intro fades so it can't yank it
+     * off the start. Was: beatLockReplacementStart mid-track seek. Reversal: no seek.
+     * 2026-08-01
+     */
+    private void startFromBeginning(final int songIndex, final StemMixer m,
+            final float[] targetGains, final int gen) {
+        if (gen != jobGen.get() || cancelled.get() || !sessionActive) return;
+        try { m.seekAllPlaying(0); } catch (Exception ignored) {}
+        for (int z = 0; z < StemMixer.STEM_COUNT; z++) {
+            applySongZoneGain(songIndex, z, 0f);
+        }
+        // Keep this seat out of lockstep drift while the intro fades in from 0,
+        // so a mid-fade seek can't yank the fresh track off its start.
+        softRestartSkipDriftSong = songIndex;
+        softRestartSkipDriftUntilMs = android.os.SystemClock.uptimeMillis()
+                + Math.max(800L, transitionMs) + 500L;
+        final long until = softRestartSkipDriftUntilMs;
+        try { m.play(); } catch (Exception ignored) {}
+        fadeSongGainsIn(songIndex, targetGains);
+        // Clear the drift skip AFTER the until deadline (+500ms in until) so the
+        // guard actually passes and the seat returns to lockstep.
+        main.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (softRestartSkipDriftSong == songIndex
+                        && android.os.SystemClock.uptimeMillis() >= until) {
+                    softRestartSkipDriftSong = -1;
+                }
+            }
+        }, Math.max(800L, transitionMs) + 500L);
     }
 
     /**
@@ -2035,7 +2809,12 @@ public final class StemPlayerHost {
                 }
                 // Coalesce face paints — fade ticks are dense on MT6572. 2026-07-21
                 scheduleFaceInvalidate();
-                if (step[0] >= steps) return;
+                if (step[0] >= steps) {
+                    // Re-assert one-song-per-pad (or play-both stack) once a replacement
+                    // lands — the replaced song's jam gains were zeroed by resetJam(). 2026-08-01
+                    syncAllSongGainsToMixers();
+                    return;
+                }
                 main.postDelayed(this, StemControls.TRANSITION_TICK_MS);
             }
         };
@@ -2047,9 +2826,10 @@ public final class StemPlayerHost {
      * Was: TRANSITION menu on one-side hold. Reversal: openTransitionMenu().
      * 2026-07-21
      */
-    private void openSlotContextMenu(int songIndex) {
+    private void openSlotContextMenu(int songIndex, int zone) {
         if (root == null || transitionPanel != null) return;
         slotContextSong = StemControls.clampSongIndex(songIndex, session.songCount());
+        slotContextZone = zone;
         contextMode = CTX_SLOT;
         String[] rows = StemMixContextRows.slotRows(slotContextSong + 1);
         contextRowCount = rows.length;
@@ -2189,7 +2969,42 @@ public final class StemPlayerHost {
             mashupFace.clearPadScrub();
             return;
         }
-        mashupFace.setPadScrub(true, StemMixSoftScrub.thumbFrac(scrubCursorMs, scrubDurationMs), scrubCursorMs);
+        float transitionFrac = -1f;
+        int transitionMs = calculateScrubTransitionMs();
+        if (transitionMs >= 0) {
+            transitionFrac = StemMixSoftScrub.thumbFrac(transitionMs, scrubDurationMs);
+        }
+        mashupFace.setPadScrub(true, StemMixSoftScrub.thumbFrac(scrubCursorMs, scrubDurationMs), scrubCursorMs, transitionFrac);
+    }
+
+    /**
+     * Calculates the phase-aligned transition point on scrubSong's timeline
+     * where the other active song would drop in perfectly on beat.
+     * Returns -1 if no transition point is available.
+     */
+    private int calculateScrubTransitionMs() {
+        if (scrubSong < 0 || session == null || !session.isMulti()) return -1;
+        int otherSong = scrubSong == 0 ? 1 : 0;
+        StemMixer myMixer = mixerAt(scrubSong);
+        StemMixer otherMixer = mixerAt(otherSong);
+        StemSession.SongState myState = session.song(scrubSong);
+        StemSession.SongState otherState = session.song(otherSong);
+        
+        if (myMixer == null || otherMixer == null || myState == null || otherState == null) return -1;
+        if (otherState.track == null) return -1;
+        
+        float masterBpm = dominantMasterBpm();
+        float myBpm = myMixer.getBpm() > 30f ? myMixer.getBpm() : myState.bpm;
+        float otherBpm = otherMixer.getBpm() > 30f ? otherMixer.getBpm() : otherState.bpm;
+        
+        float myRate = StemTempoSync.rateToMatchMaster(masterBpm, myBpm);
+        float otherRate = StemTempoSync.rateToMatchMaster(masterBpm, otherBpm);
+        
+        int otherPosMs = otherMixer.getPositionMs();
+        int otherFirstBeatMs = otherState.firstBeatMs;
+        int myFirstBeatMs = myState.firstBeatMs;
+        
+        return StemTempoSync.phaseAlignedStartMs(otherPosMs, otherRate, otherFirstBeatMs, myRate, myFirstBeatMs, myBpm);
     }
 
     /**
@@ -2321,9 +3136,14 @@ public final class StemPlayerHost {
                 closeTransitionMenu();
                 try {
                     File next = host.applyStemPairAdvance(slotContextSong);
-                    if (next != null) softReplaceSong(slotContextSong, next);
+                    // DJ chain: advancing the seed keeps the survivor as the new seed
+                    // (end of pair 1 → start of pair 2); other slots plain-replace.
+                    if (next != null) chainAdvanceSong(slotContextSong, next, false);
                     else host.toast("No next track");
                 } catch (Exception ignored) {}
+            } else if (row == StemMixContextRows.SLOT_PLAY_BOTH) {
+                closeTransitionMenu();
+                toggleZonePlayBoth(slotContextZone);
             } else if (row == StemMixContextRows.SLOT_SCRUB) {
                 openSoftScrubOverlay(slotContextSong);
             }
@@ -2334,8 +3154,10 @@ public final class StemPlayerHost {
             if (preset >= 0) {
                 transitionPreset = preset;
                 transitionMs = StemControls.transitionMsForPreset(preset);
-                host.toast(preset == StemControls.TRANSITION_PRESET_OVERLAP ? "Blend ∞"
-                        : preset == StemControls.TRANSITION_PRESET_WAVE ? "Blend wave" : "Blend LONG");
+                host.toast(preset == StemControls.TRANSITION_PRESET_BALANCED ? "Blend · Balanced Mix"
+                        : preset == StemControls.TRANSITION_PRESET_SHORT ? "Blend · Short & Punchy"
+                        : preset == StemControls.TRANSITION_PRESET_INSTANT ? "Blend · Instant"
+                        : "Blend · Full Tracks");
                 closeTransitionMenu();
                 return;
             }
@@ -2344,6 +3166,13 @@ public final class StemPlayerHost {
                 try {
                     host.openStemMixPlayQueue();
                 } catch (Exception ignored) {}
+                return;
+            }
+            int qmode = StemMixContextRows.quantizeModeForSessionRow(row);
+            if (qmode >= 0) {
+                quantizeMode = qmode;
+                host.toast(com.solar.launcher.stem.analysis.StemQuantizePolicy.label(qmode));
+                closeTransitionMenu();
                 return;
             }
             if (StemMixContextRows.isSessionPauseRow(row)) {
@@ -2402,6 +3231,60 @@ public final class StemPlayerHost {
         int beat = StemBpm.msPerBeat(bpm);
         final int targetMs = (beat > 0 && phaseOffset > 0) ? ((baseTargetMs / beat) * beat + phaseOffset) : baseTargetMs;
 
+        // Auto-transition if confirmed near the transition dot. 2026-08-02
+        int transitionMs = calculateScrubTransitionMs();
+        if (transitionMs >= 0 && Math.abs(targetMs - transitionMs) < 2000) {
+            scrubCursorMs = transitionMs; // snap
+            faceScrubArmed = false;
+            if (mashupFace != null) mashupFace.clearPadScrub();
+            closeTransitionMenu();
+            if (song < 0 || otherSong < 0) return;
+            
+            StemMixer live = mixerAt(song);
+            if (live != null) {
+                try { live.seekAllPlaying(transitionMs); } catch (Exception ignored) {}
+            }
+            
+            // Route all pads to the new song (crossfade them in)
+            for (int z = 0; z < StemMixer.STEM_COUNT; z++) {
+                if (session.songIndexForZone(z) != otherSong) {
+                    session.setZoneSong(z, otherSong);
+                    startZoneCrossfade(z, song, otherSong);
+                }
+            }
+            
+            // Dynamic Drifting: Transition anchor to the new track
+            StemSession.SongState otherSt = session.song(otherSong);
+            if (otherSt != null && otherSt.bpm > 30f) {
+                targetMasterBpm = otherSt.bpm;
+            }
+            
+            // Advance active zone focus to the new song's layout
+            syncHostFromActiveSong();
+            updateInteractedTrackTitle();
+            return; // Transition handled, skip normal soft scrub
+        }
+
+        // Dual-track scrub: advance the other track by the same relative amount. 2026-08-02
+        if (otherSong >= 0) {
+            StemMixer live = mixerAt(song);
+            StemMixer otherMixer = mixerAt(otherSong);
+            if (live != null && otherMixer != null) {
+                int deltaMs = targetMs - live.getPositionMs();
+                float masterBpm = dominantMasterBpm();
+                float myBpm = live.getBpm() > 30f ? live.getBpm() : bpm;
+                float otherBpm = otherMixer.getBpm() > 30f ? otherMixer.getBpm() : session.song(otherSong).bpm;
+                float myRate = StemTempoSync.rateToMatchMaster(masterBpm, myBpm);
+                float otherRate = StemTempoSync.rateToMatchMaster(masterBpm, otherBpm);
+                
+                int otherDelta = Math.round(deltaMs * (otherRate / myRate));
+                int otherTargetMs = StemMixSoftScrub.clampSeekMs(
+                        otherMixer.getPositionMs() + otherDelta, Math.max(1, otherMixer.getDurationMs()));
+                try {
+                    otherMixer.seekAllPlaying(otherTargetMs);
+                } catch (Exception ignored) {}
+            }
+        }
         
         scrubCursorMs = targetMs;
         faceScrubArmed = false;
@@ -2659,6 +3542,30 @@ public final class StemPlayerHost {
         boolean useVolume = StemControls.wheelUsesVolume(wheelLoopMode);
         if (activeZone < 0 || activeZone >= StemMixer.STEM_COUNT) {
             // Idle / no focus — wheel wakes size only; no gain until a pad is lit. 2026-07-21
+            // If already awake, wheel controls master volume for all pads. 2026-08-02
+            if (!padsIdle && useVolume) {
+                int volSteps = StemControls.volumeStepsFromWheel(steps);
+                for (int z = 0; z < StemMixer.STEM_COUNT; z++) {
+                    float currentPadGain = session.padGain(z);
+                    float g = StemControls.nudgeGain(currentPadGain, volSteps);
+                    session.setPadGain(z, g);
+                    StemSession.SongState st = session.activeSongState();
+                    if (st != null) st.gains[z] = g;
+                    
+                    int song = session.songIndexForZone(z);
+                    applySongZoneGain(song, z, g);
+                    if (session.isMulti()) {
+                        int other = StemControls.otherSongIndex(song, session.songCount());
+                        if (session.isZoneBoth(z)) {
+                            applySongZoneGain(other, z, g);
+                        } else {
+                            applySongZoneGain(other, z, 0f);
+                        }
+                    }
+                }
+                refreshFace();
+                updateStatusLine();
+            }
             notePadInteraction();
             return true;
         }
@@ -2698,17 +3605,26 @@ public final class StemPlayerHost {
             notePadInteraction();
             return true;
         }
-        mixer.nudgeGainSteps(activeZone, StemControls.volumeStepsFromWheel(steps));
+        int volSteps = StemControls.volumeStepsFromWheel(steps);
+        float currentPadGain = session.padGain(activeZone);
+        float g = StemControls.nudgeGain(currentPadGain, volSteps);
+        
         // Pad-owned level — wheel moves the dial, not a per-song copy. 2026-07-21
-        float g = mixer.getGain(activeZone);
         session.setPadGain(activeZone, g);
         StemSession.SongState st = session.activeSongState();
         if (st != null) st.gains[activeZone] = g;
-        // Mute the other song’s zone so solo invariant holds while turning the dial. 2026-07-21
+        
+        int fromSong = session.songIndexForZone(activeZone);
+        applySongZoneGain(fromSong, activeZone, g);
+        
+        // Mute the other song’s zone so solo invariant holds — unless play-both stacks. 2026-08-01
         if (session.isMulti()) {
-            int other = StemControls.otherSongIndex(session.songIndexForZone(activeZone),
-                    session.songCount());
-            applySongZoneGain(other, activeZone, 0f);
+            int other = StemControls.otherSongIndex(fromSong, session.songCount());
+            if (session.isZoneBoth(activeZone)) {
+                applySongZoneGain(other, activeZone, g);
+            } else {
+                applySongZoneGain(other, activeZone, 0f);
+            }
         }
         notePadInteraction();
         refreshFace();
@@ -2722,6 +3638,7 @@ public final class StemPlayerHost {
         jobGen.incrementAndGet();
         stopStemStutter();
         main.removeCallbacks(mashDriftRunnable);
+        main.removeCallbacks(tempoDriftRunnable);
         if (mixers != null) {
             for (int i = 0; i < mixers.length; i++) {
                 StemMixer m = mixers[i];
@@ -2757,8 +3674,9 @@ public final class StemPlayerHost {
             startUserPlayback();
             return;
         }
-        // Mashup OK = StemFM centre shuffle (rotate pad songs + focus). 2026-07-20
-        // Idle / no pad lit: OK only restores size — second intent after a pad focus. 2026-07-21
+        // Mashup OK = deterministic stems-set flip (swap which song feeds each pad).
+        // Hold-OK with no pad focused = random shuffle (see centerShuffleHoldRunnable).
+        // 2026-07-20 / 2026-08-02
         if (session.isMulti()) {
             boolean wakeOnly = StemControls.centerTapWhilePadIdleIsWakeOnly(padsIdle, activeZone);
             // #region agent log
@@ -2770,7 +3688,7 @@ public final class StemPlayerHost {
                 d.put("playbackStarted", playbackStarted);
                 com.solar.launcher.Debug897e32Log.log(host.appContext(),
                         "StemPlayerHost.onCenterTap",
-                        wakeOnly ? "wakeOnly NO shuffle" : "shuffleMashupPads",
+                        wakeOnly ? "wakeOnly NO flip" : "flipMashupPads",
                         "A", d);
             } catch (Exception ignored) {}
             // #endregion
@@ -2779,16 +3697,16 @@ public final class StemPlayerHost {
                 return;
             }
             long t0 = android.os.SystemClock.uptimeMillis();
-            shuffleMashupPads();
+            flipMashupPads();
             // #region agent log
             try {
                 org.json.JSONObject d = new org.json.JSONObject();
-                d.put("shuffleMs", android.os.SystemClock.uptimeMillis() - t0);
+                d.put("flipMs", android.os.SystemClock.uptimeMillis() - t0);
                 org.json.JSONArray zones = new org.json.JSONArray();
                 for (int z = 0; z < 4; z++) zones.put(session.songIndexForZone(z));
                 d.put("zoneSongs", zones);
                 com.solar.launcher.Debug897e32Log.log(host.appContext(),
-                        "StemPlayerHost.onCenterTap", "shuffle done", "E", d);
+                        "StemPlayerHost.onCenterTap", "flip done", "E", d);
             } catch (Exception ignored) {}
             // #endregion
             return;
@@ -2921,6 +3839,8 @@ public final class StemPlayerHost {
                 applySongZoneGain(after[z], z, level);
             }
         }
+        // Shuffle re-routes pads → dominance may flip. 2026-08-02
+        recomputeDominantSong();
         if (mashupFace != null) mashupFace.pulseShuffle();
         if (!initial) notePadInteraction();
         refreshFace();
@@ -2931,6 +3851,58 @@ public final class StemPlayerHost {
                 host.toast("Shuffle");
             } catch (Exception ignored) {}
         }
+    }
+
+    /**
+     * Deterministic stems-set flip — every pad swaps which song feeds it (0 ↔ 1)
+     * at pad-owned levels; pulse the discs. Short OK; the hold-OK path still
+     * randomises ({@link #shuffleMashupPads}). Layman: OK swaps the two songs'
+     * places on the pads, so you always know which track lands where.
+     * Was: short OK always shuffled. Reversal: flip here, shuffle on hold.
+     * 2026-08-02
+     */
+    private void flipMashupPads() {
+        if (!ready || !session.isMulti() || !playbackStarted) return;
+        int[] before = new int[StemMixer.STEM_COUNT];
+        session.copyZoneSongs(before);
+        float[] levels = new float[StemMixer.STEM_COUNT];
+        session.copyPadGains(levels);
+        session.flipSongAssignments();
+        int[] after = new int[StemMixer.STEM_COUNT];
+        session.copyZoneSongs(after);
+        cancelZoneCrossfade();
+        // Re-home at same pad levels — no volume flicker (mirrors shuffle). 2026-08-02
+        for (int z = 0; z < StemMixer.STEM_COUNT; z++) {
+            float level = levels[z];
+            if (session.isZoneBoth(z)) {
+                // Play-both pad keeps both songs fed at the same level; only the
+                // primary flips. 2026-08-02
+                applySongZoneGain(0, z, level);
+                applySongZoneGain(1, z, level);
+                continue;
+            }
+            if (before[z] != after[z]) {
+                float bumped = StemControls.padGainAfterTrackSwitch(level);
+                if (bumped != level) {
+                    level = bumped;
+                    session.setPadGain(z, level);
+                }
+                applySongZoneGain(before[z], z, 0f);
+                applySongZoneGain(after[z], z, level);
+            } else {
+                applySongZoneGain(after[z], z, level);
+            }
+        }
+        // Flip re-routes pads → dominance may flip. 2026-08-02
+        recomputeDominantSong();
+        if (mashupFace != null) mashupFace.pulseShuffle();
+        notePadInteraction();
+        refreshFace();
+        updateInteractedTrackTitle();
+        updateStatusLine();
+        try {
+            host.toast("Swap");
+        } catch (Exception ignored) {}
     }
 
     /**
@@ -3422,6 +4394,7 @@ public final class StemPlayerHost {
      */
     private void beginMixers() {
         releaseMixers();
+        final int gen = jobGen.get();
         final int n = session.songCount();
         // #region agent log
         try {
@@ -3449,19 +4422,54 @@ public final class StemPlayerHost {
                 return;
             }
         }
-        // Per-song BPM from duration; Song 1 is tempo master. 2026-07-20
+        // Per-song BPM — cached stem analysis wins; duration heuristic only as fallback.
         for (int i = 0; i < n; i++) {
             StemSession.SongState st = session.song(i);
             if (st == null) continue;
             int dur = st.track != null ? probeDurationMs(st.track) : 180_000;
-            st.bpm = StemBpm.estimateFromDurationMs(dur);
+            // Real stem analysis beats the duration heuristic when cached. 2026-08-01
+            com.solar.launcher.stem.analysis.StemAnalysisCore.Result a =
+                    st.track != null
+                            ? com.solar.launcher.stem.analysis.StemAnalysisCache.lookup(
+                                    host.appContext(), st.track)
+                            : null;
+            // Key fields are independent of BPM confidence — always copy when analyzed.
+            // (A track can have a detected key with a low-confidence BPM.) 2026-08-02
+            if (a != null) {
+                st.keyLabel = a.keyLabel != null ? a.keyLabel : "";
+                st.camelot = a.camelot != null ? a.camelot : "";
+                st.keyRoot = a.keyRoot;
+                st.keyMajor = a.keyMajor;
+            }
+            if (a != null && a.hasBpm()) {
+                st.bpm = a.bpm;
+                st.bpmConfidence = a.confidence;
+                st.firstBeatMs = a.firstBeatMs;
+            } else {
+                st.bpm = StemBpm.estimateFromDurationMs(dur);
+                st.bpmConfidence = 0f;
+            }
+            // Kick off background analysis for tracks we have no cached result for.
+            maybeAnalyzeInBackground(i, st, gen);
         }
-        StemSession.SongState song0 = session.song(0);
-        float masterBpm = song0 != null ? song0.bpm : StemBpm.DEFAULT_BPM;
+        // Seed (song 0 = first-in-queue / selected track) is the tempo master —
+        // the other stems stretch onto its pulse (StemFM-style). Unknown seed BPM
+        // defers to the partner; both unknown → DEFAULT. Was: faster BPM wins.
+        // 2026-08-01
+        float masterBpm = dominantMasterBpm();
+        if (masterBpm <= 30f) masterBpm = StemBpm.DEFAULT_BPM;
+        
+        // When first loading, initialize the dynamic master anchor.
+        if (currentMasterBpm <= 30f) currentMasterBpm = masterBpm;
+        // IJK native libs missing (KitKat system-app without /system/lib deploy) →
+        // force unity tempo so the MediaPlayer path is used and drift math stays true.
+        // 2026-08-01
+        boolean ijkAvailable = com.solar.launcher.video.SolarIjkPlayerFactory.isIjkAvailable();
         for (int i = 0; i < n; i++) {
             StemSession.SongState st = session.song(i);
             if (st == null) continue;
-            st.tempoRate = StemTempoSync.rateForSong(masterBpm, st.bpm, i);
+            st.tempoRate = ijkAvailable
+                    ? StemTempoSync.rateToMatchMaster(masterBpm, st.bpm) : 1f;
             // screwRate stays cold-start 1.0 — chop hold sets classic screw. 2026-07-20
             st.screwRate = 1f;
         }
@@ -3522,8 +4530,18 @@ public final class StemPlayerHost {
                         onSongPlaybackComplete(songIndex);
                     }
                 });
-                // IJK SoundTouch when slave rate differs; else MediaPlayer + optional bass body. 2026-07-20
-                if (StemTempoSync.needsSoundTouch(st.tempoRate)) {
+                // IJK SoundTouch when slave rate differs or key-shift is needed; else
+                // MediaPlayer + optional bass body. Native pitch (Camelot matching) rides
+                // the same SoundTouch path — slave pads get soundtouch-pitch toward the
+                // seed's key. 2026-07-20 / 2026-08-02
+                StemSession.SongState seed = session.song(dominantSong);
+                float keyPitch = seed != null && seed != st
+                        ? StemSoundTouch.pitchFactorForKeys(
+                                seed.keyRoot, seed.keyMajor, st.keyRoot, st.keyMajor)
+                        : 1f;
+                m.setPitch(keyPitch);
+                if (StemTempoSync.needsSoundTouch(st.tempoRate)
+                        || Math.abs(keyPitch - 1f) > 0.001f) {
                     m.loadWithSoundTouch(st.stems, st.bassBody, st.tempoRate);
                 } else {
                     m.load(st.stems, st.bassBody);
@@ -3631,7 +4649,10 @@ public final class StemPlayerHost {
                         + StemControls.stripTrackDisplayName(nextFile.getName()));
                 statusView.setTextColor(0xFFB0B0B8);
             }
-            softReplaceSong(finishedSong, nextFile);
+            // DJ chain: when the seed (slot 0) finishes, the survivor carries
+            // forward as the new seed/master and the incoming joins as partner;
+            // partner-finish keeps the plain seat replace. 2026-08-01
+            chainAdvanceSong(finishedSong, nextFile, true);
             main.postDelayed(new Runnable() {
                 @Override
                 public void run() {
@@ -3712,7 +4733,7 @@ public final class StemPlayerHost {
         final int savedPreset = transitionPreset;
         final long savedMs = transitionMs;
         if (StemMixQueuePolicy.shouldPairRepeat(stemQueueSize())) {
-            transitionPreset = StemControls.TRANSITION_PRESET_LONG;
+            transitionPreset = StemControls.TRANSITION_PRESET_FULL;
             transitionMs = StemControls.transitionMsForPreset(transitionPreset);
         }
         // Snapshot this song’s zone gains before mute-for-seek. 2026-07-21
@@ -3763,8 +4784,87 @@ public final class StemPlayerHost {
         }, holdMs);
     }
 
+    /**
+     * Set StemFM Quantize Performance mode from the jam context menu (0–3).
+     * 2026-08-01
+     */
+    public void applyJamQuantizeMode(int mode) {
+        quantizeMode = mode;
+        try {
+            host.toast(com.solar.launcher.stem.analysis.StemQuantizePolicy.label(mode));
+        } catch (Exception ignored) {}
+        updateStatusLine();
+    }
+
+    /**
+     * ms until the next quantized boundary for the focused song's beat grid.
+     * 2026-08-01
+     */
+    private int beatDelayForQuantize(int songIndex) {
+        StemMixer m = mixerAt(songIndex);
+        int pos = m != null ? m.getPositionMs() : 0;
+        StemSession.SongState st = session.song(songIndex);
+        float bpm = st != null && st.bpm > 30f ? st.bpm : StemBpm.DEFAULT_BPM;
+        return com.solar.launcher.stem.analysis.StemQuantizePolicy.delayMs(
+                quantizeMode, bpm, pos);
+    }
+
+    /**
+     * Background stem analysis when no cached result exists — fills the cache so the
+     * NEXT session gets real BPM/beat/key instead of the duration heuristic.
+     * 2026-08-01
+     */
+    private void maybeAnalyzeInBackground(final int songIndex,
+            final StemSession.SongState st, final int gen) {
+        if (cancelled.get() || st == null || st.stems == null || st.stems.isEmpty()) return;
+        if (st.bpmConfidence > 0f) return; // already real
+        final java.util.List<LalalClient.StemFile> stems =
+                new java.util.ArrayList<LalalClient.StemFile>(st.stems);
+        final File track = st.track;
+        if (track == null) return;
+        analysisIo.execute(new Runnable() {
+            @Override
+            public void run() {
+                if (cancelled.get() || gen != jobGen.get()) return;
+                com.solar.launcher.stem.analysis.StemAnalysisCore.Result a =
+                        com.solar.launcher.stem.analysis.StemTrackAnalyzer.analyze(
+                                host.appContext(), track, stems, cancelled);
+                if (a == null || cancelled.get() || gen != jobGen.get()) return;
+                com.solar.launcher.stem.analysis.StemAnalysisCache.store(
+                        host.appContext(), track, a);
+                main.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (cancelled.get() || gen != jobGen.get() || !sessionActive) return;
+                        StemSession.SongState live = session.song(songIndex);
+                        if (live == null) return;
+                        // Keys land regardless of BPM confidence; BPM still gated. 2026-08-02
+                        live.keyLabel = a.keyLabel != null ? a.keyLabel : "";
+                        live.camelot = a.camelot != null ? a.camelot : "";
+                        live.keyRoot = a.keyRoot;
+                        live.keyMajor = a.keyMajor;
+                        if (!a.hasBpm()) return;
+                        live.bpm = a.bpm;
+                        live.bpmConfidence = a.confidence;
+                        live.firstBeatMs = a.firstBeatMs;
+                        // Do NOT rebase tempoRate here: the IJK player is already running
+                        // at the rate baked in at beginMixers, so changing st.tempoRate
+                        // mid-session would desync the drift correction (expect = pos×rate
+                        // vs the real media clock) and cause oscillation. The real rate is
+                        // picked up by the next beginMixers from the cache. 2026-08-01
+                        StemMixer m = mixerAt(songIndex);
+                        if (m != null) m.setBpm(live.bpm);
+                        updateStatusLine();
+                        scheduleFaceInvalidate();
+                    }
+                });
+            }
+        });
+    }
+
     /** Best-effort duration for BPM guess (MediaMetadataRetriever). 2026-07-19 */
-    private static int probeDurationMs(File track) {
+    /** Public for StemFM Next-up tempo-match BPM estimation in MainActivity. 2026-08-01 */
+    public static int probeDurationMs(File track) {
         if (track == null || !track.isFile()) return 180_000;
         android.media.MediaMetadataRetriever mmr = null;
         try {
@@ -3800,13 +4900,15 @@ public final class StemPlayerHost {
         // ID3 titles + embedded art for StemFM pads (off UI thread decode → main). 2026-07-20
         loadMashupMetaAndArt();
         // All pads wake at 50% (single + multi) for audible cold start. 2026-07-21
+        // StemFM-style cold start: the seed track populates all 4 pads; the second
+        // track loads silently and enters pads only when the user mixes it in
+        // (repress a pad to cycle it, Play Both, or centre shuffle). Was:
+        // shuffleMashupPads(true) which split pads across both tracks immediately —
+        // the user decides when to mix, like on StemFM. 2026-08-02
         session.seedMashupStartPadGains();
-        if (session.isMulti()) {
-            syncAllSongGainsToMixers();
-            shuffleMashupPads(true);
-        } else {
-            syncAllSongGainsToMixers();
-        }
+        syncAllSongGainsToMixers();
+        // Cold start: all pads on the seed → dominant 0; face emphasis + key set. 2026-08-02
+        recomputeDominantSong();
         // #region agent log
         try {
             int totalPlayers = 0;
@@ -3846,8 +4948,10 @@ public final class StemPlayerHost {
         playbackStarted = false;
         if (mashupFace != null) mashupFace.setCentreTransportPlaying(false);
         main.removeCallbacks(mashDriftRunnable);
+        main.removeCallbacks(tempoDriftRunnable);
         if (mixers != null && mixers.length > 1) {
             main.postDelayed(mashDriftRunnable, 3000);
+            main.postDelayed(tempoDriftRunnable, 250);
         }
         // #region agent log
         try {
@@ -3926,6 +5030,10 @@ public final class StemPlayerHost {
                     t1,
                     session.isMulti() ? session.trackArtistForSong(1) : "",
                     halo, loading, session.songsShareAlbum() || mashupSameArtBytes);
+            // Play-both stacking badges per pad. 2026-08-01
+            boolean[] both = new boolean[4];
+            for (int z = 0; z < 4; z++) both[z] = session.isZoneBoth(z);
+            mashupFace.setBothZones(both);
             // Re-apply Hold-OK scrub chrome after state paint. 2026-07-21
             if (faceScrubArmed) paintFaceScrubCursor();
             feedComplicationDials();
@@ -4148,6 +5256,26 @@ public final class StemPlayerHost {
                 || keyCode == KeyEvent.KEYCODE_BUTTON_A
                 || keyCode == 66
                 || keyCode == 23;
+    }
+
+    /**
+     * Directional DPAD → StemFM compass pad focus: DPAD_UP → Vocals (N),
+     * DPAD_LEFT → Bass (W), DPAD_RIGHT → Melody (E), DPAD_DOWN → Drums (S).
+     * These are direct, hold-timer-free paths so every pad is reachable
+     * regardless of hold timer / long-press logic on Prev/Next/Play/Back.
+     * 2026-08-02
+     */
+    private static boolean isDpadPadUp(int keyCode) {
+        return keyCode == KeyEvent.KEYCODE_DPAD_UP;
+    }
+    private static boolean isDpadPadDown(int keyCode) {
+        return keyCode == KeyEvent.KEYCODE_DPAD_DOWN;
+    }
+    private static boolean isDpadPadLeft(int keyCode) {
+        return keyCode == KeyEvent.KEYCODE_DPAD_LEFT;
+    }
+    private static boolean isDpadPadRight(int keyCode) {
+        return keyCode == KeyEvent.KEYCODE_DPAD_RIGHT;
     }
 
     private static int zoneColor(int z) {

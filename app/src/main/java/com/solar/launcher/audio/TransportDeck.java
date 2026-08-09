@@ -66,6 +66,10 @@ public final class TransportDeck {
 
             @Override
             public void onError(String message) {
+                // A failed origin must stop advertising a prepared/started deck. The
+                // transport listener will clear process-wide ownership for the active deck.
+                prepared = false;
+                started = false;
                 if (listener != null) listener.onError(TransportDeck.this, message);
             }
 
@@ -115,7 +119,7 @@ public final class TransportDeck {
         url = null;
         if (track == null || !track.isFile()) throw new IOException("TransportDeck missing file");
         path = track;
-        mixer.loadOrigin(track.getAbsolutePath());
+        mixer.loadOrigin(track.getAbsolutePath(), preferIjk);
     }
 
     public void loadFile(File track) throws IOException {

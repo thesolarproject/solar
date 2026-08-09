@@ -131,6 +131,25 @@ public final class StemOtherPremix {
      */
     static int decodeMp3ToMonoPcm(File mp3, File pcmOut, AtomicBoolean cancelled,
             MixProgress progress, int basePct, int spanPct, String label) throws Exception {
+        return decodeMp3ToMonoPcm(mp3, pcmOut, cancelled, progress, basePct, spanPct,
+                label, MAX_SAMPLES);
+    }
+
+    /**
+     * Public windowed decode for stem analysis — stops after {@code maxSamples} mono
+     * samples so a short tempo window costs seconds, not a full-track decode, on Y1-class
+     * CPUs. Exposed across packages for {@code com.solar.launcher.stem.analysis}.
+     * 2026-08-01
+     */
+    public static int decodeMp3ToMonoPcm(File mp3, File pcmOut, AtomicBoolean cancelled,
+            int maxSamples) throws Exception {
+        return decodeMp3ToMonoPcm(mp3, pcmOut, cancelled, null, 0, 0, "Decode", maxSamples);
+    }
+
+    static int decodeMp3ToMonoPcm(File mp3, File pcmOut, AtomicBoolean cancelled,
+            MixProgress progress, int basePct, int spanPct, String label, int maxSamples)
+            throws Exception {
+        int cap = maxSamples > 0 ? maxSamples : MAX_SAMPLES;
         MediaExtractor ex = new MediaExtractor();
         MediaCodec codec = null;
         FileOutputStream fos = null;
@@ -179,7 +198,7 @@ public final class StemOtherPremix {
             long lastReportMs = 0L;
             int lastReportedPct = -1;
 
-            while (!outputDone && written < MAX_SAMPLES) {
+            while (!outputDone && written < cap) {
                 throwIfCancelled(cancelled);
                 if (!inputDone) {
                     int inIx = codec.dequeueInputBuffer(10_000);
@@ -214,14 +233,14 @@ public final class StemOtherPremix {
                         outBuf.limit(info.offset + info.size);
                         int frameBytes = 2 * inCh;
                         int frames = info.size / frameBytes;
-                        for (int f = 0; f < frames && written < MAX_SAMPLES; f++) {
+                        for (int f = 0; f < frames && written < cap; f++) {
                             int sum = 0;
                             for (int c = 0; c < inCh; c++) sum += outBuf.getShort();
                             short mono = (short) (sum / inCh);
                             long outStart = (inSample * OUT_HZ) / inHz;
                             long outEnd = ((inSample + 1) * OUT_HZ) / inHz;
                             if (outEnd <= outStart) outEnd = outStart + 1;
-                            while (written < outEnd && written < MAX_SAMPLES) {
+                            while (written < outEnd && written < cap) {
                                 pair[0] = (byte) (mono & 0xff);
                                 pair[1] = (byte) ((mono >> 8) & 0xff);
                                 bos.write(pair);
@@ -234,8 +253,8 @@ public final class StemOtherPremix {
                         if (durationUs > 0 && info.presentationTimeUs > 0) {
                             local = (int) ((info.presentationTimeUs * 100L) / durationUs);
                             if (local > 99) local = 99;
-                        } else if (MAX_SAMPLES > 0) {
-                            local = (written * 100) / MAX_SAMPLES;
+                        } else if (cap > 0) {
+                            local = (written * 100) / cap;
                         }
                         int mapped = basePct + (local * spanPct) / 100;
                         if (mapped != lastReportedPct && (now - lastReportMs >= 400

@@ -50,24 +50,25 @@ public final class StemControls {
      * Was: instant pad song swap (routing only). Reversal: ignore these; call swapPadStem.
      * 2026-07-20
      */
-    public static final int TRANSITION_PRESET_LONG = 0;
-    public static final int TRANSITION_PRESET_OVERLAP = 1; // ∞
-    public static final int TRANSITION_PRESET_WAVE = 2;
+    // StemFM transition modes (pacing), not DJ fade labels. 2026-08-01
+    public static final int TRANSITION_PRESET_FULL = 0;       // Full Tracks — hear most of each song
+    public static final int TRANSITION_PRESET_BALANCED = 1;   // Balanced Mix — default steady pace
+    public static final int TRANSITION_PRESET_SHORT = 2;      // Short & Punchy — fast, hard cut
     public static final int TRANSITION_PRESET_INSTANT = 3;
-    public static final long TRANSITION_LONG_MS = 4000L;
-    public static final long TRANSITION_OVERLAP_MS = 8000L;
-    public static final long TRANSITION_WAVE_MS = 400L;
+    public static final long TRANSITION_FULL_MS = 4000L;
+    public static final long TRANSITION_BALANCED_MS = 2000L;
+    public static final long TRANSITION_SHORT_MS = 400L;
     public static final long TRANSITION_INSTANT_MS = 0L;
-    /** Default mashup song-replace blend (LONG). Pad repress uses WAVE. 2026-07-20 / 2026-07-21 */
-    public static final long TRANSITION_DEFAULT_MS = TRANSITION_LONG_MS;
+    /** Default mashup song-replace blend (Balanced Mix). Pad repress uses SHORT. 2026-08-01 */
+    public static final long TRANSITION_DEFAULT_MS = TRANSITION_BALANCED_MS;
     /**
-     * Pad repress / shuffle zone swap — snappy “instant” feel (WAVE).
+     * Pad repress / shuffle zone swap — snappy “instant” feel (SHORT).
      * Layman: flipping a pad to the other song blends in a blink.
-     * Was: used full TRANSITION_DEFAULT_MS (4s) for repress. Reversal: return transitionMs.
+     * Was: used full TRANSITION_DEFAULT_MS for repress. Reversal: return transitionMs.
      * 2026-07-21
      */
     public static long padRepressTransitionMs() {
-        return TRANSITION_WAVE_MS;
+        return TRANSITION_SHORT_MS;
     }
     /**
      * Two-track jam cold start — every pad at 50% before initial shuffle.
@@ -130,6 +131,21 @@ public final class StemControls {
     }
 
     /**
+     * Accept the first physical DOWN, or Phone Chrome's one-shot long-press marker.
+     * A real Android key repeat is ignored once the matching key is already down;
+     * Phone Chrome has no repeat-0 DOWN, so it uses repeat=1 as its complete marker.
+     * 2026-08-03
+     */
+    public static boolean startsPadHoldDown(int repeatCount, boolean alreadyDown) {
+        return repeatCount == 0 || (repeatCount == 1 && !alreadyDown);
+    }
+
+    /** True only for Phone Chrome's synthetic long-press marker, not a real repeat. */
+    public static boolean isSyntheticPadHold(int repeatCount, boolean alreadyDown) {
+        return repeatCount == 1 && !alreadyDown;
+    }
+
+    /**
      * Hold Center this long on a focused pad → circular face scrub (not shuffle).
      * Layman: keep OK down a beat to scrub that pad’s song; a quick click still shuffles.
      * Same intentional length as pad Options so short≠hold stays consistent.
@@ -148,6 +164,19 @@ public final class StemControls {
      */
     public static boolean centerHoldArmsPadScrub(boolean ready, int activeZone) {
         return ready && activeZone >= 0 && activeZone < StemMixer.STEM_COUNT;
+    }
+
+    /**
+     * Hold OK with NO pad focused randomises pad→song (StemFM centre shuffle);
+     * a quick OK instead flips the stems set deterministically (see
+     * {@code StemSession.flipSongAssignments}). With a pad focused, hold OK still
+     * arms circular scrub ({@link #centerHoldArmsPadScrub}) instead.
+     * Layman: click OK to swap the two songs' places; hold OK (no pad lit) to shuffle.
+     * 2026-08-02
+     */
+    public static boolean centerHoldArmsShuffle(boolean ready, boolean multi,
+            boolean playbackStarted, int activeZone) {
+        return ready && multi && playbackStarted && activeZone < 0;
     }
 
     /**
@@ -182,6 +211,18 @@ public final class StemControls {
      */
     public static float padIdleDrawScale(boolean padsIdle) {
         return padsIdle ? PAD_IDLE_SHRINK_SCALE : 1f;
+    }
+
+    /**
+     * Smoothstep ease for the meatball fold/fan animation (0..1 in, 0..1 out).
+     * Layman: pads glide into the two discs, not a hard snap.
+     * Audio path unchanged — paint only.
+     * 2026-08-01
+     */
+    public static float meatballEase(float t) {
+        if (t <= 0f) return 0f;
+        if (t >= 1f) return 1f;
+        return t * t * (3f - 2f * t);
     }
 
     /**
@@ -535,6 +576,13 @@ public final class StemControls {
      * Was: pickShufflePadSongs (blocked when B had 0 pads) + 2:2 bias. Reversal: that call.
      * 2026-07-21
      */
+    /**
+     * @deprecated Legacy cold-start pad split (both songs get ≥1 pad). The host now
+     * starts StemFM-style: seed track on all 4 pads, second track enters only when
+     * the user mixes it in. Reachable only via {@code StemSession.initialMashupShuffle}
+     * (test / back-compat). 2026-07-21 / 2026-08-02
+     */
+    @Deprecated
     public static boolean pickInitialMashupPadSongs(int[] zoneSongsInOut, int songCount, Random rng) {
         if (zoneSongsInOut == null || zoneSongsInOut.length < 4 || songCount < 2) return false;
         if (rng == null) rng = new Random();
@@ -596,12 +644,38 @@ public final class StemControls {
      */
     public static long bestPhysicalHoldMs(long localDownUptimeMs, long nowUptimeMs,
             long eventDownTimeMs, long eventTimeMs) {
-        // 2026-07-21 — Trust kernel interrupt timestamps first when valid (MTK dual/quad-core safe).
-        // If UI thread lagged between DOWN and UP, nowUptimeMs - localDownUptimeMs is artificially inflated.
-        long physical = physicalKeyHoldMs(eventDownTimeMs, eventTimeMs);
+        return bestPhysicalHoldMs(localDownUptimeMs, nowUptimeMs,
+                eventDownTimeMs, eventDownTimeMs, eventTimeMs);
+    }
+
+    /**
+     * Best physical hold estimate for a pad key press.
+     * Layman: a quick tap stays a tap even if the UI thread only got around to the UP
+     * event 600ms later; a real 520ms+ hold still opens Options.
+     * Was: only the DOWN-recorded baseline (a shared field a second pad can clobber,
+     * or 0 on MTK) paired with the UP time, then the lag-inflated uptime delta.
+     * Reversal: prefer the UP event's own (downTime, eventTime) pair — both stamps are
+     * kernel interrupt times, so the delta is self-consistent, per-key, and immune to
+     * both main-thread lag and shared-field clobbering. Fall back to the recorded
+     * baseline, then to local uptime. 2026-08-01
+     */
+    public static long bestPhysicalHoldMs(long localDownUptimeMs, long nowUptimeMs,
+            long recordedDownEventTimeMs, long upEventDownTimeMs, long upEventTimeMs) {
+        // UP event's own kernel pair is self-consistent and UI-lag-immune.
+        long physical = physicalKeyHoldMs(upEventDownTimeMs, upEventTimeMs);
         if (physical > 0L) {
             return physical;
         }
+        // Fall back to the DOWN-recorded baseline (still kernel-stamped) + UP event time.
+        // Only re-check when it differs from the UP pair we just tried (4-arg delegate
+        // passes the same source for both — skip the redundant re-compute). 2026-08-01
+        if (recordedDownEventTimeMs != upEventDownTimeMs) {
+            physical = physicalKeyHoldMs(recordedDownEventTimeMs, upEventTimeMs);
+            if (physical > 0L) {
+                return physical;
+            }
+        }
+        // Last resort: local uptime delta (lag-inflated, but the only signal when MTK zeroes both).
         if (localDownUptimeMs > 0L && nowUptimeMs >= localDownUptimeMs) {
             return nowUptimeMs - localDownUptimeMs;
         }
@@ -823,9 +897,9 @@ public final class StemControls {
      */
     public static long transitionMsForPreset(int preset) {
         if (preset == TRANSITION_PRESET_INSTANT) return TRANSITION_INSTANT_MS;
-        if (preset == TRANSITION_PRESET_OVERLAP) return TRANSITION_OVERLAP_MS;
-        if (preset == TRANSITION_PRESET_WAVE) return TRANSITION_WAVE_MS;
-        return TRANSITION_LONG_MS;
+        if (preset == TRANSITION_PRESET_SHORT) return TRANSITION_SHORT_MS;
+        if (preset == TRANSITION_PRESET_BALANCED) return TRANSITION_BALANCED_MS;
+        return TRANSITION_FULL_MS;
     }
 
     /**

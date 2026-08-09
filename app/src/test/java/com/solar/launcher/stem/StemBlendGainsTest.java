@@ -49,8 +49,8 @@ public class StemBlendGainsTest {
 
     @Test
     public void waveUsesLinearPathFlag() {
-        assertFalse(StemBlendGains.useEqualPowerForPreset(StemControls.TRANSITION_PRESET_WAVE));
-        assertTrue(StemBlendGains.useEqualPowerForPreset(StemControls.TRANSITION_PRESET_LONG));
+        assertFalse(StemBlendGains.useEqualPowerForPreset(StemControls.TRANSITION_PRESET_SHORT));
+        assertTrue(StemBlendGains.useEqualPowerForPreset(StemControls.TRANSITION_PRESET_FULL));
     }
 
     @Test

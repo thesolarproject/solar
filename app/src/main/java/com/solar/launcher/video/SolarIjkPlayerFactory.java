@@ -66,6 +66,38 @@ public final class SolarIjkPlayerFactory {
         return Collections.unmodifiableList(out);
     }
 
+    /** Cached native-lib availability probe (negative cache after first failure). 2026-08-01 */
+    private static volatile Boolean ijkNativeAvailable;
+
+    /**
+     * True when the IJK native libraries can actually be loaded on this device.
+     * Layman: check the player engine is really installed before using it.
+     * Technical: probes System.loadLibrary("ijkffmpeg") once and caches. KitKat
+     * system-app installs do not extract APK-embedded .so unless also present in
+     * /system/lib, so callers must degrade to MediaPlayer instead of crashing with
+     * UnsatisfiedLinkError (see the mashup two-song crash on Y2).
+     * 2026-08-01
+     */
+    public static boolean isIjkAvailable() {
+        Boolean cached = ijkNativeAvailable;
+        if (cached != null) return cached.booleanValue();
+        synchronized (SolarIjkPlayerFactory.class) {
+            if (ijkNativeAvailable == null) {
+                boolean ok = false;
+                try {
+                    System.loadLibrary("ijkffmpeg");
+                    System.loadLibrary("ijksdl");
+                    System.loadLibrary("ijkplayer");
+                    ok = true;
+                } catch (Throwable t) {
+                    ok = false;
+                }
+                ijkNativeAvailable = Boolean.valueOf(ok);
+            }
+            return ijkNativeAvailable.booleanValue();
+        }
+    }
+
     public static IjkMediaPlayer create() {
         IjkMediaPlayer player = new IjkMediaPlayer();
         applyY1Options(player);

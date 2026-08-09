@@ -16,7 +16,7 @@ import java.util.List;
 /**
  * Synced MediaPlayers for Stem Player + NP Stems master (origin or 4-pad mix).
  * Layman: Stem Player pads, or Now Playing original file vs reconstituted stems.
- * Technical: ORIGIN = one MediaPlayer; PADS = loopCtrl + beat roll + optional bass_body;
+ * Technical: ORIGIN = one decoder backend; PADS = loopCtrl + beat roll + optional bass_body;
  * magical swap = matched seek + SoloLayerGains-timed crossfade. Was: pads-only.
  * Reversal: drop origin/swap APIs; NP back on SolarTransport layers / ensureSolo.
  * 2026-07-19 / 2026-07-20 / 2026-07-21
@@ -70,6 +70,8 @@ public final class StemMixer {
     private boolean started;
     private boolean autoStartPending;
     private boolean released;
+    /** Generation invalidates decoder callbacks queued by a previous load/session. */
+    private int callbackGeneration;
     private boolean looping;
     private int loopStartMs;
     private int loopEndMs;
@@ -78,6 +80,11 @@ public final class StemMixer {
     private float bpm = StemBpm.DEFAULT_BPM;
     /** Cross-song tempo rate (Song1=1). Applied via IJK SoundTouch when ≠1. 2026-07-19 */
     private float targetRate = 1f;
+    /**
+     * Native pitch factor for Camelot key matching (Song1's key = 1.0 reference).
+     * Applied via IJK soundtouch-pitch on live pads. 2026-08-02
+     */
+    private float pitchFactor = 1f;
     /** Paths for IJK reload when rate needs SoundTouch. */
     private String[] playerPaths = new String[0];
     private String bassBodyPath;
@@ -92,6 +99,12 @@ public final class StemMixer {
      * 2026-07-21
      */
     private boolean songCompleteFired;
+    /** Uptime until which completion callbacks are treated as seek noise, not track end.
+     * 2026-08-01 — seekTo on IJK/MediaPlayer can fire a spurious onCompletion that the
+     * transport/pad listeners would otherwise treat as song end (reset to 0 / next track).
+     */
+    private volatile long suppressCompleteUntilUptimeMs = 0;
+    private static final long SEEK_COMPLETE_SUPPRESS_MS = 2000L;
 
     /** Hold-stem beat roll — one zone at a time (fields keep stutter* names). 2026-07-20 */
     private int stutterZone = -1;
@@ -248,6 +261,68 @@ public final class StemMixer {
         this.listener = listener;
     }
 
+    /**
+     * Deliver host callbacks on the Android main looper. MediaPlayer callbacks are normally
+     * main-thread callbacks, but IJK callbacks can arrive from a decoder thread; Stem Player
+     * listeners update Views and must never be invoked directly from either callback source.
+     */
+    private void notifyReady() {
+        notifyReady(callbackGeneration);
+    }
+
+    private void notifyReady(final int generation) {
+        final Listener target = listener;
+        if (target == null) return;
+        main.post(new Runnable() {
+            @Override
+            public void run() {
+                if (!shouldDeliverCallback(released, callbackGeneration, generation)
+                        || target != listener) return;
+                target.onReady();
+            }
+        });
+    }
+
+    private void notifyError(final String message) {
+        notifyError(message, callbackGeneration);
+    }
+
+    private void notifyError(final String message, final int generation) {
+        final Listener target = listener;
+        if (target == null) return;
+        main.post(new Runnable() {
+            @Override
+            public void run() {
+                if (!shouldDeliverCallback(released, callbackGeneration, generation)
+                        || target != listener) return;
+                target.onError(message);
+            }
+        });
+    }
+
+    private void notifyComplete() {
+        notifyComplete(callbackGeneration);
+    }
+
+    private void notifyComplete(final int generation) {
+        final Listener target = listener;
+        if (target == null) return;
+        main.post(new Runnable() {
+            @Override
+            public void run() {
+                if (!shouldDeliverCallback(released, callbackGeneration, generation)
+                        || target != listener) return;
+                target.onComplete();
+            }
+        });
+    }
+
+    /** Pure stale-callback gate; kept package-visible for JVM regression coverage. */
+    static boolean shouldDeliverCallback(boolean released, int currentGeneration,
+            int callbackGeneration) {
+        return !released && currentGeneration == callbackGeneration;
+    }
+
     /** Optional callback when magical origin↔pads swap lands. 2026-07-21 */
     public void setSwapListener(SwapListener listener) {
         this.swapListener = listener;
@@ -278,11 +353,20 @@ public final class StemMixer {
      * 2026-07-21
      */
     public void loadOrigin(String pathOrUrl) throws IOException {
+        loadOrigin(pathOrUrl, false);
+    }
+
+    /**
+     * Load one origin feed behind the shared transport, selecting IJK only when needed.
+     * Network origins always use IJK; callers can force IJK for local formats that the
+     * API-17 platform decoder cannot reliably open (for example YouTube Opus/WebM).
+     */
+    public void loadOrigin(String pathOrUrl, boolean preferIjk) throws IOException {
         if (pathOrUrl == null || pathOrUrl.trim().isEmpty()) {
             throw new IOException("Need origin file or url");
         }
         releasePlayersOnly();
-        usingIjk = false;
+        final int loadGeneration = callbackGeneration;
         preparedCount = 0;
         started = false;
         looping = false;
@@ -296,8 +380,18 @@ public final class StemMixer {
         }
         originPath = pathOrUrl;
         expectedPrepare = 1;
-        
-        if (pathOrUrl.startsWith("http") || pathOrUrl.startsWith("https")) {
+        boolean useIjkOrigin = shouldUseIjkOrigin(pathOrUrl, preferIjk);
+        // IJK native libs missing (KitKat system-app without /system/lib deploy) —
+        // route network / opus-webm origins through the platform MediaPlayer instead of
+        // crashing with UnsatisfiedLinkError on the main thread. 2026-08-01
+        if (useIjkOrigin && !com.solar.launcher.video.SolarIjkPlayerFactory.isIjkAvailable()) {
+            useIjkOrigin = false;
+        }
+        // Keep the backend state truthful: origin controls use this flag when pad arrays
+        // are absent, and cleanup must not mistake an IJK origin for a platform pad set.
+        usingIjk = useIjkOrigin;
+
+        if (useIjkOrigin) {
             originIjkPlayer = com.solar.launcher.video.SolarIjkPlayerFactory.create();
             StemSoundTouch.applyStemPlayerOptions(originIjkPlayer);
             originIjkPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
@@ -305,19 +399,37 @@ public final class StemMixer {
             originIjkPlayer.setOnPreparedListener(new tv.danmaku.ijk.media.player.IMediaPlayer.OnPreparedListener() {
                 @Override
                 public void onPrepared(tv.danmaku.ijk.media.player.IMediaPlayer p) {
+                    if (p != originIjkPlayer || released || loadGeneration != callbackGeneration) return;
                     preparedCount++;
                     applyOriginGain();
-                    if (preparedCount >= expectedPrepare && listener != null) {
-                        listener.onReady();
+                    if (preparedCount >= expectedPrepare) {
+                        notifyReady(loadGeneration);
                     }
                 }
             });
             originIjkPlayer.setOnCompletionListener(new tv.danmaku.ijk.media.player.IMediaPlayer.OnCompletionListener() {
                 @Override
                 public void onCompletion(tv.danmaku.ijk.media.player.IMediaPlayer p) {
-                    if (released || sourceMode != SourceMode.ORIGIN) return;
+                    if (p != originIjkPlayer) return;
+                    if (released || loadGeneration != callbackGeneration
+                            || sourceMode != SourceMode.ORIGIN) return;
+                    if (seekCompletionSuppressed()) return;
                     pause();
-                    if (listener != null) listener.onComplete();
+                    notifyComplete(loadGeneration);
+                }
+            });
+            originIjkPlayer.setOnErrorListener(new tv.danmaku.ijk.media.player.IMediaPlayer.OnErrorListener() {
+                @Override
+                public boolean onError(tv.danmaku.ijk.media.player.IMediaPlayer p, int what, int extra) {
+                    // A delayed callback from a replaced origin must not tear down the
+                    // newly loaded backend.
+                    if (p != originIjkPlayer || released
+                            || loadGeneration != callbackGeneration) return true;
+                    started = false;
+                    preparedCount = 0;
+                    releaseOriginOnly();
+                    notifyError("Origin play error " + what + "/" + extra, loadGeneration);
+                    return true;
                 }
             });
             originIjkPlayer.prepareAsync();
@@ -328,24 +440,37 @@ public final class StemMixer {
             originPlayer.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
                 @Override
                 public void onPrepared(MediaPlayer mediaPlayer) {
+                    if (mediaPlayer != originPlayer || released
+                            || loadGeneration != callbackGeneration) return;
                     preparedCount++;
                     applyOriginGain();
-                    if (preparedCount >= expectedPrepare && listener != null) {
-                        listener.onReady();
+                    if (preparedCount >= expectedPrepare) {
+                        notifyReady(loadGeneration);
                     }
                 }
             });
+            originPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
+                @Override
+                public void onCompletion(MediaPlayer mediaPlayer) {
+                    if (mediaPlayer != originPlayer) return;
+                    if (released || loadGeneration != callbackGeneration
+                            || sourceMode != SourceMode.ORIGIN) return;
+                    if (seekCompletionSuppressed()) return;
+                    pause();
+                    notifyComplete(loadGeneration);
+                }
+            });
+            wireOriginError(originPlayer, loadGeneration);
+            originPlayer.prepareAsync();
         }
-        originPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
-            @Override
-            public void onCompletion(MediaPlayer mediaPlayer) {
-                if (released || sourceMode != SourceMode.ORIGIN) return;
-                pause();
-                if (listener != null) listener.onComplete();
-            }
-        });
-        wireError(originPlayer);
-        originPlayer.prepareAsync();
+    }
+
+    /** Pure decoder-selection policy; safe to exercise in JVM tests. */
+    static boolean shouldUseIjkOrigin(String pathOrUrl, boolean preferIjk) {
+        if (pathOrUrl == null) return false;
+        if (preferIjk) return true;
+        return pathOrUrl.regionMatches(true, 0, "http://", 0, 7)
+                || pathOrUrl.regionMatches(true, 0, "https://", 0, 8);
     }
 
     /**
@@ -386,6 +511,7 @@ public final class StemMixer {
      * 2026-07-21
      */
     public void seekTo(int ms) {
+        armSeekCompletionSuppression();
         if (sourceMode == SourceMode.ORIGIN && (originPlayer != null || originIjkPlayer != null)) {
             try {
                 if (originPlayer != null) originPlayer.seekTo(Math.max(0, ms));
@@ -427,9 +553,7 @@ public final class StemMixer {
             originPath = keepPath;
         } catch (Exception e) {
             swapBusy = false;
-            if (listener != null) {
-                listener.onError(e.getMessage() != null ? e.getMessage() : "pad swap failed");
-            }
+            notifyError(e.getMessage() != null ? e.getMessage() : "pad swap failed");
         }
     }
 
@@ -469,9 +593,7 @@ public final class StemMixer {
             applyOriginGain();
         } catch (Exception e) {
             swapBusy = false;
-            if (listener != null) {
-                listener.onError(e.getMessage() != null ? e.getMessage() : "origin swap failed");
-            }
+            notifyError(e.getMessage() != null ? e.getMessage() : "origin swap failed");
         }
     }
 
@@ -674,6 +796,8 @@ public final class StemMixer {
         }
         originPath = null;
         originGain = 1f;
+        // Origin cleanup must not leave the pad/backend selector claiming IJK.
+        usingIjk = false;
     }
 
     /** Tear down pad players only (origin may keep playing). 2026-07-21 */
@@ -779,17 +903,54 @@ public final class StemMixer {
     }
 
     /**
+     * Native pitch shift for Camelot key matching (stem-mashup analog of MixDeck.setPitch).
+     * Layman: nudge this song's pitch so its key sits near Song 1's, like a harmonic DJ mix.
+     * Technical: stores factor; applies IJK soundtouch-pitch on live pads when usingIjk.
+     * Also picked up at pad build time inside loadWithSoundTouch. 2026-08-02
+     */
+    public void setPitch(float pitchFactorValue) {
+        float p = pitchFactorValue > 0.01f ? pitchFactorValue : 1f;
+        pitchFactor = p;
+        if (usingIjk) applyIjkPitch(p);
+    }
+
+    /** Apply SoundTouch pitch on live IJK pads. 2026-08-02 */
+    private void applyIjkPitch(float pitch) {
+        if (ijkPlayers != null) {
+            for (int i = 0; i < ijkPlayers.length; i++) {
+                if (ijkPlayers[i] == null) continue;
+                StemSoundTouch.applyPitchOption(ijkPlayers[i], pitch);
+            }
+        }
+        if (ijkBassBody != null) {
+            StemSoundTouch.applyPitchOption(ijkBassBody, pitch);
+        }
+    }
+
+    /**
      * Build IJK stem pads with soundtouch=1 at targetRate (songs 2–3 when BPM differs).
      * Call instead of MediaPlayer load when StemTempoSync.needsSoundTouch(rate).
      * 2026-07-19
      */
     public void loadWithSoundTouch(List<LalalClient.StemFile> stems, File bassBodyWav, float rate)
             throws IOException {
+        // IJK native libs missing (KitKat system-app without /system/lib deploy) —
+        // fall back to MediaPlayer pads at unity rate instead of crashing with
+        // UnsatisfiedLinkError. Tempo match is degraded (no SoundTouch), playback lives.
+        // 2026-08-02 — Camelot key pitch is also skipped here (needs IJK soundtouch-pitch).
+        // 2026-08-01
+        if (!com.solar.launcher.video.SolarIjkPlayerFactory.isIjkAvailable()) {
+            // load() sets usingIjk = false itself — fall back at unity rate.
+            targetRate = 1f;
+            load(stems, bassBodyWav);
+            return;
+        }
         float r = rate > 0.1f ? rate : 1f;
         if (r < StemBpm.MIN_RATE) r = StemBpm.MIN_RATE;
         if (r > StemBpm.MAX_RATE) r = StemBpm.MAX_RATE;
         targetRate = r;
         releasePlayersOnly();
+        final int loadGeneration = callbackGeneration;
         preparedCount = 0;
         started = false;
         looping = false;
@@ -833,12 +994,14 @@ public final class StemMixer {
             tv.danmaku.ijk.media.player.IjkMediaPlayer ijk =
                     com.solar.launcher.video.SolarIjkPlayerFactory.create();
             StemSoundTouch.applyStemPlayerOptions(ijk);
+            StemSoundTouch.applyPitchOption(ijk, pitchFactor);
             ijk.setAudioStreamType(AudioManager.STREAM_MUSIC);
             ijk.setDataSource(playerPaths[i]);
             final float speed = targetRate;
             ijk.setOnPreparedListener(new tv.danmaku.ijk.media.player.IMediaPlayer.OnPreparedListener() {
                 @Override
                 public void onPrepared(tv.danmaku.ijk.media.player.IMediaPlayer mp) {
+                    if (released || loadGeneration != callbackGeneration) return;
                     preparedCount++;
                     try {
                         ijk.setSpeed(speed);
@@ -857,14 +1020,14 @@ public final class StemMixer {
                     if (preparedCount >= expectedPrepare) {
                         autoStartPending = false;
                         refineMsPerBar();
-                        if (listener != null) listener.onReady();
+                        notifyReady(loadGeneration);
                     }
                 }
             });
             ijk.setOnCompletionListener(new tv.danmaku.ijk.media.player.IMediaPlayer.OnCompletionListener() {
                 @Override
                 public void onCompletion(tv.danmaku.ijk.media.player.IMediaPlayer mp) {
-                    if (released) return;
+                    if (released || loadGeneration != callbackGeneration) return;
                     // Hard-muted — do not restart (volume-0 still audible on IJK). 2026-07-19
                     if (zone >= 0 && zone < STEM_COUNT && StemControls.isGainSilent(gains[zone])) {
                         return;
@@ -884,6 +1047,7 @@ public final class StemMixer {
                         return;
                     }
                     // Whole-song end: any audible pad may signal (Vocals mute must not kill seat). 2026-07-21
+                    if (seekCompletionSuppressed()) return;
                     maybeFireSongComplete(zone);
                 }
             });
@@ -894,11 +1058,13 @@ public final class StemMixer {
             bassBodyPath = bassBodyWav.getAbsolutePath();
             ijkBassBody = com.solar.launcher.video.SolarIjkPlayerFactory.create();
             StemSoundTouch.applyStemPlayerOptions(ijkBassBody);
+            StemSoundTouch.applyPitchOption(ijkBassBody, pitchFactor);
             ijkBassBody.setAudioStreamType(AudioManager.STREAM_MUSIC);
             ijkBassBody.setDataSource(bassBodyPath);
             ijkBassBody.setOnPreparedListener(new tv.danmaku.ijk.media.player.IMediaPlayer.OnPreparedListener() {
                 @Override
                 public void onPrepared(tv.danmaku.ijk.media.player.IMediaPlayer mp) {
+                    if (released || loadGeneration != callbackGeneration) return;
                     preparedCount++;
                     try {
                         ijkBassBody.setSpeed(targetRate);
@@ -917,7 +1083,7 @@ public final class StemMixer {
                     if (preparedCount >= expectedPrepare) {
                         autoStartPending = false;
                         refineMsPerBar();
-                        if (listener != null) listener.onReady();
+                        notifyReady(loadGeneration);
                     }
                 }
             });
@@ -962,6 +1128,7 @@ public final class StemMixer {
 
     public void load(List<LalalClient.StemFile> stems, File bassBodyWav) throws IOException {
         releasePlayersOnly();
+        final int loadGeneration = callbackGeneration;
         // Pad mode unless a swap temporarily reattached origin. 2026-07-21
         if (originPlayer == null && originIjkPlayer == null) sourceMode = SourceMode.PADS;
         usingIjk = false;
@@ -1008,9 +1175,9 @@ public final class StemMixer {
             players[i] = mp;
             mp.setAudioStreamType(AudioManager.STREAM_MUSIC);
             mp.setDataSource(stem.file.getAbsolutePath());
-            wirePrepared(mp, zone);
-            wireCompletion(mp, zone, index, stem.id);
-            wireError(mp);
+            wirePrepared(mp, zone, loadGeneration);
+            wireCompletion(mp, zone, index, stem.id, loadGeneration);
+            wireError(mp, loadGeneration);
             mp.prepareAsync();
         }
         if (wantBody) {
@@ -1018,9 +1185,9 @@ public final class StemMixer {
             bassBodyPlayer = new MediaPlayer();
             bassBodyPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
             bassBodyPlayer.setDataSource(bassBodyWav.getAbsolutePath());
-            wirePrepared(bassBodyPlayer, 2);
-            wireCompletion(bassBodyPlayer, 2, -1, "bass_body");
-            wireError(bassBodyPlayer);
+            wirePrepared(bassBodyPlayer, 2, loadGeneration);
+            wireCompletion(bassBodyPlayer, 2, -1, "bass_body", loadGeneration);
+            wireError(bassBodyPlayer, loadGeneration);
             bassBodyPlayer.prepareAsync();
         } else {
             bassBodyPath = null;
@@ -1041,10 +1208,11 @@ public final class StemMixer {
         // #endregion
     }
 
-    private void wirePrepared(MediaPlayer mp, final int zone) {
+    private void wirePrepared(MediaPlayer mp, final int zone, final int loadGeneration) {
         mp.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
             @Override
             public void onPrepared(MediaPlayer mediaPlayer) {
+                if (released || loadGeneration != callbackGeneration) return;
                 preparedCount++;
                 applyGain(zone);
                 if (started && !released && !mediaPlayer.isPlaying()) {
@@ -1060,17 +1228,19 @@ public final class StemMixer {
                 if (preparedCount >= expectedPrepare) {
                     autoStartPending = false;
                     refineMsPerBar();
-                    if (listener != null) listener.onReady();
+                    notifyReady(loadGeneration);
                 }
             }
         });
     }
 
-    private void wireCompletion(MediaPlayer mp, final int zone, final int index, final String id) {
+    private void wireCompletion(MediaPlayer mp, final int zone, final int index,
+            final String id, final int loadGeneration) {
         mp.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
-            @Override
-            public void onCompletion(MediaPlayer mediaPlayer) {
-                if (released) return;
+            @Override                public void onCompletion(MediaPlayer mediaPlayer) {
+                if (released || loadGeneration != callbackGeneration) return;
+                if (index >= 0 && (players == null || index >= players.length
+                        || players[index] != mediaPlayer)) return;
                 // Hard-muted pad — do not restart (would leak until next gain apply). 2026-07-19
                 if (zone >= 0 && zone < STEM_COUNT && StemControls.isGainSilent(gains[zone])) {
                     return;
@@ -1090,6 +1260,7 @@ public final class StemMixer {
                     return;
                 }
                 // Whole-song end from any audible stem (pair-repeat needs both seats). 2026-07-21
+                if (seekCompletionSuppressed()) return;
                 maybeFireSongComplete(zone);
             }
         });
@@ -1111,7 +1282,7 @@ public final class StemMixer {
         try {
             pause();
         } catch (Exception ignored) {}
-        if (listener != null) listener.onComplete();
+        notifyComplete();
     }
 
     /** Allow another onComplete after seek/restart. 2026-07-21 */
@@ -1119,15 +1290,49 @@ public final class StemMixer {
         songCompleteFired = false;
     }
 
-    private void wireError(MediaPlayer mp) {
+    /** Arm the seek-noise window (uptime based). 2026-08-01 */
+    private void armSeekCompletionSuppression() {
+        suppressCompleteUntilUptimeMs = SystemClock.uptimeMillis() + SEEK_COMPLETE_SUPPRESS_MS;
+    }
+
+    /** True when a completion callback is likely seek noise, not song end. 2026-08-01 */
+    private boolean seekCompletionSuppressed() {
+        return seekSuppressionActiveForTest(suppressCompleteUntilUptimeMs, SystemClock.uptimeMillis());
+    }
+
+    /** Pure window math (unit-testable). 2026-08-01 */
+    static boolean seekSuppressionActiveForTest(long suppressUntilUptimeMs, long nowUptimeMs) {
+        return nowUptimeMs < suppressUntilUptimeMs;
+    }
+
+    private void wireError(MediaPlayer mp, final int loadGeneration) {
         mp.setOnErrorListener(new MediaPlayer.OnErrorListener() {
             @Override
             public boolean onError(MediaPlayer mediaPlayer, int what, int extra) {
+                if (released || loadGeneration != callbackGeneration) return true;
                 if (listener != null) {
-                    listener.onError("Stem play error " + what + "/" + extra);
+                    notifyError("Stem play error " + what + "/" + extra, loadGeneration);
                 }
                 return true;
             }
+        });
+    }
+
+    /** Origin errors must release the active backend before transport ownership is cleared. */
+    private void wireOriginError(MediaPlayer mp, final int loadGeneration) {
+        mp.setOnErrorListener(new MediaPlayer.OnErrorListener() {
+            @Override                public boolean onError(MediaPlayer mediaPlayer, int what, int extra) {
+                    // A delayed callback from a replaced origin must not tear down the
+                    // newly loaded backend.
+                    if (mediaPlayer != originPlayer
+                            || released || loadGeneration != callbackGeneration) return true;
+                    started = false;
+                    preparedCount = 0;
+                    releaseOriginOnly();
+                    notifyError("Origin play error " + what + "/" + extra, loadGeneration);
+                    return true;
+                }
+
         });
     }
 
@@ -1213,7 +1418,7 @@ public final class StemMixer {
             main.removeCallbacks(driftFix);
             main.postDelayed(driftFix, 3000);
         } catch (Exception e) {
-            if (listener != null) listener.onError(e.getMessage());
+            if (listener != null) notifyError(e.getMessage());
         }
     }
 
@@ -1573,6 +1778,7 @@ public final class StemMixer {
      */
     public void seekAllPlaying(int ms) {
         clearSongCompleteLatch();
+        armSeekCompletionSuppression();
         for (int i = 0; i < playerCount; i++) {
             int z = playerZones[i];
             if (z == stutterZone) continue;
@@ -1771,8 +1977,8 @@ public final class StemMixer {
                 } catch (Exception ignored) {}
             }
         });
-        wireCompletion(mp, zone, newIndex, stemFile.getName());
-        wireError(mp);
+        wireCompletion(mp, zone, newIndex, stemFile.getName(), callbackGeneration);
+        wireError(mp, callbackGeneration);
         mp.prepareAsync();
     }
 
@@ -1793,6 +1999,7 @@ public final class StemMixer {
 
     public void release() {
         released = true;
+        callbackGeneration++;
         looping = false;
         clearStutterInternal();
         main.removeCallbacks(driftFix);
@@ -1802,6 +2009,7 @@ public final class StemMixer {
     }
 
     private void releasePlayersOnly() {
+        callbackGeneration++;
         releaseOriginOnly();
         for (int i = 0; i < players.length; i++) {
             MediaPlayer p = players[i];

@@ -123,13 +123,40 @@ public final class SolarDataReset {
         clearDirectoryContents(AlbumArtCache.cacheDir(app), false);
         clearDirectoryContents(FlowThumbCache.cacheDir(app), false);
         File streamRoot = StreamCacheRoot.resolve(app);
-        clearDirectoryContents(streamRoot, false);
+        File appCache = app.getCacheDir();
+        // When stream overflow resolves to the app cache (the common emulator path), the
+        // stem vault lives inside it — stems are durable user data with their own reset
+        // toggle, so a generic cache clear must keep lalal_stems/lalal_work intact.
+        if (streamRoot != null && appCache != null
+                && streamRoot.getAbsolutePath().equals(appCache.getAbsolutePath())) {
+            clearCacheKeepingStems(streamRoot);
+        } else {
+            clearDirectoryContents(streamRoot, false);
+        }
         clearDirectoryContents(DeezerCache.dir(streamRoot), false);
         clearDirectoryContents(ReachCache.dir(streamRoot), false);
         clearDirectoryContents(new File(streamRoot, "podcast"), false);
-        clearDirectoryContents(app.getCacheDir(), false);
+        clearCacheKeepingStems(appCache);
         File extCache = app.getExternalCacheDir();
-        if (extCache != null) clearDirectoryContents(extCache, false);
+        if (extCache != null) clearCacheKeepingStems(extCache);
+    }
+
+    /**
+     * Wipe an app cache dir but keep the stem vaults — stems are durable user data
+     * (own reset toggle), never collateral of a generic "Clear caches".
+     */
+    static void clearCacheKeepingStems(File cacheDir) {
+        if (cacheDir == null || !cacheDir.isDirectory()) return;
+        File[] kids = cacheDir.listFiles();
+        if (kids == null) return;
+        for (File kid : kids) {
+            String n = kid.getName();
+            if (n != null && ("lalal_stems".equals(n) || "lalal_work".equals(n)
+                    || "lalal_solo_cache".equals(n))) {
+                continue;
+            }
+            deleteTree(kid, false);
+        }
     }
 
     static void clearStems(Context app) {

@@ -260,6 +260,44 @@ public class StemSessionTest {
         assertFalse(s.songsShareAlbum());
     }
 
+    /** Play-both: toggling stacks the stem from both songs; tap only focuses. 2026-08-01 */
+    @Test
+    public void playBothTogglesAndFocusOnly() {
+        StemSession s = new StemSession();
+        s.bindTracks(fakeTracks(2));
+        assertFalse(s.isZoneBoth(0));
+        assertTrue(s.toggleZoneBoth(0));
+        assertTrue(s.isZoneBoth(0));
+        assertFalse(s.isZoneBoth(1));
+        // Repress on a both-zone pad focuses only — stacked feed must not cycle. 2026-08-01
+        assertFalse(s.onStemKey(0));
+        assertFalse(s.onStemKey(0));
+        assertEquals(0, s.songIndexForZone(0));
+        // Toggling back un-stacks. 2026-08-01
+        assertFalse(s.toggleZoneBoth(0));
+        assertFalse(s.isZoneBoth(0));
+        // Routing still works once un-stacked. 2026-08-01
+        assertTrue(s.onStemKey(0));
+        assertEquals(1, s.songIndexForZone(0));
+    }
+
+    /** Play-both resets on new bind and on sole-survivor handoff. 2026-08-01 */
+    @Test
+    public void playBothClearedOnBindAndSoleSurvivor() {
+        StemSession s = new StemSession();
+        s.bindTracks(fakeTracks(2));
+        s.toggleZoneBoth(1);
+        s.toggleZoneBoth(3);
+        assertTrue(s.isZoneBoth(1));
+        s.bindTracks(fakeTracks(2));
+        assertFalse(s.isZoneBoth(1));
+        assertFalse(s.isZoneBoth(3));
+        s.toggleZoneBoth(2);
+        assertTrue(s.isZoneBoth(2));
+        s.routeAllPadsToSong(0);
+        assertFalse(s.isZoneBoth(2));
+    }
+
     /** Track-end handoff routes every pad onto the survivor. 2026-07-20 */
     @Test
     public void routeAllPadsToSongCoversEveryZone() {
@@ -273,6 +311,72 @@ public class StemSessionTest {
             assertEquals(0, s.songIndexForZone(z));
         }
         assertEquals(0, s.controlSongIndex());
+    }
+
+    /** Pad-majority: the song owning more pads leads. 2026-08-02 */
+    @Test
+    public void dominantSongIsPadMajority() {
+        StemSession s = new StemSession();
+        s.bindTracks(fakeTracks(2));
+        // Cold start: every pad on song 0 → dominant 0.
+        assertEquals(0, s.dominantSongIndex());
+        // Route drums/bass/melody → song 1 → 3-1 majority → dominant 1.
+        for (int z = 1; z < 4; z++) {
+            s.onStemKey(z); // focus
+            s.onStemKey(z); // cycle → song 1
+        }
+        assertEquals(1, s.dominantSongIndex());
+        // Back to all-song-0 → dominant 0.
+        s.routeAllPadsToSong(0);
+        assertEquals(0, s.dominantSongIndex());
+    }
+
+    /** 2-2 split (“2 of each”) → vocals pad (zone 0) breaks the tie. 2026-08-02 */
+    @Test
+    public void dominantTieBrokenByVocalsPad() {
+        StemSession s = new StemSession();
+        s.bindTracks(fakeTracks(2));
+        // Explicit 2-2 routing: vocals(0) + bass(2) on song 0; drums(1) + melody(3) on song 1.
+        s.setZoneSong(1, 1);
+        s.setZoneSong(3, 1);
+        assertEquals(0, s.songIndexForZone(0));
+        assertEquals(1, s.songIndexForZone(1));
+        assertEquals(0, s.songIndexForZone(2));
+        assertEquals(1, s.songIndexForZone(3));
+        // Vocals on song 0 → dominant 0 (tie broken by the vocal pad).
+        assertEquals(0, s.dominantSongIndex());
+        // Rebalance to 2-2 with vocals on song 1 → dominant flips to song 1.
+        s.setZoneSong(0, 1);
+        s.setZoneSong(1, 0);
+        assertEquals(1, s.dominantSongIndex());
+        // Back to vocals-on-song-0 → dominant 0 again.
+        s.setZoneSong(0, 0);
+        s.setZoneSong(1, 1);
+        assertEquals(0, s.dominantSongIndex());
+    }
+
+    /** Play-both pads feed both songs → neutral; vocals still breaks a tie. 2026-08-02 */
+    @Test
+    public void dominantBothPadsNeutralVocalsBreaks() {
+        StemSession s = new StemSession();
+        s.bindTracks(fakeTracks(2));
+        // Every pad stacked on both songs → no pad breaks the tie → vocals decides.
+        for (int z = 0; z < 4; z++) s.toggleZoneBoth(z);
+        assertEquals(0, s.dominantSongIndex());
+        // Route vocals' primary to song 1 → dominant 1.
+        s.setZoneSong(0, 1);
+        assertEquals(1, s.dominantSongIndex());
+        s.setZoneSong(0, 0);
+        assertEquals(0, s.dominantSongIndex());
+    }
+
+    /** Single-song session always reports the only song. 2026-08-02 */
+    @Test
+    public void dominantSingleSongIsZero() {
+        StemSession s = new StemSession();
+        s.bindTracks(fakeTracks(1));
+        assertEquals(1, s.songCount());
+        assertEquals(0, s.dominantSongIndex());
     }
 
     private static List<File> fakeTracks(int n) {

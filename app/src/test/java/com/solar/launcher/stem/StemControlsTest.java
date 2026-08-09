@@ -101,9 +101,9 @@ public class StemControlsTest {
         assertTrue(StemControls.stemTransitionHoldOneSide(true, false));
         assertFalse(StemControls.stemExitBothSidesHeld(true, false));
         assertTrue(StemControls.stemExitBothSidesHeld(true, true));
-        assertEquals(4000L, StemControls.TRANSITION_LONG_MS);
-        assertEquals(8000L, StemControls.TRANSITION_OVERLAP_MS);
-        assertEquals(400L, StemControls.TRANSITION_WAVE_MS);
+        assertEquals(4000L, StemControls.TRANSITION_FULL_MS);
+        assertEquals(2000L, StemControls.TRANSITION_BALANCED_MS);
+        assertEquals(400L, StemControls.TRANSITION_SHORT_MS);
     }
 
     /** Zero dial = hard mute; tiny residual still silent. 2026-07-19 */
@@ -140,6 +140,19 @@ public class StemControlsTest {
         assertFalse(StemControls.centerTapCommitsFaceScrub(false, false));
     }
 
+    /** Phone Chrome uses repeat=1 as a one-shot long-press marker. 2026-08-03 */
+    @Test
+    public void syntheticPadHoldMarkerIsOneShot() {
+        assertTrue(StemControls.startsPadHoldDown(0, false));
+        assertFalse(StemControls.isSyntheticPadHold(0, false));
+        assertTrue(StemControls.startsPadHoldDown(1, false));
+        assertTrue(StemControls.isSyntheticPadHold(1, false));
+        // Real Android repeats do not retrigger an already-held physical key.
+        assertFalse(StemControls.startsPadHoldDown(1, true));
+        assertFalse(StemControls.isSyntheticPadHold(1, true));
+        assertFalse(StemControls.startsPadHoldDown(2, false));
+    }
+
     /** Hold Open/Dismiss jam Options — Center never counts. 2026-07-21 */
     @Test
     public void jamOptionsHoldKeysExcludeCenter() {
@@ -168,6 +181,66 @@ public class StemControlsTest {
         assertTrue(StemControls.shouldUndoSpuriousPadOptions(true, true, 180L));
         assertFalse(StemControls.shouldUndoSpuriousPadOptions(true, true, 600L));
         assertEquals(100L, StemControls.physicalKeyHoldMs(1000L, 1100L));
+    }
+
+    /** Kernel DOWN event-time baseline wins over inflated local uptime (UI lag). 2026-08-01 */
+    @Test
+    public void kernelDownEventTimeBeatsInflatedUptime() {
+        // UI thread lagged: local uptime delta is 600ms, but kernel says 120ms tap.
+        long held = StemControls.bestPhysicalHoldMs(1000L, 1600L, 4000L, 4120L);
+        assertEquals(120L, held);
+        assertFalse(StemControls.isIntentionalPadOptionsHold(true, held));
+    }
+
+    /** No kernel baseline → falls back to local uptime (MTK zero event times). 2026-08-01 */
+    @Test
+    public void uptimeFallbackWhenKernelMissing() {
+        assertEquals(600L, StemControls.bestPhysicalHoldMs(1000L, 1600L, 0L, 0L));
+    }
+
+    /** UP event's own kernel pair wins over inflated uptime — lagged tap stays a tap. 2026-08-01 */
+    @Test
+    public void upEventPairBeatsLaggedUptime() {
+        // UI thread lagged: uptime delta is 600ms, but the UP event's own kernel pair
+        // (downTime=4000, eventTime=4120) says a 120ms tap. Single press must focus,
+        // never open Options.
+        long held = StemControls.bestPhysicalHoldMs(1000L, 1600L, 0L, 4000L, 4120L);
+        assertEquals(120L, held);
+        assertFalse(StemControls.isIntentionalPadOptionsHold(true, held));
+    }
+
+    /** UP pair beats a clobbered DOWN-recorded baseline (second pad pressed mid-hold). 2026-08-01 */
+    @Test
+    public void upEventPairBeatsClobberedBaseline() {
+        // Shared baseline was overwritten to 9000 by another pad's DOWN; the UP event
+        // still carries its own downTime=4000 → correct 120ms tap measured.
+        long held = StemControls.bestPhysicalHoldMs(1000L, 1600L, 9000L, 4000L, 4120L);
+        assertEquals(120L, held);
+    }
+
+    /** UP pair zeroed (MTK) → recorded DOWN baseline + UP time still measures the hold. 2026-08-01 */
+    @Test
+    public void recordedBaselineFallbackWhenUpPairZero() {
+        // getDownTime()=0 on MTK: baseline recorded at DOWN (4000) + UP time (4120) = 120ms.
+        long held = StemControls.bestPhysicalHoldMs(1000L, 1600L, 4000L, 0L, 4120L);
+        assertEquals(120L, held);
+        // Everything zeroed → uptime delta is the last resort.
+        assertEquals(600L, StemControls.bestPhysicalHoldMs(1000L, 1600L, 0L, 0L, 0L));
+    }
+
+    /** 5-arg overload mirrors the 4-arg when downTime comes from the same source. 2026-08-01 */
+    @Test
+    public void fiveArgOverloadMatchesFourArg() {
+        assertEquals(StemControls.bestPhysicalHoldMs(1000L, 1600L, 4000L, 4120L),
+                StemControls.bestPhysicalHoldMs(1000L, 1600L, 4000L, 4000L, 4120L));
+    }
+
+    /** Stale modal never blocks a pad tap — short tap is always focus, not Options. 2026-08-01 */
+    @Test
+    public void shortTapNeverIntentionalHold() {
+        assertFalse(StemControls.isIntentionalPadOptionsHold(true, 0L));
+        assertFalse(StemControls.isIntentionalPadOptionsHold(false, 900L));
+        assertTrue(StemControls.isIntentionalPadOptionsHold(true, 900L));
     }
 
     /** Pad hold keys map to Vocals/Drums/Bass/Melody zones. 2026-07-21 */
@@ -202,8 +275,19 @@ public class StemControlsTest {
         // First pad press after clearActiveZone is focus-only (no cycle). 2026-07-21
         assertFalse(StemControls.stemKeyShouldCycleSong(-1, 2, 2));
         assertTrue(StemControls.stemKeyShouldCycleSong(2, 2, 2));
-        assertTrue(StemControls.centerTapWhilePadIdleIsWakeOnly(true, 0));
-        assertTrue(StemControls.centerTapWhilePadIdleIsWakeOnly(false, -1));
+        // Center tap while pads idle triggers shuffle directly — never wake-only. 2026-08-01
+        assertFalse(StemControls.centerTapWhilePadIdleIsWakeOnly(true, 0));
+        assertFalse(StemControls.centerTapWhilePadIdleIsWakeOnly(false, -1));
         assertFalse(StemControls.centerTapWhilePadIdleIsWakeOnly(false, 1));
+    }
+
+    /** Meatball fold ease — smoothstep boundaries + midpoint. 2026-08-01 */
+    @Test
+    public void meatballEaseSmoothstep() {
+        assertEquals(0f, StemControls.meatballEase(0f), 0.001f);
+        assertEquals(1f, StemControls.meatballEase(1f), 0.001f);
+        assertEquals(0.5f, StemControls.meatballEase(0.5f), 0.001f);
+        assertTrue(StemControls.meatballEase(0.25f) < 0.25f); // slow start
+        assertTrue(StemControls.meatballEase(0.75f) > 0.75f); // fast middle
     }
 }

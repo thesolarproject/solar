@@ -37,13 +37,23 @@ public final class StemBpm {
      * Was: free playhead anchor. Reversal: return positionMs unchanged.
      * 2026-07-19
      */
-    public static int snapToBeatMs(int positionMs, float bpm) {
+    public static int snapToBeatMs(int positionMs, float bpm, int firstBeatMs) {
         int beat = msPerBeat(bpm);
         if (beat < 1) return Math.max(0, positionMs);
         int pos = Math.max(0, positionMs);
-        int nearest = Math.round(pos / (float) beat) * beat;
+        
+        // Phrase Alignment: snap to the grid relative to the first downbeat
+        int relativePos = pos - firstBeatMs;
+        int nearestRelative = Math.round(relativePos / (float) beat) * beat;
+        
+        int nearest = firstBeatMs + nearestRelative;
         if (nearest < 0) nearest = 0;
         return nearest;
+    }
+    
+    /** Legacy wrapper for non-phrase aligned calls. */
+    public static int snapToBeatMs(int positionMs, float bpm) {
+        return snapToBeatMs(positionMs, bpm, 0);
     }
 
     /**
@@ -70,6 +80,34 @@ public final class StemBpm {
         if (r < MIN_RATE) return MIN_RATE;
         if (r > MAX_RATE) return MAX_RATE;
         return r;
+    }
+
+    /**
+     * DJ-style harmonic tempo lock — try half / same / double-time of the slave
+     * against the master and pick the ratio closest to 1.0 inside the clamp.
+     * Layman: a 60 BPM track grooves with a 120 BPM master at unity speed (its kicks
+     * land on every other beat) instead of demanding an impossible 2× stretch.
+     * Technical: for h in {0.5, 1, 2} compute master/(other*h); keep the candidate
+     * nearest 1.0 that stays within [MIN_RATE, MAX_RATE]. Falls back to rateToMatch.
+     * Was: raw master/other ratio only. Reversal: rateToMatch only.
+     * 2026-08-01
+     */
+    public static float harmonicRateToMatch(float masterBpm, float otherBpm) {
+        float m = masterBpm > 30f ? masterBpm : DEFAULT_BPM;
+        float o = otherBpm > 30f ? otherBpm : DEFAULT_BPM;
+        float best = rateToMatch(m, o);
+        float bestErr = Math.abs(best - 1f);
+        float[] harmonics = { 0.5f, 1f, 2f };
+        for (int i = 0; i < harmonics.length; i++) {
+            float r = m / (o * harmonics[i]);
+            if (r < MIN_RATE || r > MAX_RATE) continue;
+            float err = Math.abs(r - 1f);
+            if (err < bestErr) {
+                bestErr = err;
+                best = r;
+            }
+        }
+        return best;
     }
 
     public static int clampChopStep(int step) {

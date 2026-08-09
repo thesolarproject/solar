@@ -30,10 +30,22 @@ public final class BluetoothPairingCoordinator {
     public static final int MODE_PASSKEY_CONFIRM = 3;
     /** Overlay tier — Just Works / consent confirm (legacy UI; silent path preferred). */
     public static final int MODE_CONSENT = 4;
+    /** Overlay tier — API 19 display-PIN; show the value without passkey padding. */
+    public static final int MODE_DISPLAY_PIN = 5;
 
-    /** {@link BluetoothDevice#PAIRING_VARIANT_PIN} = 0, passkey display = 1 (API 17 lacks named constant). */
-    private static final int PAIRING_VARIANT_PASSKEY = 1;
-    private static final int PAIRING_VARIANT_CONSENT = 3;
+    /**
+     * Pairing variant values are stable framework protocol values, but most named constants
+     * were only added to the public SDK in API 19. Keep them local so this class can load on
+     * API 17 without a verifier/linkage failure.
+     */
+    static final int PAIRING_VARIANT_PIN = 0;
+    static final int PAIRING_VARIANT_PASSKEY = 1;
+    static final int PAIRING_VARIANT_PASSKEY_CONFIRMATION = 2;
+    static final int PAIRING_VARIANT_CONSENT = 3;
+    static final int PAIRING_VARIANT_DISPLAY_PASSKEY = 4;
+    static final int PAIRING_VARIANT_DISPLAY_PIN = 5;
+    static final int PAIRING_VARIANT_OOB_CONSENT = 6;
+    static final int PAIRING_VARIANT_PIN_16_DIGITS = 7;
 
     /** Hold silent PIN negotiation before showing overlay keyboard (plan: 15s Connecting…). */
     public static final long NEGOTIATION_WINDOW_MS = 15_000L;
@@ -101,7 +113,7 @@ public final class BluetoothPairingCoordinator {
         Context app = context.getApplicationContext();
 
         // PIN — silent first; only forcePinUi / timeout shows keyboard.
-        if (variant == BluetoothDevice.PAIRING_VARIANT_PIN) {
+        if (variant == PAIRING_VARIANT_PIN || variant == PAIRING_VARIANT_PIN_16_DIGITS) {
             String pin = BluetoothAudioRepair.pairingPinForDevice(context, device);
             if (forcePinUi) {
                 cancelDelayedPin();
@@ -115,16 +127,28 @@ public final class BluetoothPairingCoordinator {
             return true;
         }
 
-        // Passkey display — remote must type digits; user needs to see them.
-        if (variant == PAIRING_VARIANT_PASSKEY) {
+        // Legacy passkey entry plus API 19 display-passkey/display-PIN requests use the
+        // informational passkey overlay; the remote keypad performs the actual entry.
+        if (variant == PAIRING_VARIANT_PASSKEY
+                || variant == PAIRING_VARIANT_DISPLAY_PASSKEY
+                || variant == PAIRING_VARIANT_DISPLAY_PIN) {
             cancelDelayedPin();
-            return showPasskeyOverlay(app, address, safeName(device), passkey, MODE_PASSKEY_DISPLAY);
+            return showPasskeyOverlay(app, address, safeName(device), passkey,
+                    variant == PAIRING_VARIANT_DISPLAY_PIN
+                            ? MODE_DISPLAY_PIN : MODE_PASSKEY_DISPLAY);
         }
 
-        // Passkey confirm + Just Works consent — silent accept (AirPods / Beats / most headsets).
-        if (variant == BluetoothDevice.PAIRING_VARIANT_PASSKEY_CONFIRMATION
-                || variant == PAIRING_VARIANT_CONSENT) {
-            submitConfirmation(device, true);
+        // Passkey confirm, Just Works consent, and API 19 OOB consent — accept through the
+        // same reflection path. On API 17 the method is absent and the call safely fails closed.
+        if (variant == PAIRING_VARIANT_PASSKEY_CONFIRMATION
+                || variant == PAIRING_VARIANT_CONSENT
+                || variant == PAIRING_VARIANT_OOB_CONSENT) {
+            if (!submitConfirmation(device, true)) {
+                // API 17 has no public confirmation method. Leave the broadcast available to
+                // the stock Bluetooth UI instead of claiming ownership and stalling pairing.
+                clearSession();
+                return false;
+            }
             BluetoothAudioRepair.rememberLastAudioDevice(context, device);
             Log.i(TAG, "silent setPairingConfirmation(true) variant=" + variant + " addr=" + address);
             // Brief session hold for de-dupe; no overlay.
@@ -224,11 +248,25 @@ public final class BluetoothPairingCoordinator {
         return raw;
     }
 
+    /** Display-PIN values are four-digit codes, not six-digit passkeys. */
+    static String formatDisplayPin(int pin) {
+        String raw = String.valueOf(Math.max(0, pin));
+        while (raw.length() < 4) raw = "0" + raw;
+        return raw;
+    }
+
     static int overlayModeForVariant(int variant) {
-        if (variant == BluetoothDevice.PAIRING_VARIANT_PIN) return MODE_PIN;
-        if (variant == PAIRING_VARIANT_PASSKEY) return MODE_PASSKEY_DISPLAY;
-        if (variant == BluetoothDevice.PAIRING_VARIANT_PASSKEY_CONFIRMATION) return MODE_PASSKEY_CONFIRM;
-        if (variant == PAIRING_VARIANT_CONSENT) return MODE_CONSENT;
+        if (variant == PAIRING_VARIANT_PIN || variant == PAIRING_VARIANT_PIN_16_DIGITS) {
+            return MODE_PIN;
+        }
+        if (variant == PAIRING_VARIANT_DISPLAY_PIN) return MODE_DISPLAY_PIN;
+        if (variant == PAIRING_VARIANT_PASSKEY || variant == PAIRING_VARIANT_DISPLAY_PASSKEY) {
+            return MODE_PASSKEY_DISPLAY;
+        }
+        if (variant == PAIRING_VARIANT_PASSKEY_CONFIRMATION) return MODE_PASSKEY_CONFIRM;
+        if (variant == PAIRING_VARIANT_CONSENT || variant == PAIRING_VARIANT_OOB_CONSENT) {
+            return MODE_CONSENT;
+        }
         return MODE_CONSENT;
     }
 
@@ -305,13 +343,16 @@ public final class BluetoothPairingCoordinator {
     }
 
     @SuppressLint("MissingPermission")
-    private static void submitConfirmation(BluetoothDevice device, boolean accept) {
+    private static boolean submitConfirmation(BluetoothDevice device, boolean accept) {
+        if (device == null) return false;
         try {
-            device.getClass().getMethod("setPairingConfirmation", boolean.class)
+            Object result = device.getClass().getMethod("setPairingConfirmation", boolean.class)
                     .invoke(device, accept);
             Log.i(TAG, "setPairingConfirmation(" + accept + ") addr=" + device.getAddress());
-        } catch (Exception e) {
-            Log.w(TAG, "setPairingConfirmation failed", e);
+            return !(result instanceof Boolean) || ((Boolean) result).booleanValue();
+        } catch (Throwable e) {
+            Log.w(TAG, "setPairingConfirmation unavailable/failed", e);
+            return false;
         }
     }
 
@@ -349,7 +390,7 @@ public final class BluetoothPairingCoordinator {
 
     /** Unit-test guard — variant → overlay mode mapping + passkey pad. */
     static void selfCheck() {
-        if (overlayModeForVariant(BluetoothDevice.PAIRING_VARIANT_PIN) != MODE_PIN) {
+        if (overlayModeForVariant(PAIRING_VARIANT_PIN) != MODE_PIN) {
             throw new AssertionError("pin mode");
         }
         if (!"012345".equals(formatPasskey(12345))) throw new AssertionError("passkey pad");

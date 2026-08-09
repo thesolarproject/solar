@@ -286,6 +286,9 @@ public final class TransportLayerPair {
     /** Seek both pads to the same ms (lead lock). 2026-07-20 */
     public void seekTo(int ms) {
         int safe = Math.max(0, ms);
+        // A spurious completion may have latched the notify flag; a user seek restarts
+        // the pair clock so a later genuine completion can still fire. 2026-08-01
+        completeNotified = false;
         if (preparedCount < LAYER_COUNT) {
             seekOnReadyMs = safe;
             return;

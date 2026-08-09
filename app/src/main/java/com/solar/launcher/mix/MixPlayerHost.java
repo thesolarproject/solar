@@ -610,6 +610,34 @@ public final class MixPlayerHost {
      * Was: fade-out only then hard start at gain 0. Reversal: drop pendingReplaceFadeIn.
      * 2026-07-19 / 2026-07-21
      */
+    /**
+     * DJ chain advance: when the LEAD deck (0) finishes, the survivor deck (1)
+     * is re-indexed as the new lead — its deck keeps playing, no reload — and
+     * the incoming track loads into the partner deck. Non-lead decks keep the
+     * plain fade-replace. Mirrors StemMixQueuePolicy.applyAdvanceOrder's chain
+     * reorder so the live pair always reads [survivor, incoming].
+     * Layman: the deck that was the end of pair 1 becomes the start of pair 2.
+     * 2026-08-01
+     */
+    public void chainAdvanceDeck(int deckIndex, File track) {
+        if (deckIndex == 0 && decks != null && decks.length > 1 && decks[1] != null) {
+            swapDeckSeats(0, 1);
+            fadeReplaceDeck(1, track);
+        } else {
+            fadeReplaceDeck(deckIndex, track);
+        }
+    }
+
+    /** Exchange two deck seats in place (refs only — audio keeps playing). 2026-08-01 */
+    private void swapDeckSeats(int a, int b) {
+        if (decks == null || a < 0 || b < 0 || a >= decks.length || b >= decks.length) return;
+        if (a == b) return;
+        MixDeck d = decks[a];
+        decks[a] = decks[b];
+        decks[b] = d;
+        session.swapDecks(a, b);
+    }
+
     public void fadeReplaceDeck(final int deckIndex, final File track) {
         if (!attached || deckIndex < 0 || deckIndex >= MixSession.DECK_COUNT) return;
         if (track == null || !track.isFile()) return;
@@ -749,21 +777,74 @@ public final class MixPlayerHost {
     }
 
     private void loadOneDeck(final int index, final int gen) {
-        MixSession.DeckState st = session.deck(index);
+        final MixSession.DeckState st = session.deck(index);
         if (st == null || !st.hasTrack()) return;
-        MixDeck deck = new MixDeck(host.appContext());
+        final MixDeck deck = new MixDeck(host.appContext());
         decks[index] = deck;
+
+        // Background analysis for true BPM and Key matching
+        digIo.execute(new Runnable() {
+            @Override
+            public void run() {
+                if (gen != loadGen.get() || !attached) return;
+                // Analyzer decodes the original file when stems are null (safe fallback).
+                final com.solar.launcher.stem.analysis.StemAnalysisCore.Result res =
+                        com.solar.launcher.stem.analysis.StemTrackAnalyzer.analyze(
+                                host.appContext(), st.track, null, null);
+                if (res != null && gen == loadGen.get()) {
+                    main.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (gen != loadGen.get()) return;
+                            st.bpm = res.bpm;
+                            st.keyRoot = res.keyRoot;
+                            st.keyMajor = res.keyMajor;
+                            st.camelot = res.camelot;
+                            st.analyzed = true;
+                            applyRates();
+                        }
+                    });
+                }
+            }
+        });
+
         deck.setListener(new MixDeck.Listener() {
             @Override
             public void onReady(MixDeck d) {
                 if (gen != loadGen.get()) return;
-                float bpm = StemBpm.estimateFromDurationMs(d.getDurationMs());
                 MixSession.DeckState s = session.deck(index);
-                if (s != null) s.bpm = bpm;
+                if (s != null && !s.analyzed) {
+                    s.bpm = StemBpm.estimateFromDurationMs(d.getDurationMs());
+                }
                 applyRates();
                 int n = readyCount.incrementAndGet();
                 d.setGain(0f);
                 if (s != null) s.gain = 0f;
+                
+                // Stem.FM style Phase Alignment: snap to the master deck's downbeat
+                int masterIdx = -1;
+                for (int i = 0; i < MixSession.DECK_COUNT; i++) {
+                    if (i != index && decks[i] != null && decks[i].isPlaying()) {
+                        masterIdx = i;
+                        break;
+                    }
+                }
+                if (masterIdx >= 0) {
+                    MixSession.DeckState masterS = session.deck(masterIdx);
+                    if (masterS != null && s != null) {
+                        int startPos = StemTempoSync.phaseAlignedStartMs(
+                            decks[masterIdx].getPositionMs(),
+                            masterS.rate,
+                            0, // survivorFirstBeatMs — Mix decks carry no downbeat analysis
+                            s.rate,
+                            0, // myFirstBeatMs
+                            s.bpm);
+                        try {
+                            d.seekTo(startPos);
+                        } catch (Exception ignored) {}
+                    }
+                }
+                
                 d.play();
                 // Mid-jam replace: fade back to prior level (not hard silence). 2026-07-21
                 float restore = -1f;
@@ -815,7 +896,9 @@ public final class MixPlayerHost {
                         statusLine.setText("Next up · "
                                 + StemControls.stripTrackDisplayName(next.getName()));
                     }
-                    fadeReplaceDeck(finished, next);
+                    // DJ chain: lead deck finish keeps the survivor as the new lead
+                    // (end of pair 1 → start of pair 2); other decks plain-replace.
+                    chainAdvanceDeck(finished, next);
                     return;
                 }
                 try {
@@ -833,21 +916,28 @@ public final class MixPlayerHost {
     }
 
     private void applyRates() {
-        float master = StemBpm.DEFAULT_BPM;
-        for (int i = 0; i < MixSession.DECK_COUNT; i++) {
-            MixSession.DeckState s = session.deck(i);
-            if (s != null && s.hasTrack()) {
-                master = s.bpm;
-                break;
-            }
-        }
+        MixSession.DeckState mState = session.deck(0);
+        if (mState == null || !mState.hasTrack()) mState = session.deck(1);
+        
+        float masterBpm = mState != null ? mState.bpm : StemBpm.DEFAULT_BPM;
+        if (masterBpm <= 30f) masterBpm = StemBpm.DEFAULT_BPM;
+        
         for (int i = 0; i < MixSession.DECK_COUNT; i++) {
             MixSession.DeckState s = session.deck(i);
             MixDeck d = decks[i];
             if (s == null || d == null || !s.hasTrack()) continue;
-            float rate = StemTempoSync.rateForSong(master, s.bpm, i);
+            
+            float rate = StemTempoSync.rateToMatchMaster(masterBpm, s.bpm);
             s.rate = rate;
             d.setRate(rate);
+            
+            // Native pitch shifting (Camelot key matching) — shared helper so the DJ Mix
+            // and stem mashup paths agree on the same wheel math. 2026-08-02
+            float pitchFactor = mState != null && mState != s
+                    ? com.solar.launcher.stem.StemSoundTouch.pitchFactorForKeys(
+                            mState.keyRoot, mState.keyMajor, s.keyRoot, s.keyMajor)
+                    : 1f;
+            d.setPitch(pitchFactor);
         }
     }
 

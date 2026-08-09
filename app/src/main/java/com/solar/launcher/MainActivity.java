@@ -152,6 +152,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.PowerManager;
+import android.os.SystemClock;
 import android.os.Vibrator;
 import android.provider.Settings;
 import android.text.TextUtils;
@@ -549,8 +550,9 @@ public class MainActivity extends Activity {
      * Layman: remembers which hold opened Options so rows match that track.
      * Was: in-face transitionPanel only. Reversal: drop field; use StemPlayerHost panel.
      * 2026-07-21
-     */
-    private int stemMixJamContextSong = Integer.MIN_VALUE;
+     */     private int stemMixJamContextSong = Integer.MIN_VALUE;
+    /** Zone (pad) the jam Options opened for — Play both targets it. 2026-08-01 */
+    private int stemMixJamContextZone = -1;
     /**
      * Stem session-start wait menu — pick a already-stemmed queue song (or Has Stems).
      * Layman: while pads cook, choose a ready track to mash with first.
@@ -584,12 +586,15 @@ public class MainActivity extends Activity {
             if (!themedContextMenuOwnsKeys()) return;
             if (currentScreenState != STATE_STEM_PLAYER && currentScreenState != STATE_MIX) return;
             stemMixJamContextSong = Integer.MIN_VALUE;
+            stemMixJamContextZone = -1;
             dismissThemedContextMenu();
             clickFeedback();
         }
     };
     /** True while browsing Music to mark Stem tracks 1–2. 2026-07-19 / 2026-07-20 */
     private boolean stemPickMode;
+    /** Get Stems hub mode: Play/Pause prepares files only and never opens a performance. */
+    private boolean stemPrepOnlyMode;
     /** Screen to restore when leaving stem pick at library root. 2026-07-19 */
     private int stemPickReturnScreen = STATE_MENU;
     /** STREAM_MUSIC index saved while Stem/Mix session forces max. -1 = none. 2026-07-19 */
@@ -769,6 +774,10 @@ public class MainActivity extends Activity {
     private List<DeezerResult> deezerBatchTransfer = null;
     private int deezerBatchTransferIndex = -1;
     private int deezerBatchTransferAction = 0;
+    /** True while Save Song + Stems owns the full-screen stem preparation host. */
+    private boolean saveSongAndStemsInProgress;
+    /** Current foreground prep host; retained so Activity teardown can cancel it safely. */
+    private com.solar.launcher.stem.StemPrepHost activeForegroundStemPrepHost;
 
     // --- Inactivity auto-shutdown ---
     /** How often to check for inactivity (60 seconds). */
@@ -891,6 +900,8 @@ public class MainActivity extends Activity {
     private static final int SOULSEEK_ACTION_PLAY = 1;
     private static final int SOULSEEK_ACTION_SAVE = 2;
     private static final int SOULSEEK_ACTION_QUEUE = 3;
+    /** Save the library copy, then prepare Lalal stems without starting playback. */
+    private static final int SOULSEEK_ACTION_SAVE_AND_STEMS = 4;
     private static final int SOULSEEK_PAGE_SIZE = 25;
     private static final int SOULSEEK_UI_FLUSH_MS_HEAVY = 300;
     private int soulseekResultsVisibleCount = SOULSEEK_PAGE_SIZE;
@@ -1220,6 +1231,18 @@ public class MainActivity extends Activity {
     /** Y2 long-OK context menu — mirrors backLongPressHandled when hold-OK-to-sleep is off. */
     private boolean centerLongPressHandled = false;
     private boolean backKeyHeld = false;
+    /** 2026-08-02 — Wheel long-press (phone chrome): swallow the UP closing the injected hold. */
+    private int wheelLongPressPendingKey = -1;
+    /**
+     * 2026-08-02 — Track the last injected phone-chrome DOWN key code so the
+     * matching UP can be swallowed in dispatchInjectedKey. Phone chrome sends
+     * DOWN+UP pairs for every cardinal tap (Back, Prev, Next, Play/Pause), but
+     * the UP reaching Android framework handlers resets list/focus selection.
+     * The DOWN already performed the action; the UP is redundant and harmful.
+     * Was: no tracking — both DOWN and UP forwarded to dispatchKeyEvent.
+     * Reversal: delete field + swallow check in dispatchInjectedKey.
+     */
+    private int injectedKeyDownCode = -1;
     private long contextMenuOpenedAtMs = 0;
     private static final long FLOW_LAUNCH_HOLD_MS = 800L;
     private static final String PREF_DEBUG_FLOW_ENABLED = "debug_flow_enabled";
@@ -1328,12 +1351,13 @@ public class MainActivity extends Activity {
                 clearContextHoldThrobber();
                 if (isSolarContextMenuOpen()) {
                     stemMixJamContextSong = Integer.MIN_VALUE;
+                    stemMixJamContextZone = -1;
                     dismissThemedContextMenu();
                 } else if (currentScreenState == STATE_STEM_PLAYER && stemPlayerHost != null) {
                     // Vocals pad song — same as StemPlayerHost Back hold. 2026-07-21
-                    openStemMixJamContextMenu(0);
+                    openStemMixJamContextMenu(0, 0);
                 } else {
-                    openStemMixJamContextMenu(-1);
+                    openStemMixJamContextMenu(-1, -1);
                 }
                 return;
             }
@@ -1431,6 +1455,12 @@ public class MainActivity extends Activity {
      * Layman: user scrubbed ahead of what has downloaded; we show buffering then jump when ready.
      */
     private int playerPendingSeekMs = -1;
+    /** Uptime of the last user scrub/seek — completions inside the window are seek noise.
+     * 2026-08-01 — IJK/MediaPlayer seekTo can fire a spurious onCompletion that the
+     * completion handlers would otherwise treat as track end (reset to 0 / next track).
+     */
+    private volatile long lastUserSeekUptimeMs = 0;
+    private static final long SEEK_COMPLETE_SUPPRESS_MS = 2000L;
     /**
      * 2026-07-18 — Last OnBufferingUpdate percent for NP audio (podcast / music / remote streams).
      * −1 = unknown (local file or listener not fired yet); 0–100 = stream fill.
@@ -1575,6 +1605,8 @@ public class MainActivity extends Activity {
     private java.util.ArrayList<File> contextPlaylistMoveSnapshot;
     private final QueueMoveWheelFilter contextQueueMoveWheelFilter = new QueueMoveWheelFilter();
     private static final int QUEUE_SPEC_FULL_METADATA_MAX = 80;
+    /** Queue-row album-art square size in px (tiny, left of the track name). 2026-08-01 */
+    private static final int QUEUE_ROW_ART_PX = 16;
     private java.util.HashMap<String, SongItem> songPathIndex;
     /** ponytail: avoid rebuilding artist-policy track list on every browse call. */
     private List<ArtistBrowsePolicy.Track> cachedPolicyTracks;
@@ -2009,6 +2041,14 @@ public class MainActivity extends Activity {
     };
     /** Turn Wi-Fi off after this long while screen is asleep and not on charger. */
     private static final long WIFI_SLEEP_OFF_MS = 15L * 60L * 1000L;
+    /** Turn an unassociated Wi-Fi radio off on Solar hardware, independent of screen state. */
+    private long wifiOfflineSinceMs = 0L;
+    private final Runnable wifiOfflinePowerOffRunnable = new Runnable() {
+        @Override
+        public void run() {
+            tryWifiOfflinePowerOff();
+        }
+    };
     /** Set when {@link #WIFI_SLEEP_OFF_MS} elapses screen-off off-charger; gates Soulseek suspend. */
     private boolean soulseekScreenSleepArmed = false;
     /** True when {@link #tryWifiSleepPowerOff} disabled Wi-Fi — restored on screen-on / plug-in. */
@@ -2141,7 +2181,13 @@ public class MainActivity extends Activity {
 
     /** Point library folder browse + Reach saves at the preferred Music root (Y2 internal-media pref). */
     private void applyMediaRootPreference() {
-        rootFolder = new File(com.solar.launcher.DeviceFeatures.getNewMediaRoot(this), "Music");
+        // 2026-08-01 — Phone chrome: getNewMediaRoot() returns null until the user picks a
+        // storage folder (blocksStockStorageFallOpen). Was: new File(null,"Music") became the
+        // relative path "Music" and every Deezer/Soulseek save failed. Keep the prior root
+        // until onStorageChanged() re-applies after the seed lands.
+        File mediaRoot = com.solar.launcher.DeviceFeatures.getNewMediaRoot(this);
+        if (mediaRoot == null) return;
+        rootFolder = new File(mediaRoot, "Music");
         if (!rootFolder.exists()) rootFolder.mkdirs();
     }
     private boolean isPausedByHand = true;
@@ -2585,7 +2631,27 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** A user scrub/seek just ran — record uptime so spurious completions do not reset the track. 2026-08-01 */
+    private void noteUserAudioSeek() {
+        lastUserSeekUptimeMs = SystemClock.uptimeMillis();
+    }
+
+    /** True when a completion callback is seek noise (arrived right after a user seek). 2026-08-01 */
+    private boolean userAudioSeekRecently() {
+        return userAudioSeekRecentlyForTest(lastUserSeekUptimeMs, SystemClock.uptimeMillis(),
+                SEEK_COMPLETE_SUPPRESS_MS);
+    }
+
+    /** Pure seek-window math (unit-testable). 2026-08-01 */
+    static boolean userAudioSeekRecentlyForTest(long lastSeekUptimeMs, long nowUptimeMs, long windowMs) {
+        return nowUptimeMs - lastSeekUptimeMs < windowMs;
+    }
+
     private void seekActiveAudio(int ms) {
+        // Every audio seek funnels through here (scrub commit, hold-seek, context-menu
+        // jumps, queue resume) — arm the suppression so a spurious decoder completion
+        // right after the seek is not treated as track end. 2026-08-01
+        noteUserAudioSeek();
         try {
             if (npStemSession != null && npStemSession.isMixerOwningAudio()) {
                 npStemSession.seekTo(ms);
@@ -2644,6 +2710,11 @@ public class MainActivity extends Activity {
     private Random random = new Random();
 
     private List<String> foundBtDevices = new ArrayList<String>();
+    /** 2026-08-05 — Android 12+ runtime Bluetooth grants (phone/emulator chrome). */
+    private static final int REQ_BLUETOOTH_RUNTIME = 0x4254; // 'BT'
+    private boolean bluetoothPermRequestInFlight = false;
+    /** Quick-bar BT chip index held while the grant dialog is up — re-opens the tier on grant. */
+    private int btPermissionPendingQuickIndex = -1;
     private List<String> foundWifiNetworks = new ArrayList<String>();
     private String pairingDeviceAddress;
     private BluetoothA2dp bluetoothA2dp;
@@ -3069,6 +3140,9 @@ public class MainActivity extends Activity {
                 int state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR);
                 if (state == BluetoothAdapter.STATE_ON) {
                     btContextPendingDisable = false;
+                    // 2026-08-05 — Proactively heal the KitKat singleton the moment the radio
+                    // comes up, so the next menu rebuild lists devices without a rescan.
+                    BluetoothAdapterCompat.repairIfPoisoned();
                     try {
                         BluetoothAdapter onAdapter = BluetoothAdapter.getDefaultAdapter();
                         if (onAdapter != null && onAdapter.isEnabled()) {
@@ -3123,6 +3197,8 @@ public class MainActivity extends Activity {
                         ensureContextWifiListVisibleAfterEnable();
                     }
                 } else if (state == WifiManager.WIFI_STATE_DISABLED) {
+                    wifiOfflineSinceMs = 0L;
+                    soulseekUiHandler.removeCallbacks(wifiOfflinePowerOffRunnable);
                     wifiContextPendingDisable = false;
                     wifiContextPendingEnable = false;
                     cancelWifiContextScanFollowUps();
@@ -3379,6 +3455,11 @@ public class MainActivity extends Activity {
             @Override
             public void run() {
                 registerDeferredSystemReceivers();
+                new Thread(new Runnable() {
+                    @Override public void run() {
+                        restoreBackgroundStemPrepQueue();
+                    }
+                }, "stem-prep-restore").start();
                 triggerAutoReconnect();
                 if (consumePendingAlbumArtCacheRebuild()) {
                     if (!customLibrary.isEmpty()) {
@@ -3537,6 +3618,50 @@ public class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions,
             int[] grantResults) {
+        // 2026-08-05 — Android 12+ Bluetooth grants: resume the screen/scan/toggle that
+        // paused waiting for them.
+        if (requestCode == REQ_BLUETOOTH_RUNTIME) {
+            bluetoothPermRequestInFlight = false;
+            boolean granted = grantResults != null && grantResults.length > 0;
+            if (granted) {
+                for (int g : grantResults) {
+                    if (g != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                        granted = false;
+                        break;
+                    }
+                }
+            }
+            if (granted) {
+                int pendingQuick = btPermissionPendingQuickIndex;
+                btPermissionPendingQuickIndex = -1;
+                if (pendingQuick >= 0 && themedContextMenu != null
+                        && themedContextMenu.isShowing()) {
+                    // Re-enter the quick-bar BT tier that paused on the permission dialog.
+                    openContextNetworkTab("bt", pendingQuick);
+                } else if (btContextPendingEnable) {
+                    // Context/row power toggle paused on the dialog — finish turning on.
+                    applyBluetoothPowerState(true);
+                } else if (currentScreenState == STATE_BLUETOOTH) {
+                    startBluetoothScan();
+                } else if (themedContextMenu != null && themedContextMenu.isShowing()
+                        && isBtTierMounted()) {
+                    refreshContextBluetoothTier(true, true);
+                    startBtContextDiscoveryIfNeeded();
+                }
+            } else {
+                // Denied: drop any optimistic pending enable and repaint so the toggle
+                // never sticks on “Wait...” — the radio stays off without the grant.
+                btContextPendingEnable = false;
+                btPermissionPendingQuickIndex = -1;
+                if (currentScreenState == STATE_BLUETOOTH) {
+                    startBluetoothScan();
+                } else if (themedContextMenu != null && themedContextMenu.isShowing()
+                        && isBtTierMounted()) {
+                    refreshContextBluetoothTier(true, true);
+                }
+            }
+            return;
+        }
         if (phoneChromeHost != null
                 && phoneChromeHost.onRequestPermissionsResult(
                         requestCode, permissions, grantResults)) {
@@ -3635,6 +3760,9 @@ public class MainActivity extends Activity {
         // #endregion
 // 🚀 앱이 켜지면 자기 자신을 변수에 등록합니다.
         instance = this;
+        WifiOfflinePowerReceiver.setUiPolicyActive(true);
+        // 2026-08-05 — Embedded Wolfius TLS 1.3 proxy runs automatically on rooted targets (no toggle).
+        WolfiusTlsService.ensureStarted(this);
         // Warm transport listener so gapless callbacks are ready. 2026-07-20
         try {
             ensureSolarTransportListener();
@@ -3687,8 +3815,53 @@ public class MainActivity extends Activity {
                         new com.solar.launcher.phone.PhoneChromeHost.HostCallbacks() {
                             @Override
                             public void dispatchInjectedKey(KeyEvent event) {
-                                // Inject after emulator remap path by calling dispatchKeyEvent.
+                                // 2026-08-02 — Wheel long-press (phone chrome): fireKey(longPress)
+                                // dispatches DOWN with repeatCount=1 as the long-press marker, then
+                                // UP. Hardware handlers only arm on repeatCount==0, so the marker
+                                // DOWN alone would be a silent no-op. Treat it as the hold already
+                                // elapsing on the wheel: run the same action the hardware timer runs.
                                 if (event != null) {
+                                    if (event.getAction() == KeyEvent.ACTION_UP
+                                            && event.getKeyCode() == wheelLongPressPendingKey) {
+                                        wheelLongPressPendingKey = -1;
+                                        return; // swallow the UP that closes a wheel long-press
+                                    }
+                                    if (event.getAction() == KeyEvent.ACTION_DOWN
+                                            && event.getRepeatCount() > 0) {
+                                        if (Y1InputKeys.isBackKey(event.getKeyCode())) {
+                                            wheelLongPressPendingKey = event.getKeyCode();
+                                            fireWheelInjectedBackLongPress();
+                                            return;
+                                        }
+                                        if (isCenterKey(event.getKeyCode())) {
+                                            wheelLongPressPendingKey = event.getKeyCode();
+                                            fireWheelInjectedCenterLongPress();
+                                            return;
+                                        }
+                                    }
+                                    // 2026-08-03 — Wheel stream is not a cardinal button pair.
+                                    // Phone Chrome sends wheel DOWN repeat0, repeat1… and one UP;
+                                    // forward every event so the active context/quick-toggle owner
+                                    // sees the same held stream as Y1/Y2 hardware. In particular,
+                                    // do not let injectedKeyDownCode swallow the wheel UP: the
+                                    // normal dispatch path clears wheelKeyHeld and stops backlog.
+                                    if (isPhoneChromeWheelEvent(event)) {
+                                        MainActivity.this.dispatchKeyEvent(event);
+                                        return;
+                                    }
+                                    // 2026-08-02 — Short-press: swallow the UP that follows the
+                                    // injected DOWN since the DOWN already performed the action.
+                                    // Phone chrome sends DOWN+UP pairs; the UP reaching Android
+                                    // framework handlers resets list/focus selection state.
+                                    if (event.getAction() == KeyEvent.ACTION_UP
+                                            && event.getKeyCode() == injectedKeyDownCode) {
+                                        injectedKeyDownCode = -1;
+                                        return;
+                                    }
+                                    if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                                        injectedKeyDownCode = event.getKeyCode();
+                                    }
+                                    // Inject after emulator remap path by calling dispatchKeyEvent.
                                     MainActivity.this.dispatchKeyEvent(event);
                                 }
                             }
@@ -3696,6 +3869,14 @@ public class MainActivity extends Activity {
                             @Override
                             public Activity activity() {
                                 return MainActivity.this;
+                            }
+
+                            @Override
+                            public void onStorageChanged() {
+                                // 2026-08-01 — Storage folder picked/seed lands after onCreate,
+                                // so re-derive the Music root into the new Internal/MicroSD children.
+                                // Was: rootFolder stayed at a broken relative "Music" — Deezer/Soulseek saves died.
+                                applyMediaRootPreference();
                             }
                         });
                 phoneChromeHost.attachSolarContent(root);
@@ -3864,6 +4045,14 @@ public class MainActivity extends Activity {
         }
         // 🚀 [여기까지 추가 끝!]
         themedContextMenu = new ThemedContextMenu(this);
+        // 2026-08-01 — Queue rows show tiny 16px album-art squares; resolve lazily on a
+        // background worker through the shared cover pipeline and repaint visible rows.
+        themedContextMenu.setQueueArtProvider(new ThemedContextMenu.QueueArtProvider() {
+            @Override
+            public android.graphics.Bitmap artFor(java.io.File file) {
+                return queueRowArtFor(file);
+            }
+        });
         // 2026-07-14 — Belt: if focus sits on the overlay and a key reaches View.onKey, feed MainActivity.
         // Layman: even if the window forgets the activity path, the modal still gets the buttons.
         // Tech: OverlayKeyHandler → onKeyDown (center already handled in dispatch when owns keys).
@@ -3891,8 +4080,14 @@ public class MainActivity extends Activity {
             @Override
             public void onQueueTouchLift(int index) {
                 if (!contextMenuInQueueTier || contextQueueMoveFrom >= 0) return;
-                if (!canPickContextQueueMoveFrom(index)) return;
-                contextQueueFocusIndex = index;
+                // 2026-08-01 — Adapter → queue index (Mix dividers interleaved when idle).
+                boolean mixes = com.solar.launcher.stem.StemMixQueuePolicy.mixRowsVisible(
+                        false, contextQueueEditPlaylist);
+                boolean[] liftMask = mixes ? queueMixPairMask(playback.unifiedQueue()) : null;
+                int qIdx = mixes ? com.solar.launcher.stem.StemMixQueuePolicy.adapterToTrack(
+                        index, liftMask) : index;
+                if (!canPickContextQueueMoveFrom(qIdx)) return;
+                contextQueueFocusIndex = qIdx;
                 handleContextQueueCenterActivate(true);
             }
 
@@ -4452,6 +4647,9 @@ public class MainActivity extends Activity {
         listVirtualSongs.setDivider(null); // 못생긴 기본 구분선 제거
         listVirtualSongs.setSelector(new android.graphics.drawable.ColorDrawable(0)); // 기본 터치 효과 제거
         listVirtualSongs.setItemsCanFocus(true);
+        // 2026-08-02 — Phone chrome wheel (MEDIA_PLAY/PAUSE injection) stays in touch mode;
+        // without FITM the ListView + rows reject requestFocus and the wheel looks dead.
+        listVirtualSongs.setFocusableInTouchMode(true);
         listVirtualSongs.setSmoothScrollbarEnabled(false);
         listVirtualSongs.setVisibility(View.GONE); // 평소엔 숨겨둡니다.
 
@@ -4496,6 +4694,8 @@ public class MainActivity extends Activity {
         listThemes.setDivider(null);
         listThemes.setSelector(new android.graphics.drawable.ColorDrawable(0));
         listThemes.setItemsCanFocus(true);
+        // 2026-08-02 — Phone chrome wheel parity (same touch-mode rationale as listVirtualSongs).
+        listThemes.setFocusableInTouchMode(true);
         listThemes.setVisibility(View.GONE);
         settingsMenuHost.addView(listThemes, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
@@ -6480,7 +6680,7 @@ public class MainActivity extends Activity {
         setTextIfChanged(tvStatusBattery, batteryPct + "%");
 
         int idx = ThemeManager.batteryLevelIndex(batteryPct);
-        Bitmap themedBattery = ThemeManager.getBatteryIcon(idx, isCharging);
+        Bitmap themedBattery = ThemeManager.getBatteryIconForPercent(batteryPct, isCharging);
         if (themedBattery != null && ivStatusBatteryThemed != null) {
             int batH = y1BatteryIconHeightPx > 0 ? y1BatteryIconHeightPx
                     : (int) (20 * getResources().getDisplayMetrics().density);
@@ -9607,6 +9807,8 @@ public class MainActivity extends Activity {
     }
 
     private void onWifiConnectivityChanged() {
+        WifiOfflinePowerReceiver.sync(this);
+        updateWifiOfflinePowerPolicy();
         // Menu rebuild already deferred to input-idle via connectivityUiDebounceRunnable.
         refreshConnectivityGatedMenus();
         // 2026-07-17 — Never run internet hooks on the wheel path: yield until input idle.
@@ -9643,6 +9845,103 @@ public class MainActivity extends Activity {
         soulseekPolicyDebounceHandler.removeCallbacks(soulseekPolicyDebounceRunnable);
         soulseekPolicyDebounceHandler.postDelayed(soulseekPolicyDebounceRunnable,
                 SOULSEEK_POLICY_DEBOUNCE_MS);
+    }
+
+    /**
+     * Start or cancel the three-minute offline-radio timer. This policy intentionally does not
+     * use the existing screen-sleep preference: Solar hardware should save power whenever Wi-Fi
+     * is on but not associated, while Phone Chrome and emulators remain ordinary phone hosts.
+     */
+    private void updateWifiOfflinePowerPolicy() {
+        soulseekUiHandler.removeCallbacks(wifiOfflinePowerOffRunnable);
+        if (isWifiOfflinePowerPolicyExcluded()) {
+            wifiOfflineSinceMs = 0L;
+            return;
+        }
+        final WifiManager wm;
+        try {
+            wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+        } catch (Exception ignored) {
+            wifiOfflineSinceMs = 0L;
+            return;
+        }
+        if (wm == null || !wm.isWifiEnabled()) {
+            wifiOfflineSinceMs = 0L;
+            return;
+        }
+        if (isWifiConnected()) {
+            wifiOfflineSinceMs = 0L;
+            return;
+        }
+        if (wifiOfflineSinceMs <= 0L) {
+            wifiOfflineSinceMs = SystemClock.elapsedRealtime();
+        }
+        long delay = WifiOfflinePowerPolicy.remainingDelayMs(
+                wifiOfflineSinceMs, SystemClock.elapsedRealtime());
+        soulseekUiHandler.postDelayed(wifiOfflinePowerOffRunnable,
+                Math.max(1L, delay));
+    }
+
+    private boolean isWifiOfflinePowerPolicyExcluded() {
+        // Fail closed if device classification is unavailable: never unexpectedly disable a
+        // phone's Wi-Fi because display probing or the emulator detector threw.
+        try {
+            if (DeviceFeatures.isEmulator()) return true;
+            return com.solar.launcher.phone.PhoneChromePolicy.active(this);
+        } catch (Throwable ignored) {
+            return true;
+        }
+    }
+
+    /** Do not shut the radio down while the user is connecting or actively using network work. */
+    private boolean wifiOfflinePowerOffBlocked() {
+        // Do not use wifiDisableNeedsWarning() here: configured sharing is not proof of
+        // active work and must not keep an unassociated radio alive forever.
+        if (wifiConnectInProgress || shouldKeepSoulseekAwakeForTransfers()
+                || isMediaPlayingNeedsWifi() || isServerRunning
+                || SolarSilentWifi.isUiHidden()) return true;
+        if (currentScreenState == STATE_WIFI) return true;
+        return themedContextMenu != null && themedContextMenu.isShowing()
+                && isWifiTierMounted();
+    }
+
+    private void tryWifiOfflinePowerOff() {
+        if (isWifiOfflinePowerPolicyExcluded()) return;
+        final WifiManager wm;
+        try {
+            wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+        } catch (Exception ignored) {
+            return;
+        }
+        if (wm == null || !wm.isWifiEnabled() || isWifiConnected()) {
+            updateWifiOfflinePowerPolicy();
+            return;
+        }
+        if (wifiOfflinePowerOffBlocked()) {
+            soulseekUiHandler.postDelayed(wifiOfflinePowerOffRunnable,
+                    WifiOfflinePowerPolicy.RETRY_DELAY_MS);
+            return;
+        }
+        try {
+            boolean disabled = wm.setWifiEnabled(false);
+            if (!disabled) {
+                soulseekUiHandler.postDelayed(wifiOfflinePowerOffRunnable,
+                        WifiOfflinePowerPolicy.RETRY_DELAY_MS);
+                return;
+            }
+            wifiOfflineSinceMs = 0L;
+            wifiContextPendingEnable = false;
+            wifiContextPendingDisable = true;
+            cancelWifiContextScanFollowUps();
+            // setWifiEnabled() is asynchronous on API 17/19; retry only as a safety net until
+            // WIFI_STATE_DISABLED arrives and clears the request.
+            soulseekUiHandler.postDelayed(wifiOfflinePowerOffRunnable,
+                    WifiOfflinePowerPolicy.RETRY_DELAY_MS);
+            android.util.Log.i("SolarWifi", "Wi-Fi disable requested after offline timeout");
+        } catch (Exception ignored) {
+            soulseekUiHandler.postDelayed(wifiOfflinePowerOffRunnable,
+                    WifiOfflinePowerPolicy.RETRY_DELAY_MS);
+        }
     }
 
     /** ponytail: after 15 min asleep off-charger, drop Wi-Fi unless transfers need it. */
@@ -10591,6 +10890,8 @@ public class MainActivity extends Activity {
         list.setDivider(null);
         list.setSelector(new android.graphics.drawable.ColorDrawable(0));
         list.setItemsCanFocus(true);
+        // 2026-08-02 — Phone chrome wheel parity: touch-mode focus must be accepted on Reach lists.
+        list.setFocusableInTouchMode(true);
         list.setChoiceMode(ListView.CHOICE_MODE_SINGLE);
         list.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
         list.setScrollingCacheEnabled(false);
@@ -11569,7 +11870,8 @@ public class MainActivity extends Activity {
         for (int i = 0; i < containerSettingsItems.getChildCount(); i++) {
             View row = containerSettingsItems.getChildAt(i);
             if (!(row instanceof LinearLayout)) continue;
-            boolean hasFocus = row == focused;
+            boolean hasFocus = row == focused || row.hasFocus()
+                    || isViewDescendantOf(focused, row);
             TextView tvLeft = null;
             TextView tvRight = null;
             ImageView arrow = null;
@@ -11693,6 +11995,16 @@ public class MainActivity extends Activity {
             HomeMenuConfig.Entry he = homeIt.next();
             if (HomeMenuConfig.ID_NOW_PLAYING.equals(he.id) && !showNowPlaying) {
                 homeIt.remove();
+            }
+        }
+        // 2026-08-02 — Phone chrome hides RF tiles: Radio/FM never appear on Home.
+        if (isPhoneChromeActive()) {
+            java.util.Iterator<HomeMenuConfig.Entry> rfHomeIt = homeMenuEntries.iterator();
+            while (rfHomeIt.hasNext()) {
+                HomeMenuConfig.Entry he = rfHomeIt.next();
+                if (HomeMenuConfig.ID_RADIO.equals(he.id) || HomeMenuConfig.ID_FM.equals(he.id)) {
+                    rfHomeIt.remove();
+                }
             }
         }
         final boolean showMore = HomeMenuConfig.shouldShowMoreTile(prefs, online, onLan);
@@ -13108,6 +13420,11 @@ public class MainActivity extends Activity {
     }
 
     private void openAndroidBluetoothSettings() {
+        // 2026-08-05 — Y1/Y2 ROMs ship com.android.settings disabled (kiosk) or a lab session
+        // pm-disables it, so Settings.ACTION_BLUETOOTH_SETTINGS can never resolve and the
+        // experiment-off path dead-ends. Solar has root on Y1/Y2 — re-enable before firing.
+        // Reversal: drop ensureAndroidSettingsEnabled(); stock resolvable Settings only.
+        ensureAndroidSettingsEnabled();
         Intent intent = new Intent(Settings.ACTION_BLUETOOTH_SETTINGS);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         try {
@@ -13125,6 +13442,29 @@ public class MainActivity extends Activity {
                 Toast.makeText(this, getString(R.string.apps_launch_failed), Toast.LENGTH_SHORT).show();
             }
         }
+    }
+
+    /**
+     * 2026-08-05 — Re-enable {@code com.android.settings} when the ROM ships it disabled
+     * (Innioasis kiosk) or a lab session pm-disabled it. Without this, even
+     * {@code Settings.ACTION_SETTINGS} cannot resolve on Y1/Y2.
+     * Layman: makes the "regular Android Bluetooth settings" reachable on Y1/Y2.
+     * Tech: checks getApplicationEnabledSetting, pm enable via RootShell when disabled.
+     * Reversal: delete; assume Settings always enabled.
+     */
+    private void ensureAndroidSettingsEnabled() {
+        try {
+            int state = getPackageManager().getApplicationEnabledSetting(
+                    "com.android.settings");
+            if (state != android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+                    && state != android.content.pm.PackageManager
+                            .COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED) {
+                return;
+            }
+        } catch (Exception ignored) {
+            return; // package gone — nothing to re-enable
+        }
+        RootShell.run("pm enable com.android.settings");
     }
 
     /** adb: am start -n com.solar.launcher/.MainActivity --ez solar_adb_open_soulseek_messages true */
@@ -14342,7 +14682,7 @@ public class MainActivity extends Activity {
             } catch (Exception ignored) {}
             // #endregion
             stemPickMode = false;
-            com.solar.launcher.stem.StemPickSlots.clear(stemMashupQueue);
+            clearStemPickSelectionAndPending();
         }
         // Leaving library clears Stems hub mode (unless entering Stem Player).
         if (stemsHubRootMode && state != STATE_BROWSER && state != STATE_STEM_PLAYER) {
@@ -17614,6 +17954,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             } catch (Exception ignored) {}
             // #endregion
         }
+        @Override public void onDeezerSaveAndStemsComplete(File completeFile, DeezerResult track) {
+            startSaveSongAndStems(completeFile, track != null ? track.displayTitle() : null);
+        }
         @Override public void prefetchDeezerCover(final File track) {
             if (track == null) return;
             final File cover = coverFileForTrack(track);
@@ -18407,6 +18750,11 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     private void beginWifiConnect() {
         wifiConnectInProgress = true;
+        // A failed/manual connection attempt is user activity: give the radio a fresh
+        // three-minute offline window rather than powering it off immediately afterward.
+        soulseekUiHandler.removeCallbacks(wifiOfflinePowerOffRunnable);
+        wifiOfflineSinceMs = 0L;
+        WifiOfflinePowerReceiver.onUserWifiIntent(this);
         WifiConnector.cancelPending();
         // #region agent log
         try {
@@ -18422,6 +18770,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     private void endWifiConnect() {
         wifiConnectInProgress = false;
+        updateWifiOfflinePowerPolicy();
         // #region agent log
         try {
             org.json.JSONObject d = new org.json.JSONObject();
@@ -18519,6 +18868,14 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     @android.annotation.SuppressLint("MissingPermission")
     private void startBluetoothScan(boolean requestFocus) {
+        // 2026-08-05 — Heal the KitKat poisoned BluetoothAdapter singleton before any read
+        // so the menu can actually list devices / trigger discovery (Y2). Reversal: delete.
+        BluetoothAdapterCompat.repairIfPoisoned();
+        // 2026-08-05 — Android 12+ runtime grants before listing/scanning; request once on
+        // user entry (requestFocus) and rescan after the grant lands.
+        if (requestFocus && !ensureBluetoothRuntimePerms(true)) {
+            return;
+        }
         updateStatusBarTitle();
         syncBluetoothContextPendingFlags();
         final String restoreFocusAddress = requestFocus ? null : bluetoothFocusedAddress();
@@ -18614,6 +18971,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     @android.annotation.SuppressLint("MissingPermission")
     private void triggerBluetoothDiscovery(boolean requestFocus) {
+        // 2026-08-05 — startDiscovery() no-ops on a KitKat-poisoned singleton; heal first.
+        BluetoothAdapterCompat.repairIfPoisoned();
+        if (!ensureBluetoothRuntimePerms()) return;
         final BluetoothAdapter ba = BluetoothAdapter.getDefaultAdapter();
         if (ba == null || (!ba.isEnabled() && !isBluetoothPowerOnForUi())) return;
         // ponytail: MTK BT stack drops A2DP during inquiry — never scan while audio sink is up.
@@ -21608,6 +21968,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         if (mediaSuite != null && mediaSuite.isFmPresetMoveActive()) return true;
         if (playlistMoveTutorialShowing) return true;
         if (isPlaylistBrowseContext()) return true;
+        if (isHomeScreenEditorActive()) return true;
         // 2026-07-15 — Home editor strip move.
         if (homeEditorMoveFrom >= 0) return true;
         if (canScheduleCenterMovePick() && heldMs < CENTER_MOVE_HOLD_MS + 80) return true;
@@ -21620,8 +21981,19 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
      * Reversal: return isY2() && !y2HoldOkToSleep only.
      */
     private boolean y2CenterOpensContextMenu() {
+        if (isHomeScreenEditorActive()) return false;
         if (DeviceFeatures.isA5()) return true;
         return DeviceFeatures.isY2() && !y2HoldOkToSleep;
+    }
+
+    /**
+     * Home editor owns the complete OK gesture lifecycle: before pickup, a long
+     * hold starts moving; after pickup, a short OK confirms. Neither phase may
+     * be interpreted as the global context menu or OK-to-sleep gesture.
+     */
+    private boolean isHomeScreenEditorActive() {
+        return currentScreenState == STATE_SETTINGS
+                && SettingsScreens.HOME.equals(settingsSubScreenKey);
     }
 
     /**
@@ -21661,8 +22033,13 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     }
 
     private boolean canScheduleCenterMovePick() {
-        if (themedContextMenu != null && themedContextMenu.isShowing() && contextMenuInQueueTier) {
-            return contextQueueMoveFrom < 0 && isContextQueueListFocused();
+        if (themedContextMenu != null && themedContextMenu.isShowing()) {
+            if (contextMenuInQueueTier) {
+                return contextQueueMoveFrom < 0 && isContextQueueListFocused();
+            }
+            // Existing context menus own OK; do not let the background editor
+            // claim the same physical press.
+            return false;
         }
         if (isFmPresetListContext()) {
             return !mediaSuite.isFmPresetMoveActive();
@@ -21712,7 +22089,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         if (!key.startsWith(prefix)) return null;
         String id = key.substring(prefix.length());
         if (HomeMenuConfig.ID_SETTINGS.equals(id)) return null;
-        if (!HomeMenuConfig.isVisible(prefs, id)) return null;
+        if (!HomeMenuConfig.isVisible(prefs, id)
+                || !isHomeEditorDisplayedShortcut(id)) return null;
         return id;
     }
 
@@ -21762,6 +22140,13 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     private boolean handleCenterKeyUp(KeyEvent event, boolean fromContextMenu) {
         long heldMs = centerKeyDownTime > 0 ? System.currentTimeMillis() - centerKeyDownTime : 0;
+        final boolean moveReleaseOwnsPress = CenterHoldPolicy.releaseAction(
+                centerMovePickHandled,
+                y2CenterOpensContextMenu(),
+                centerLongPressHandled,
+                centerHoldShouldSleep(heldMs),
+                heldMs,
+                CENTER_LONG_PRESS_MS) == CenterHoldPolicy.RELEASE_CONSUME_MOVE;
         clearContextHoldThrobber();
         clockHandler.removeCallbacks(centerMovePickRunnable);
         clockHandler.removeCallbacks(centerLongPressRunnable);
@@ -21770,6 +22155,21 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         centerKeyDownTime = 0;
         if (centerSleepHoldHandled) {
             centerSleepHoldHandled = false;
+            return true;
+        }
+        // A completed move owns the entire physical press. Do not let its release
+        // fall through into Y2 context-menu, sleep, or ordinary activation handling.
+        if (moveReleaseOwnsPress) {
+            centerMovePickHandled = false;
+            centerLongPressHandled = false;
+            return true;
+        }
+        // The active Home move strip owns a short OK confirmation. Keep this
+        // explicit rather than relying on the generic center click fallback.
+        if (!fromContextMenu && homeEditorMoveFrom >= 0
+                && currentScreenState == STATE_SETTINGS
+                && SettingsScreens.HOME.equals(settingsSubScreenKey)) {
+            endHomeEditorMove(true);
             return true;
         }
         if (fromContextMenu) {
@@ -22068,6 +22468,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         contextTierConfirmOpen = false;
         // Jam Options slot index — clear so next open is not stuck in jam rows. 2026-07-21
         stemMixJamContextSong = Integer.MIN_VALUE;
+        stemMixJamContextZone = -1;
         cancelJamContextHoldDismiss();
         volumeHandler.removeCallbacks(hideVolumeContextTask);
         updateNetworkRescanLoop();
@@ -22738,6 +23139,19 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         });
     }
 
+    /**
+     * 2026-08-03 — Phone Chrome wheel events stay a stream, not a synthetic button pair.
+     * Keep this classifier pure so the injection bridge and JVM routing tests share the rule.
+     */
+    static boolean isPhoneChromeWheelEvent(KeyEvent event) {
+        return event != null && Y1InputKeys.isWheelKey(event.getKeyCode());
+    }
+
+    /** 2026-08-02 — Live phone-chrome wrap state (false on real Y1/Y2/A5 hardware). */
+    private boolean isPhoneChromeActive() {
+        return phoneChromeHost != null;
+    }
+
     private ThemedContextMenu.QuickItem[] buildContextQuickBar() {
         boolean hasQueue = contextQuickBarShowsQueue();
         int queueSize = hasQueue ? playback.unifiedQueue().size() : 0;
@@ -22774,8 +23188,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         boolean showVolSleep = DeviceFeatures.showsOverlayVolumeLockChips();
         // Stem/Mix jam: hide Wi‑Fi/BT so mid-jam radio menus can’t stall pads. 2026-07-21
         // Was: always visible. Reversal: showConn = true.
+        // 2026-08-02 — Phone chrome hides RF chips (Wi‑Fi/BT toggles; network features stay).
         boolean showConn = StemControls.jamQuickBarShowsConnectivity(
-                StemOrMixSession.isActive());
+                StemOrMixSession.isActive()) && !isPhoneChromeActive();
         // 2026-07-15 — Sleep/Zzz rightmost after Volume (was Lock at index 1).
         return new ThemedContextMenu.QuickItem[] {
             new ThemedContextMenu.QuickItem(null, R.drawable.ic_home, getString(R.string.context_go_to_home), true),
@@ -22928,6 +23343,14 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     /** Center on Wi-Fi / Bluetooth quick chip — push tier, swap list, enter submenu in one step. */
     private void openContextNetworkTab(String tier, int quickIndex) {
         if (themedContextMenu == null) return;
+        // 2026-08-05 — User tapped the BT chip: request Android 12+ grants before the tier
+        // tries to list/scan devices (otherwise the submenu is empty on phones). Remember the
+        // chip so the grant callback can finish opening the tier.
+        if ("bt".equals(tier) && !ensureBluetoothRuntimePerms(true)) {
+            btPermissionPendingQuickIndex = quickIndex;
+            return;
+        }
+        btPermissionPendingQuickIndex = -1;
         themedContextMenu.setQuickReturnIndex(quickIndex);
         if ("wifi".equals(tier) && !isWifiPowerOn()) applyWifiPowerState(true);
         if ("bt".equals(tier) && !isBluetoothPowerOn()) {
@@ -24374,6 +24797,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     private void startBtContextDiscoveryIfNeeded() {
         if (!isBluetoothContextExpanded()) return;
         if (hasActiveBluetoothAudioSink()) return;
+        if (!ensureBluetoothRuntimePerms()) return;
+        // 2026-08-05 — Heal the KitKat poisoned singleton before starting the inquiry.
+        BluetoothAdapterCompat.repairIfPoisoned();
         try {
             BluetoothAdapter ba = BluetoothAdapter.getDefaultAdapter();
             if (ba == null || !isBluetoothPowerOn() || ba.isDiscovering()) return;
@@ -24531,7 +24957,17 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
      * ponytail: su settings fallback when {@link BluetoothAdapter#enable()} is ignored on production builds.
      */
     private void applyBluetoothPowerState(boolean enable) {
+        // 2026-08-05 — enable() needs BLUETOOTH_CONNECT on Android 12+; request the grant
+        // before touching the adapter so the toggle isn't a silent no-op on phones. Mark the
+        // intent optimistically so the grant callback re-applies the power state.
+        if (enable && !ensureBluetoothRuntimePerms(true)) {
+            btContextPendingEnable = true;
+            return;
+        }
         try {
+            // 2026-08-05 — enable()/disable() no-op on a KitKat-poisoned singleton; heal
+            // first so the in-app toggle actually turns the radio on (Y2).
+            BluetoothAdapterCompat.repairIfPoisoned();
             BluetoothAdapter ba = BluetoothAdapter.getDefaultAdapter();
             if (ba == null) return;
             if (enable) {
@@ -24677,6 +25113,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         if (btContextPendingDisable) return false;
         if (btContextPendingEnable) return true;
         try {
+            // 2026-08-05 — A poisoned singleton reports STATE_OFF and collapses the tier.
+            BluetoothAdapterCompat.repairIfPoisoned();
             BluetoothAdapter ba = BluetoothAdapter.getDefaultAdapter();
             if (ba != null && ba.getState() == BluetoothAdapter.STATE_TURNING_ON) {
                 return true;
@@ -24685,8 +25123,72 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         return isBluetoothPowerOnForUi();
     }
 
+    /**
+     * 2026-08-05 — True when runtime Bluetooth access is fully granted for this API level.
+     * Y1/Y2/A5 (API 17/19) install-time perms always pass; API 31+ needs CONNECT+SCAN.
+     */
+    private boolean hasBluetoothRuntimePerms() {
+        if (Build.VERSION.SDK_INT < 31) return true;
+        try {
+            return checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
+                            == android.content.pm.PackageManager.PERMISSION_GRANTED
+                    && checkSelfPermission(android.Manifest.permission.BLUETOOTH_SCAN)
+                            == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * 2026-08-05 — Check/request the runtime grants Android 12+ needs before any adapter/device
+     * call (getBondedDevices / startDiscovery / enable all throw SecurityException without
+     * them, and every call site swallowed that silently — empty BT menu on phones).
+     * Returns true when the caller may proceed. API 23-30 needs location (discovery); API 31+
+     * needs BLUETOOTH_CONNECT + BLUETOOTH_SCAN. Only user-initiated paths (screen entry,
+     * power toggle, quick-bar chip) pass requestIfMissing=true so background rescan ticks can
+     * never spam the permission dialog. Reversal: delete — old behaviour.
+     */
+    @android.annotation.SuppressLint("MissingPermission")
+    private boolean ensureBluetoothRuntimePerms(boolean requestIfMissing) {
+        if (Build.VERSION.SDK_INT < 23) return true;
+        try {
+            if (Build.VERSION.SDK_INT >= 31) {
+                if (hasBluetoothRuntimePerms()) return true;
+                if (!requestIfMissing || bluetoothPermRequestInFlight) return false;
+                bluetoothPermRequestInFlight = true;
+                requestPermissions(new String[]{
+                                android.Manifest.permission.BLUETOOTH_CONNECT,
+                                android.Manifest.permission.BLUETOOTH_SCAN},
+                        REQ_BLUETOOTH_RUNTIME);
+                return false;
+            }
+            // API 23-30: discovery needs location; bonded list alone does not.
+            if (checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                    == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                return true;
+            }
+            if (!requestIfMissing || bluetoothPermRequestInFlight) return false;
+            bluetoothPermRequestInFlight = true;
+            requestPermissions(new String[]{android.Manifest.permission.ACCESS_FINE_LOCATION},
+                    REQ_BLUETOOTH_RUNTIME);
+            return false;
+        } catch (Throwable t) {
+            // Don't wedge the request flag: if requestPermissions itself threw (rare — e.g.
+            // activity dying), no onRequestPermissionsResult will ever arrive to clear it.
+            bluetoothPermRequestInFlight = false;
+            return true; // fail open on unusual stacks
+        }
+    }
+
+    /** Check-only wrapper for background rescan ticks — never shows the dialog. */
+    private boolean ensureBluetoothRuntimePerms() {
+        return ensureBluetoothRuntimePerms(false);
+    }
+
     private boolean isBluetoothPowerOn() {
         try {
+            // 2026-08-05 — Heal the KitKat poisoned singleton before reading state (Y2).
+            BluetoothAdapterCompat.repairIfPoisoned();
             BluetoothAdapter ba = BluetoothAdapter.getDefaultAdapter();
             if (ba != null) {
                 int state = ba.getState();
@@ -24962,8 +25464,26 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             } catch (Exception ignored) {}
             // #endregion
         }
+        // 2026-08-01 — Queue focus is stored as a track index; translate to the adapter
+        // row (Mix dividers interleaved when idle) unless we're parked on the footer.
+        boolean mixesNow = com.solar.launcher.stem.StemMixQueuePolicy.mixRowsVisible(
+                moving, contextQueueEditPlaylist);
+        boolean[] maskNow = mixesNow ? queueMixPairMask(q) : null;
+        int focusAdapter = contextQueueFocusIndex;
+        if (mixesNow) {
+            if (contextQueueFocusIndex >= q.size()) {
+                focusAdapter = com.solar.launcher.stem.StemMixQueuePolicy.adapterCountWithMix(
+                        q.size(), !contextQueueEditPlaylist, maskNow) - 1;
+            } else {
+                focusAdapter = com.solar.launcher.stem.StemMixQueuePolicy.trackToAdapter(
+                        contextQueueFocusIndex, maskNow);
+            }
+        }
         themedContextMenu.replaceQueueContent(getString(R.string.context_quick_queue),
-                specs, contextQueueFocusIndex, contextQueueMoveFrom);
+                specs, focusAdapter, contextQueueMoveFrom);
+        // 2026-08-01 — Prebake tiny row art in the background worker so visible rows
+        // paint their album squares instantly (no per-row pop-in).
+        prewarmQueueRowArt(specs);
         themedContextMenu.ensureQueueListVisible();
         if (!focusList) {
             themedContextMenu.focusQuickBarLeavingQueueList(CONTEXT_QUICK_QUEUE_INDEX);
@@ -25576,12 +26096,22 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     private void confirmContextQueueMove() {
         if (themedContextMenu == null) return;
-        int placed = contextQueueMoveFrom >= 0 ? contextQueueMoveFrom : themedContextMenu.focusIndex();
+        // 2026-08-01 — placed is a track (queue) index only while the move was active;
+        // the focusIndex() fallback is already an adapter row, so don't double-translate.
+        boolean fromMove = contextQueueMoveFrom >= 0;
+        int placed = fromMove ? contextQueueMoveFrom : themedContextMenu.focusIndex();
         flushContextQueueMoveIfDirty();
         clearContextQueueMoveSession();
         contextQueueFocusIndex = placed;
         rebuildContextQueueTier(true);
-        themedContextMenu.flashQueueConfirm(placed);
+        // Queue focus/flash are adapter rows; translate placed track index back. 2026-08-01
+        boolean mixesNow = com.solar.launcher.stem.StemMixQueuePolicy.mixRowsVisible(
+                false, contextQueueEditPlaylist);
+        boolean[] flashMask = mixesNow ? queueMixPairMask(playback.unifiedQueue()) : null;
+        int flashAdapter = mixesNow && fromMove
+                ? com.solar.launcher.stem.StemMixQueuePolicy.trackToAdapter(placed, flashMask)
+                : placed;
+        themedContextMenu.flashQueueConfirm(flashAdapter);
         if (!contextQueueEditPlaylist) {
             themedContextMenu.refreshQueuePlayingState(buildContextQueueRowSpecs());
         }
@@ -25605,7 +26135,23 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     private void handleContextQueueCenterActivate(boolean longPress) {
         if (themedContextMenu == null || !contextMenuInQueueTier) return;
-        int idx = themedContextMenu.focusIndex();
+        int adapterIdx = themedContextMenu.focusIndex();
+        int qSize = contextQueueEditPlaylist ? playlistEditTracks.size()
+                : playback.unifiedQueue().size();
+        boolean mixes = com.solar.launcher.stem.StemMixQueuePolicy.mixRowsVisible(
+                contextQueueMoveFrom >= 0, contextQueueEditPlaylist);
+        boolean[] actMask = mixes ? queueMixPairMask(playback.unifiedQueue()) : null;
+        // Queue Mix divider — blend the adjacent pair into the stem pads. 2026-08-01
+        if (mixes && com.solar.launcher.stem.StemMixQueuePolicy.isMixAdapter(
+                adapterIdx, qSize, actMask)) {
+            int lo = com.solar.launcher.stem.StemMixQueuePolicy.adapterToTrack(adapterIdx, actMask);
+            contextQueueFocusIndex = lo;
+            launchQueueMix(lo, lo + 1);
+            return;
+        }
+        int idx = mixes ? com.solar.launcher.stem.StemMixQueuePolicy.adapterToTrack(
+                adapterIdx, actMask)
+                : adapterIdx;
         contextQueueFocusIndex = idx;
         if (contextQueueMoveFrom >= 0) {
             if (contextQueueMoveFrom == idx) {
@@ -25615,25 +26161,114 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             }
             return;
         }
-        // Footer Add song — not a PlayQueue index. 2026-07-21
+        // Footer Add song — adapter-aware (moves to 2N−1 when Mix rows visible). 2026-08-01
         if (!contextQueueEditPlaylist
-                && com.solar.launcher.stem.StemMixQueuePolicy.isFooterIndex(
-                        idx, playback.unifiedQueue().size())) {
+                && com.solar.launcher.stem.StemMixQueuePolicy.isFooterAdapter(
+                        adapterIdx, qSize,
+                        com.solar.launcher.stem.StemMixQueuePolicy.footerVisible(false),
+                        actMask)) {
             if (!longPress) openStemMixQueueAddSong();
             return;
         }
         if (longPress) {
             if (canPickContextQueueMoveFrom(idx)) {
-                contextQueueMoveFrom = idx;
-                beginContextQueueMoveSession(idx);
-                contextQueueMoveWheelFilter.reset();
-                themedContextMenu.setQueueMoveFrom(idx);
-                // Hide footer while ribbon moves (rebuild without Add). 2026-07-21
-                rebuildContextQueueTier(true);
+                // 2026-08-01 — Start the move session only after Mix rows fade out.
+                // Setting contextQueueMoveFrom early would flip mixes→false while the
+                // list still shows interleaved dividers, so the wheel/OK handlers would
+                // translate adapter→queue against the wrong index space (crash/mis-apply).
+                Runnable beginMove = new Runnable() {
+                    @Override
+                    public void run() {
+                        // Tier may have closed during the fade — don't start a ghost session. 2026-08-01
+                        if (!contextMenuInQueueTier || themedContextMenu == null
+                                || !themedContextMenu.isShowing()) {
+                            return;
+                        }
+                        contextQueueMoveFrom = idx;
+                        beginContextQueueMoveSession(idx);
+                        contextQueueMoveWheelFilter.reset();
+                        themedContextMenu.setQueueMoveFrom(idx);
+                        // Hide footer while ribbon moves (rebuild without Add). 2026-07-21
+                        rebuildContextQueueTier(true);
+                    }
+                };
+                if (themedContextMenu.hasQueueMixRows()) {
+                    themedContextMenu.fadeQueueMixRows(beginMove);
+                } else {
+                    beginMove.run();
+                }
             }
         } else {
             playUnifiedQueueItemAt(idx);
         }
+    }
+
+    /**
+     * Queue Mix divider — blend the adjacent track pair into the stem pads.
+     * Fresh: lift the pair to the live front and open the Stem mashup (rest stays Next-up).
+     * Mid-jam: seed-lock crossfade — pads transition into the new pair without a hard cut.
+     * Layman: pick Mix between two songs to make those the two pads, smoothly.
+     * 2026-08-01
+     */
+    private void launchQueueMix(int lowerTrack, int upperTrack) {
+        PlayQueue q = playback.unifiedQueue();
+        if (q == null) return;
+        int size = q.size();
+        if (lowerTrack < 0 || upperTrack < 0 || lowerTrack >= size || upperTrack >= size) return;
+        if (lowerTrack == upperTrack) return;
+        int lo = Math.min(lowerTrack, upperTrack);
+        int hi = Math.max(lowerTrack, upperTrack);
+        PlayQueue.QueueItem ia = q.items().get(lo);
+        PlayQueue.QueueItem ib = q.items().get(hi);
+        if (ia == null || ib == null) return;
+        File a = ia.file;
+        File b = ib.file;
+        if (a == null || b == null || !a.isFile() || !b.isFile()) return;
+        boolean midJam = com.solar.launcher.stem.StemPlayerHost.isSessionActive()
+                && stemPlayerHost != null;
+        // Mid-jam only stem-ready tracks may join the live pads. 2026-08-01
+        if (midJam) {
+            boolean premix = com.solar.launcher.stem.LalalAccount.isPremixExperimental(prefs);
+            boolean aReady = com.solar.launcher.stem.LalalClient.trackStemsReady(
+                    this, a, premix, getCacheDir());
+            boolean bReady = com.solar.launcher.stem.LalalClient.trackStemsReady(
+                    this, b, premix, getCacheDir());
+            if (!aReady || !bReady) {
+                Toast.makeText(this, R.string.stem_queue_need_prepared, Toast.LENGTH_SHORT).show();
+                return;
+            }
+        }
+        // 2026-08-01 — Queue-launched fresh performance: remember the pre-session queue
+        // (content + position) so exiting the session restores playback exactly.
+        if (!midJam) {
+            stemSessionQueueSnapshot = new java.util.ArrayList<PlayQueue.QueueItem>(q.items());
+            stemSessionQueueSnapshotIndex = q.index();
+        }
+        if (!com.solar.launcher.stem.StemMixQueuePolicy.liftPairToLiveFront(q, lo, hi)) {
+            stemSessionQueueSnapshot = null;
+            stemSessionQueueSnapshotIndex = -1;
+            return;
+        }
+        persistPlaybackQueue();
+        if (midJam) {
+            // Seed lock: the current pair keeps playing while the new set melts in. 2026-08-01
+            stemPlayerHost.transitionPairTo(a, b, null);
+            contextQueueFocusIndex = 0;
+            refreshContextQueueTierIfOpen();
+            return;
+        }
+        // Fresh launch — reseed the whole reordered queue so the rest stays Next-up.
+        // 2026-08-01 — Only stem-ready tracks join the performance; tracks without
+        // stems are skipped (never shown in the queue during the session).
+        try {
+            dismissContextMenuAnimated();
+        } catch (Exception ignored) {}
+        java.util.List<File> all = new java.util.ArrayList<File>();
+        for (PlayQueue.QueueItem item : q.items()) {
+            File f = item != null ? item.file : null;
+            if (f != null && f.isFile() && queueFileStemsReady(f)) all.add(f);
+        }
+        openStemPlayer(all);
     }
 
     /**
@@ -25778,13 +26413,15 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                 Toast.makeText(this, R.string.stem_queue_need_prepared, Toast.LENGTH_SHORT).show();
                 return;
             }
-            int song = stemPlayerHost.focusedSongIndex();
-            try {
-                if (playback.applyStemMixHoldReplace(song, idx, false)) {
-                    persistPlaybackQueue();
-                }
-            } catch (Exception ignored) {}
-            stemPlayerHost.softReplaceSong(song, track);
+            // StemFM queue pick: the chosen track becomes the new dominant seed — lift it
+            // to the live front and restart BOTH stems from the top, tempo re-derived from
+            // seedMasterBpm (seed/first-in-queue leads, partner stretches onto its pulse).
+            // Was: soft-replace the focused pad only. Reversal: softReplaceSong path.
+            // 2026-08-01
+            if (com.solar.launcher.stem.StemMixQueuePolicy.liftPickToSeedFront(q, idx)) {
+                persistPlaybackQueue();
+            }
+            stemPlayerHost.restartPairFromQueueSeed(track);
             refreshContextQueueTierIfOpen();
             clickFeedback();
             return;
@@ -27876,10 +28513,14 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         boolean moving = contextQueueMoveFrom >= 0;
         boolean showFooter = !contextQueueEditPlaylist
                 && com.solar.launcher.stem.StemMixQueuePolicy.footerVisible(moving);
-        int rowCount = showFooter
-                ? com.solar.launcher.stem.StemMixQueuePolicy.adapterCountWithFooter(size) : size;
+        boolean mixes = com.solar.launcher.stem.StemMixQueuePolicy.mixRowsVisible(
+                moving, contextQueueEditPlaylist);
+        boolean[] pairMask = mixes ? queueMixPairMask(q) : null;
+        int rowCount = com.solar.launcher.stem.StemMixQueuePolicy.adapterCountWithMix(
+                size, showFooter, pairMask);
         int np = q.index();
         ThemedContextMenu.QueueRowSpec[] rows = new ThemedContextMenu.QueueRowSpec[rowCount];
+        String mixLabel = getString(R.string.queue_mix_row);
         for (int i = 0; i < size; i++) {
             PlayQueue.QueueItem item = q.items().get(i);
             String sub = queueItemSubtitle(item);
@@ -27899,12 +28540,22 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                 isNp = i == np;
                 isPlaying = queueRowPlayingForTest(np, i, audible);
             }
-            rows[i] = new ThemedContextMenu.QueueRowSpec(
+            int adapter = com.solar.launcher.stem.StemMixQueuePolicy.trackToAdapter(i, pairMask);
+            java.io.File artFile = item != null ? item.file : null;
+            rows[adapter] = new ThemedContextMenu.QueueRowSpec(
                     queueItemTitle(item), sub,
-                    isNp, isPlaying);
+                    isNp, isPlaying, false, artFile, null);
+            // Mix divider shows the pair that will be blended — only when both tracks
+            // have ready stems (mask[i] true). 2026-08-01
+            if (pairMask != null && i < pairMask.length && pairMask[i]) {
+                PlayQueue.QueueItem partner = q.items().get(i + 1);
+                rows[adapter + 1] = new ThemedContextMenu.QueueRowSpec(
+                        mixLabel, "", false, false, true,
+                        artFile, partner != null ? partner.file : null);
+            }
         }
         if (showFooter) {
-            rows[size] = new ThemedContextMenu.QueueRowSpec(
+            rows[rowCount - 1] = new ThemedContextMenu.QueueRowSpec(
                     OverlayQueueHelper.FOOTER_ADD_SONG, "", false, false);
         }
         return rows;
@@ -27921,9 +28572,13 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         boolean moving = contextQueueMoveFrom >= 0;
         boolean showFooter = !contextQueueEditPlaylist
                 && com.solar.launcher.stem.StemMixQueuePolicy.footerVisible(moving);
-        int rowCount = showFooter
-                ? com.solar.launcher.stem.StemMixQueuePolicy.adapterCountWithFooter(size) : size;
+        boolean mixes = com.solar.launcher.stem.StemMixQueuePolicy.mixRowsVisible(
+                moving, contextQueueEditPlaylist);
+        boolean[] pairMask = mixes ? queueMixPairMask(q) : null;
+        int rowCount = com.solar.launcher.stem.StemMixQueuePolicy.adapterCountWithMix(
+                size, showFooter, pairMask);
         ThemedContextMenu.QueueRowSpec[] rows = new ThemedContextMenu.QueueRowSpec[rowCount];
+        String mixLabel = getString(R.string.queue_mix_row);
         for (int i = 0; i < size; i++) {
             PlayQueue.QueueItem item = q.items().get(i);
             String sub = queueItemSubtitleFast(item);
@@ -27949,12 +28604,22 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                 isNp = i == np;
                 isPlaying = queueRowPlayingForTest(np, i, audible);
             }
-            rows[i] = new ThemedContextMenu.QueueRowSpec(
+            int adapter = com.solar.launcher.stem.StemMixQueuePolicy.trackToAdapter(i, pairMask);
+            java.io.File artFile = item != null ? item.file : null;
+            rows[adapter] = new ThemedContextMenu.QueueRowSpec(
                     queueItemTitleFast(item), sub,
-                    isNp, isPlaying);
+                    isNp, isPlaying, false, artFile, null);
+            // Mix divider shows the pair that will be blended — only when both tracks
+            // have ready stems (mask[i] true). 2026-08-01
+            if (pairMask != null && i < pairMask.length && pairMask[i]) {
+                PlayQueue.QueueItem partner = q.items().get(i + 1);
+                rows[adapter + 1] = new ThemedContextMenu.QueueRowSpec(
+                        mixLabel, "", false, false, true,
+                        artFile, partner != null ? partner.file : null);
+            }
         }
         if (showFooter) {
-            rows[size] = new ThemedContextMenu.QueueRowSpec(
+            rows[rowCount - 1] = new ThemedContextMenu.QueueRowSpec(
                     OverlayQueueHelper.FOOTER_ADD_SONG, "", false, false);
         }
         return rows;
@@ -29763,48 +30428,10 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                     playOrPauseMusic();
                 }
             });
-            // 2026-07-21 Stems/Mix sanity — Get stems + Start Stem session from NP.
-            // Was: Use in Stem Player / Select tracks. Reversal: those labels + openStemPlayer.
-            if (com.solar.launcher.stem.StemFeatures.showCloudStemMenus(prefs)) {
-                if (!playback.musicPlaylist().isEmpty()) {
-                    final File npStemFile = playback.musicPlaylist().get(playback.musicIndex());
-                    if (npStemFile != null && npStemFile.isFile()) {
-                        addContextAction(getString(R.string.context_action_get_stems), new Runnable() {
-                            @Override
-                            public void run() {
-                                openStemPlayer(npStemFile);
-                            }
-                        });
-                    }
-                }
-                addContextAction(getString(R.string.context_action_start_stem_session), new Runnable() {
-                    @Override
-                    public void run() {
-                        enterStemPickBrowse();
-                    }
-                });
-                // Pre-Save Stems — batch cook queue / playlist ahead of jam. 2026-07-21
-                addContextAction("Pre-Save Stems", new Runnable() {
-                    @Override
-                    public void run() {
-                        startPreSaveStemsForCurrentQueue();
-                    }
-                });
-            }
-            // 2026-07-19 — Start Mix from NP (pre-fill slot 1 from current track when possible).
-            if (com.solar.launcher.stem.StemFeatures.showCloudStemMenus(prefs)) {
-                addContextAction(getString(R.string.context_action_start_mix), new Runnable() {
-                    @Override
-                    public void run() {
-                        File cur = null;
-                        if (!playback.musicPlaylist().isEmpty()) {
-                            cur = playback.musicPlaylist().get(playback.musicIndex());
-                        }
-                        enterMixAssignBrowse(-1, cur);
-                    }
-                });
-            }
-            // 2026-07-19 — Play Instrumental / Acapella from Now Playing (opt-in or local).
+            // 2026-08-05 — NP context modal: only the Stems On/Off checkbox (with Vocals /
+            // Instrumentals sub-checkboxes for stemmed tracks) lives here now. All stem
+            // preparation / Get stems / session pickers were moved to the Stems menus or the
+            // PC web portal — no in-line prep from context modals.
             if (!playback.musicPlaylist().isEmpty()) {
                 final File npSoloSrc = playback.musicPlaylist().get(playback.musicIndex());
                 if (npSoloSrc != null && npSoloSrc.isFile()) {
@@ -30554,6 +31181,12 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                         startSoulseekTransfer(r, SOULSEEK_ACTION_SAVE);
                     }
                 });
+                addContextAction(getString(R.string.soulseek_save_stems), new Runnable() {
+                    @Override
+                    public void run() {
+                        startSoulseekTransfer(r, SOULSEEK_ACTION_SAVE_AND_STEMS);
+                    }
+                });
                 addContextAction(getString(R.string.soulseek_add_to_queue), new Runnable() {
                     @Override
                     public void run() {
@@ -31186,11 +31819,19 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     private boolean isMediaPlayingNeedsWifi() {
         try {
-            if (mediaPlayer != null && mediaPlayer.isPlaying()) return true;
+            // Local music is deliberately allowed to play with Wi-Fi powered down. Only the
+            // current HTTP/growing-cache source needs the radio; this preserves offline playback.
+            if (mediaPlayer != null && mediaPlayer.isPlaying()
+                    && WifiOfflinePowerPolicy.networkPlaybackNeedsWifi(audioSourceIsNetwork)) {
+                return true;
+            }
         } catch (Exception ignored) {}
         if (playback.isPodcastActive() && podcastIjkPlayer != null) {
             try {
-                if (podcastIjkPlayer.isPlaying()) return true;
+                if (podcastIjkPlayer.isPlaying()
+                        && WifiOfflinePowerPolicy.networkPlaybackNeedsWifi(audioSourceIsNetwork)) {
+                    return true;
+                }
             } catch (Exception ignored) {}
         }
         if (reachPartialPlaybackStarted) return true;
@@ -31199,6 +31840,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     private void applyWifiPowerState(boolean enable) {
         final WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+        soulseekUiHandler.removeCallbacks(wifiOfflinePowerOffRunnable);
+        wifiOfflineSinceMs = 0L;
+        WifiOfflinePowerReceiver.onUserWifiIntent(this);
         if (wm == null) return;
         // Any user toggle claims the radio — silent NTP/diag will not turn it back off.
         SolarSilentWifi.onUserWifiIntent();
@@ -32440,6 +33084,11 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                     startGetMusicDeezerTransfer(dr, DeezerScreen.ACTION_SAVE);
                 }
             });
+            addContextAction(getString(R.string.deezer_save_stems), new Runnable() {
+                @Override public void run() {
+                    startGetMusicDeezerTransfer(dr, DeezerScreen.ACTION_SAVE_AND_STEMS);
+                }
+            });
             addContextAction(getString(R.string.deezer_add_to_queue), new Runnable() {
                 @Override public void run() {
                     startGetMusicDeezerTransfer(dr, DeezerScreen.ACTION_QUEUE);
@@ -32456,6 +33105,11 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             addContextAction(getString(R.string.soulseek_save), new Runnable() {
                 @Override public void run() {
                     startSoulseekTransfer(r, SOULSEEK_ACTION_SAVE);
+                }
+            });
+            addContextAction(getString(R.string.soulseek_save_stems), new Runnable() {
+                @Override public void run() {
+                    startSoulseekTransfer(r, SOULSEEK_ACTION_SAVE_AND_STEMS);
                 }
             });
             addContextAction(getString(R.string.soulseek_add_to_queue), new Runnable() {
@@ -32982,7 +33636,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                 } else if (stemPickMode) {
                     // Exit stem pick to wherever we opened from. 2026-07-19
                     stemPickMode = false;
-                    com.solar.launcher.stem.StemPickSlots.clear(stemMashupQueue);
+                    clearStemPickSelectionAndPending();
                     changeScreen(stemPickReturnScreen, true);
                 } else if (mixAssignMode) {
                     // Cancel Mix assign — restore Mix face or prior screen. 2026-07-19
@@ -33325,6 +33979,36 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         } catch (Exception ignored) {}
     }
 
+    /**
+     * 2026-08-02 — Phone-chrome wheel: back hold already elapsed on the wheel, so fire the
+     * same action the hardware hold timer (backLongPressRunnable) would — open/dismiss the
+     * context menu or jam options, with the hold throbber for feedback.
+     * Layman: holding the wheel Back button calls up the same menu as holding real Back.
+     */
+    private void fireWheelInjectedBackLongPress() {
+        long now = System.currentTimeMillis();
+        backKeyDownTime = now;
+        backKeyHeld = true;
+        backForceQuitHandled = true; // a wheel hold must never arm the 10s soft-kill
+        clockHandler.removeCallbacks(backLongPressRunnable);
+        clockHandler.removeCallbacks(backForceQuitRunnable);
+        clockHandler.removeCallbacks(backForceQuitHintRunnable);
+        backLongPressRunnable.run();
+        backKeyHeld = false;
+        backKeyDownTime = 0;
+    }
+
+    /**
+     * 2026-08-02 — Phone-chrome wheel: center hold already elapsed on the wheel, so fire the
+     * same action the hardware hold timer (centerLongPressRunnable) would — the quick menu.
+     */
+    private void fireWheelInjectedCenterLongPress() {
+        long now = System.currentTimeMillis();
+        centerKeyDownTime = now;
+        centerLongPressRunnable.run();
+        centerKeyDownTime = 0;
+    }
+
     private boolean handleBackKeyDown(KeyEvent event) {
         if (event.getRepeatCount() == 0) {
             backKeyDownTime = System.currentTimeMillis();
@@ -33632,6 +34316,10 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         });
         containerSettingsItems.addView(btnDevice);
 
+        // 2026-08-05 — Connections stays on phone chrome too: the Bluetooth row inside it is
+        // the only in-app path to the regular Android Bluetooth settings when the Bluetooth
+        // Experiment is disabled. Was: hidden on phone chrome (RF hub) — no way to reach them.
+        // Reversal: restore the isPhoneChromeActive() guard.
         LinearLayout btnConnectionsMenu = createSettingsRow(RowKeys.CONNECTIONS, R.string.settings_connections, true);
         connectionsSettingsMenuFocusIndex = containerSettingsItems.getChildCount();
         btnConnectionsMenu.setOnClickListener(new View.OnClickListener() {
@@ -34806,6 +35494,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         });
         containerSettingsItems.addView(btnBack);
 
+        // 2026-08-02 — Phone chrome hides RF rows (FM / Internet radio; Deezer/Soulseek/YouTube stay).
+        if (!isPhoneChromeActive()) {
         LinearLayout btnFm = createSettingsRow(RowKeys.RADIO_FM, R.string.settings_sub_fm, true);
         btnFm.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -34846,6 +35536,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                 }
             });
             containerSettingsItems.addView(btnRadio);
+        }
         }
 
         LinearLayout btnVideo = createSettingsRow(RowKeys.VIDEO, R.string.settings_sub_video, true);
@@ -41129,16 +41820,30 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     }
 
     private String homeShortcutEditorLabel(HomeMenuConfig.Entry entry) {
-        boolean shown = entry.required || HomeMenuConfig.isShortcutEnabled(prefs, entry.id);
-        return homeEditorToggleLabel(entry.labelResId, shown);
+        boolean dynamicNowPlaying = HomeMenuConfig.ID_NOW_PLAYING.equals(entry.id)
+                && shouldShowNowPlayingHome();
+        boolean configuredForHome = entry.required || HomeMenuConfig.isVisible(prefs, entry.id);
+        boolean displayedNow = entry.required || dynamicNowPlaying
+                || isHomeEditorDisplayedShortcut(entry.id);
+        String label = homeEditorToggleLabel(entry.labelResId, configuredForHome);
+        if (configuredForHome && !displayedNow && !entry.required) {
+            if (ConnectivityHelper.itemNeedsInternetForDiscovery(entry.id)) {
+                label += " · " + getString(R.string.home_screen_online_only);
+            } else if (ConnectivityHelper.itemNeedsLocalNetwork(entry.id)) {
+                label += " · " + getString(R.string.home_screen_network_only);
+            }
+        }
+        return label;
     }
 
     private void onHomeShortcutEditorClick(final HomeMenuConfig.Entry entry) {
         if (entry.required) return;
         if (homeEditorMoveFrom >= 0) return;
         clickFeedback();
-        boolean on = HomeMenuConfig.isShortcutEnabled(prefs, entry.id);
-        HomeMenuConfig.setShortcutEnabled(prefs, entry.id, !on);
+        // The editor controls Home placement, not merely whether the shortcut is
+        // enabled in More. A More-only row must be promoted to Home on selection.
+        boolean onHome = HomeMenuConfig.isVisible(prefs, entry.id);
+        HomeMenuConfig.setVisible(prefs, entry.id, !onHome);
         buildHomeMenu();
         buildHomeScreenEditorUI();
     }
@@ -41154,10 +41859,38 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
      * 2026-07-15 — Enter home shortcut strip reorder (OK-hold / touch long-press).
      * Reversal: no-op; editor stays On/Off only.
      */
+    /**
+     * Current, actually displayed Home rows that are backed by the persisted order.
+     * Dynamic rows (for example an injected Now Playing row) and More are not movable
+     * because they do not have a corresponding slot in home_menu_order.
+     */
+    private List<String> currentHomeEditorMoveIds() {
+        boolean online = ConnectivityHelper.isOnline(this);
+        boolean onLan = ConnectivityHelper.hasLocalNetwork(this);
+        List<String> display = HomeMenuConfig.loadHomeDisplayIds(
+                prefs, online, onLan, shouldShowNowPlayingHome());
+        Set<String> saved = new HashSet<String>(HomeMenuConfig.loadHomeOrderIds(prefs));
+        List<String> out = new ArrayList<String>();
+        for (String id : display) {
+            if (id == null || HomeMenuConfig.ID_MORE.equals(id)
+                    || !saved.contains(id) || HomeMenuConfig.find(id) == null
+                    || out.contains(id)) {
+                continue;
+            }
+            out.add(id);
+        }
+        return out;
+    }
+
+    private boolean isHomeEditorDisplayedShortcut(String id) {
+        if (id == null || !HomeMenuConfig.isVisible(prefs, id)) return false;
+        return currentHomeEditorMoveIds().contains(HomeMenuConfig.migrateIdStatic(id));
+    }
+
     private void beginHomeEditorMove(String shortcutId) {
         if (shortcutId == null || HomeMenuConfig.ID_SETTINGS.equals(shortcutId)) return;
-        List<String> ids = HomeMenuConfig.loadHomeOrderIds(prefs);
-        int pick = ids.indexOf(shortcutId);
+        List<String> ids = currentHomeEditorMoveIds();
+        int pick = ids.indexOf(HomeMenuConfig.migrateIdStatic(shortcutId));
         if (pick < 0) return;
         homeEditorMoveIds = new java.util.ArrayList<String>(ids);
         homeEditorMoveFrom = pick;
@@ -41172,7 +41905,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         }
         homeEditorMoveHost = null;
         if (confirm && homeEditorMoveIds != null && homeEditorMoveFrom >= 0) {
-            HomeMenuConfig.saveOrder(prefs, homeEditorMoveIds);
+            HomeMenuConfig.saveVisibleHomeOrder(prefs, homeEditorMoveIds);
             buildHomeMenu();
         }
         homeEditorMoveIds = null;
@@ -41292,7 +42025,12 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
         createCategoryHeader(getString(R.string.home_screen_shortcuts));
 
-        for (final HomeMenuConfig.Entry entry : HomeMenuConfig.loadEditorCatalogEntries(prefs)) {
+        final boolean editorOnline = ConnectivityHelper.isOnline(this);
+        final boolean editorOnLan = ConnectivityHelper.hasLocalNetwork(this);
+        final Set<String> displayedHomeIds = new HashSet<String>(HomeMenuConfig.loadHomeDisplayIds(
+                prefs, editorOnline, editorOnLan, shouldShowNowPlayingHome()));
+        for (final HomeMenuConfig.Entry entry : HomeMenuConfig.loadEditorCatalogEntries(
+                prefs, editorOnline, editorOnLan, shouldShowNowPlayingHome())) {
             final LinearLayout row = createSettingsRow(
                     RowKeys.homeShortcut(entry.id), homeShortcutEditorLabel(entry), false, false);
             if (!entry.required) {
@@ -41304,7 +42042,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                     }
                 });
                 // 2026-07-15 — Touch long-press starts home tile reorder.
-                if (HomeMenuConfig.isVisible(prefs, entry.id)
+                if (displayedHomeIds.contains(entry.id)
+                        && HomeMenuConfig.isVisible(prefs, entry.id)
                         && MoveRibbonTouch.touchReorderEnabled()) {
                     final String sid = entry.id;
                     MoveRibbonTouch.attachBrowseLift(row, CENTER_MOVE_HOLD_MS,
@@ -41322,7 +42061,15 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                             });
                 }
             } else {
-                // Required shortcuts (Settings) cannot toggle off — keep them out of wheel order.
+                // Required/dynamic rows cannot be toggled or moved from this editor.
+                row.setFocusable(false);
+                row.setClickable(false);
+            }
+            if (HomeMenuConfig.ID_NOW_PLAYING.equals(entry.id)
+                    && !HomeMenuConfig.isVisible(prefs, entry.id)
+                    && shouldShowNowPlayingHome()) {
+                // Now Playing is injected by the live Home renderer, not persisted in the
+                // reorder list; show it accurately but keep it out of the move gesture.
                 row.setFocusable(false);
                 row.setClickable(false);
             }
@@ -42646,6 +43393,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         releaseBlockingOverlay(OVERLAY_LIB_SCAN);
         // 2026-07-19 — First ready overlay may dismiss now that music was scanned once.
         markFirstLibraryPassComplete();
+        // 2026-08-05 — LRCGET-in-Solar: background-match tracks that still lack .lrc sidecars.
+        LyricsLibraryMatcher.kickOffLibraryMatch(this, prefs);
         // #region agent log
         try {
             org.json.JSONObject d = new org.json.JSONObject();
@@ -43044,6 +43793,16 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         final boolean online = ConnectivityHelper.isOnline(this);
         final boolean onLan = ConnectivityHelper.hasLocalNetwork(this);
         List<HomeMenuConfig.Entry> items = HomeMenuConfig.loadMoreVisible(prefs, online, onLan);
+        // 2026-08-02 — Phone chrome hides RF entries from More (Radio/FM stay off).
+        if (isPhoneChromeActive()) {
+            java.util.Iterator<HomeMenuConfig.Entry> moreIt = items.iterator();
+            while (moreIt.hasNext()) {
+                HomeMenuConfig.Entry e = moreIt.next();
+                if (HomeMenuConfig.ID_RADIO.equals(e.id) || HomeMenuConfig.ID_FM.equals(e.id)) {
+                    moreIt.remove();
+                }
+            }
+        }
         if (items.isEmpty()) {
             Button empty = createListButton(getString(R.string.more_menu_empty));
             empty.setEnabled(false);
@@ -43539,6 +44298,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             });
             mediaPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
                 @Override public void onCompletion(MediaPlayer mp) {
+                    if (userAudioSeekRecently()) return;
                     try {
                         if (repeatMode == 1) {
                             mediaPlayer.seekTo(0);
@@ -43856,6 +44616,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             });
             mediaPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
                 @Override public void onCompletion(MediaPlayer mp) {
+                    if (userAudioSeekRecently()) return;
                     try {
                         if (repeatMode == 1) {
                             mediaPlayer.seekTo(0);
@@ -44111,6 +44872,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                             });
                             mediaPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
                                 @Override public void onCompletion(MediaPlayer mp) {
+                                    if (userAudioSeekRecently()) return;
                                     try {
                                         if (repeatMode == 1) {
                                             mediaPlayer.seekTo(0);
@@ -46809,38 +47571,11 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                 }
             });
         }
-        // 2026-07-21 Stems/Mix sanity — Get stems (prep) + Start Stem session (pick).
-        // Was: Use in Stem Player / Select tracks. Reversal: those string ids + openStemPlayer row.
-        if (com.solar.launcher.stem.StemFeatures.showCloudStemMenus(prefs)) {
-            final File stemFile = trackFile;
-            if (stemFile != null && stemFile.isFile()) {
-                addContextAction(getString(R.string.context_action_get_stems), new Runnable() {
-                    @Override
-                    public void run() {
-                        openStemPlayer(stemFile);
-                    }
-                });
-            }
-            addContextAction(getString(R.string.context_action_start_stem_session), new Runnable() {
-                @Override
-                public void run() {
-                    enterStemPickBrowse();
-                }
-            });
-        }
-        // 2026-07-19 — Solo DJ context verbs (origin-aware; Turn vocals on/off when in variant).
-        addSoloStemContextActions(trackFile);
-        // 2026-07-19 — Start Mix with this song in slot 1 (opt-in).
-        if (trackFile != null && trackFile.isFile()
-                && com.solar.launcher.stem.StemFeatures.showCloudStemMenus(prefs)) {
-            final File mixSeed = trackFile;
-            addContextAction(getString(R.string.context_action_start_mix), new Runnable() {
-                @Override
-                public void run() {
-                    enterMixAssignBrowse(-1, mixSeed);
-                }
-            });
-        }
+        // 2026-08-05 — Library item context modals no longer carry stem rows (Get stems,
+        // Start Stem session, Stems toggle, Start Mix). Stem prep / picking happens in the
+        // Stems menus (library Stems hub / web portal); the Stems On/Off checkbox is
+        // available from the Now Playing context modal only.
+
         // 2026-07-19 — NP Find like this / Add to interests require Soulseek opt-in.
         // Was: peer/Deezer flags alone. Reversal: drop soulseekActive() from this gate.
         boolean playerOffline = currentScreenState == STATE_PLAYER
@@ -49738,12 +50473,18 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             }
         });
         if (audioMode) {
-            addContextAction(getString(R.string.youtube_ctx_save), new Runnable() {
-                @Override public void run() {
-                    if (!requireInternet(R.string.toast_internet_required)) return;
-                    startYouTubeSave(target, true);
-                }
-            });
+        addContextAction(getString(R.string.youtube_ctx_save), new Runnable() {
+            @Override public void run() {
+                if (!requireInternet(R.string.toast_internet_required)) return;
+                startYouTubeSave(target, true);
+            }
+        });
+        addContextAction(getString(R.string.context_action_save_song_stems), new Runnable() {
+            @Override public void run() {
+                if (!requireInternet(R.string.toast_internet_required)) return;
+                startYouTubeSave(target, true, true);
+            }
+        });
             addContextAction(getString(R.string.context_add_to_local_playlist), new Runnable() {
                 @Override public void run() {
                     openAddYouTubeTrackToLocalPlaylistFlow(target);
@@ -49769,6 +50510,12 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             @Override public void run() {
                 if (!requireInternet(R.string.toast_internet_required)) return;
                 startYouTubeSave(target, true);
+            }
+        });
+        addContextAction(getString(R.string.context_action_save_song_stems), new Runnable() {
+            @Override public void run() {
+                if (!requireInternet(R.string.toast_internet_required)) return;
+                startYouTubeSave(target, true, true);
             }
         });
         addContextAction(getString(R.string.context_add_to_local_playlist), new Runnable() {
@@ -49817,13 +50564,227 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                 npTitle != null && npTitle.length() > 0 ? npTitle : null);
     }
 
+    /**
+     * Continue a completed library save through the existing Lalal/StemPrepHost path.
+     * This deliberately never enters Now Playing or calls a playback engine.
+     */
+    private void startSaveSongAndStems(final File track, final String displayName) {
+        startSaveSongAndStems(track, displayName, captureSaveSongAndStemsReturnAction());
+    }
+
+    /** Capture the browse/search surface that launched Save Song + Stems. */
+    private Runnable captureSaveSongAndStemsReturnAction() {
+        if (currentScreenState == MediaSuiteHost.STATE_YOUTUBE_BROWSE
+                || currentScreenState == MediaSuiteHost.STATE_YOUTUBE_DETAIL) {
+            return new Runnable() {
+                @Override public void run() {
+                    if (mediaSuite != null) {
+                        changeScreen(MediaSuiteHost.STATE_YOUTUBE_BROWSE);
+                    }
+                }
+            };
+        }
+        if (currentScreenState == STATE_SOULSEEK) {
+            final boolean unified = isGetMusicUnifiedUi();
+            return new Runnable() {
+                @Override public void run() {
+                    changeScreen(STATE_SOULSEEK);
+                    if (unified) buildGetMusicResultsUI();
+                    else buildSoulseekResultsUI();
+                }
+            };
+        }
+        if (currentScreenState == STATE_DEEZER) {
+            return new Runnable() {
+                @Override public void run() {
+                    if (deezerScreen != null) deezerScreen.popToResults();
+                    else changeScreen(STATE_DEEZER);
+                }
+            };
+        }
+        if (currentScreenState == STATE_NAVIDROME) {
+            return new Runnable() {
+                @Override public void run() { changeScreen(STATE_NAVIDROME); }
+            };
+        }
+        if (currentScreenState == STATE_PLEX) {
+            return new Runnable() {
+                @Override public void run() { changeScreen(STATE_PLEX); }
+            };
+        }
+        if (currentScreenState == STATE_JELLYFIN) {
+            return new Runnable() {
+                @Override public void run() { changeScreen(STATE_JELLYFIN); }
+            };
+        }
+        return null;
+    }
+
+    private void startSaveSongAndStems(final File track, final String displayName,
+            final Runnable returnAction) {
+        if (track == null || !track.isFile() || track.length() <= 0) {
+            Toast.makeText(this, getString(R.string.save_song_stems_failed, "saved file unavailable"),
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (saveSongAndStemsInProgress) return;
+        saveSongAndStemsInProgress = true;
+        takeOverBackgroundStemPrep(java.util.Collections.singletonList(track));
+        final com.solar.launcher.audio.SolarTransport transport =
+                com.solar.launcher.audio.SolarTransport.get();
+        if (transport != null && transport.ownsPlayback()) transport.pause();
+        final View prepUi = findViewById(R.id.stem_prep_root);
+        if (prepUi != null) prepUi.setVisibility(View.VISIBLE);
+        final java.util.List<File> tracks = new java.util.ArrayList<File>();
+        tracks.add(track);
+        final String label = displayName != null && displayName.trim().length() > 0
+                ? displayName.trim() : track.getName();
+        com.solar.launcher.stem.StemPrepHost host = new com.solar.launcher.stem.StemPrepHost(
+                MainActivity.this, prepUi != null ? prepUi : findViewById(android.R.id.content), tracks,
+                new com.solar.launcher.stem.StemPrepHost.Callbacks() {
+                    @Override public void onBatchFinished() {
+                        if (prepUi != null) prepUi.setVisibility(View.GONE);
+                        saveSongAndStemsInProgress = false;
+                        finishForegroundStemPrep();
+                        removeBackgroundStemPrep(track);
+                        refreshPreparedStemBrowseAfterPublish(track);
+                        Toast.makeText(MainActivity.this, R.string.save_song_stems_done,
+                                Toast.LENGTH_LONG).show();
+                        scanMediaLibraryAsync();
+                        if (returnAction != null) returnAction.run();
+                    }
+                    @Override public void onBatchError(String error) {
+                        if (prepUi != null) prepUi.setVisibility(View.GONE);
+                        saveSongAndStemsInProgress = false;
+                        finishForegroundStemPrep();
+                        Toast.makeText(MainActivity.this,
+                                getString(R.string.save_song_stems_failed,
+                                        error != null ? error : label), Toast.LENGTH_LONG).show();
+                        scanMediaLibraryAsync();
+                    }
+                    @Override public void onBatchFinishedWithErrors(String error) {
+                        onBatchError(error);
+                    }
+                });
+        Toast.makeText(this, R.string.save_song_stems_started, Toast.LENGTH_SHORT).show();
+        activeForegroundStemPrepHost = host;
+        host.start();
+    }
+
+    private void startNavidromeSaveAndStems(final com.solar.launcher.navidrome.NavidromeSong song,
+            final com.solar.launcher.navidrome.NavidromeAlbum suppliedAlbum) {
+        if (song == null) return;
+        com.solar.launcher.navidrome.NavidromeAlbum album = suppliedAlbum;
+        if (album == null) {
+            album = new com.solar.launcher.navidrome.NavidromeAlbum();
+            album.name = song.album != null ? song.album : song.title;
+            album.artist = song.artist != null ? song.artist : "";
+        }
+        final com.solar.launcher.navidrome.NavidromeArtist artist =
+                new com.solar.launcher.navidrome.NavidromeArtist();
+        artist.name = album.artist;
+        final com.solar.launcher.navidrome.NavidromeAlbum targetAlbum = album;
+        final File destination = NavidromeDownloader.destinationFor(this, artist, targetAlbum, song);
+        NavidromeDownloader.downloadAlbum(this, artist, targetAlbum,
+                java.util.Collections.singletonList(song), new NavidromeDownloader.Callback() {
+            @Override public void onProgress(int done, int total, long bytesRead, long totalBytes) {
+                setBlockingLoading(true);
+                setLoadingOverlayText(getString(R.string.navidrome_downloading, done, total)
+                        + (totalBytes > 0 ? " " + (bytesRead * 100 / totalBytes) + "%" : ""));
+            }
+            @Override public void onComplete(int saved) {
+                setBlockingLoading(false);
+                startSaveSongAndStems(destination, song.title);
+            }
+            @Override public void onError(String message) {
+                setBlockingLoading(false);
+                Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
+            }
+        });
+    }
+
+    private void startPlexSaveAndStems(final com.solar.launcher.plex.PlexSong song,
+            final com.solar.launcher.plex.PlexAlbum suppliedAlbum) {
+        if (song == null) return;
+        com.solar.launcher.plex.PlexAlbum album = suppliedAlbum;
+        if (album == null) {
+            album = new com.solar.launcher.plex.PlexAlbum();
+            album.name = song.album != null ? song.album : song.title;
+            album.artist = song.artist != null ? song.artist : "";
+        }
+        final com.solar.launcher.plex.PlexArtist artist = new com.solar.launcher.plex.PlexArtist();
+        artist.name = album.artist;
+        final com.solar.launcher.plex.PlexAlbum targetAlbum = album;
+        final File destination = PlexDownloader.destinationFor(this, artist, targetAlbum, song);
+        PlexDownloader.downloadAlbum(this, artist, targetAlbum,
+                java.util.Collections.singletonList(song), new PlexDownloader.Callback() {
+            @Override public void onProgress(int done, int total, long bytesRead, long totalBytes) {
+                setBlockingLoading(true);
+                setLoadingOverlayText(getString(R.string.plex_downloading, done, total)
+                        + (totalBytes > 0 ? " " + (bytesRead * 100 / totalBytes) + "%" : ""));
+            }
+            @Override public void onComplete(int saved) {
+                setBlockingLoading(false);
+                startSaveSongAndStems(destination, song.title);
+            }
+            @Override public void onError(String message) {
+                setBlockingLoading(false);
+                Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
+            }
+        });
+    }
+
+    private void startJellyfinSaveAndStems(final com.solar.launcher.jellyfin.JellyfinSong song,
+            final com.solar.launcher.jellyfin.JellyfinAlbum suppliedAlbum) {
+        if (song == null) return;
+        com.solar.launcher.jellyfin.JellyfinAlbum album = suppliedAlbum;
+        if (album == null) {
+            album = new com.solar.launcher.jellyfin.JellyfinAlbum();
+            album.name = song.album != null ? song.album : song.title;
+            album.artist = song.artist != null ? song.artist : "";
+        }
+        final com.solar.launcher.jellyfin.JellyfinArtist artist =
+                new com.solar.launcher.jellyfin.JellyfinArtist();
+        artist.name = album.artist;
+        final com.solar.launcher.jellyfin.JellyfinAlbum targetAlbum = album;
+        final File destination = com.solar.launcher.jellyfin.JellyfinDownloader
+                .destinationFor(this, artist, targetAlbum, song);
+        com.solar.launcher.jellyfin.JellyfinDownloader.downloadAlbum(this, artist, targetAlbum,
+                java.util.Collections.singletonList(song),
+                new com.solar.launcher.jellyfin.JellyfinDownloader.Callback() {
+            @Override public void onProgress(int done, int total, long bytesRead, long totalBytes) {
+                setBlockingLoading(true);
+                setLoadingOverlayText(getString(R.string.jellyfin_downloading, done, total)
+                        + (totalBytes > 0 ? " " + (bytesRead * 100 / totalBytes) + "%" : ""));
+            }
+            @Override public void onComplete(int saved) {
+                setBlockingLoading(false);
+                startSaveSongAndStems(destination, song.title);
+            }
+            @Override public void onError(String message) {
+                setBlockingLoading(false);
+                Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
+            }
+        });
+    }
+
     private void startYouTubeSave(final YouTubeVideo video, final boolean audioOnly) {
+        startYouTubeSave(video, audioOnly, false);
+    }
+
+    /** Save a YouTube audio copy and optionally continue directly into Lalal preparation. */
+    private void startYouTubeSave(final YouTubeVideo video, final boolean audioOnly,
+            final boolean saveAndStems) {
         if (video == null) return;
         java.io.File existing = audioOnly
                 ? YouTubeSavePaths.findSavedAudio(this, video)
                 : YouTubeSavePaths.findSavedVideo(this, video);
         if (existing != null && existing.length() > 1024L) {
-            Toast.makeText(this, R.string.youtube_already_saved, Toast.LENGTH_SHORT).show();
+            if (saveAndStems) {
+                startSaveSongAndStems(existing, video.title);
+            } else {
+                Toast.makeText(this, R.string.youtube_already_saved, Toast.LENGTH_SHORT).show();
+            }
             return;
         }
         // 2026-07-15 — Immediate overlay during resolve (was blank until download started).
@@ -49853,7 +50814,11 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             @Override public void onComplete(java.io.File savedFile) {
                 setBlockingLoading(false);
                 com.solar.launcher.ui.UiBusy.clear(com.solar.launcher.ui.UiBusy.REASON_DOWNLOAD);
-                Toast.makeText(MainActivity.this, R.string.youtube_save_done, Toast.LENGTH_SHORT).show();
+                if (saveAndStems && savedFile != null && savedFile.isFile()) {
+                    startSaveSongAndStems(savedFile, video.title);
+                } else {
+                    Toast.makeText(MainActivity.this, R.string.youtube_save_done, Toast.LENGTH_SHORT).show();
+                }
                 // #region agent log
                 try {
                     org.json.JSONObject d = new org.json.JSONObject();
@@ -53040,6 +54005,22 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         });
         containerBrowserItems.addView(save);
 
+        Button saveStems = createListButton(getString(R.string.soulseek_save_stems));
+        saveStems.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                stopSoulseekActionRefresh();
+                if (soulseekActionFromBrowse) {
+                    Toast.makeText(MainActivity.this, R.string.soulseek_save_wait_download,
+                            Toast.LENGTH_SHORT).show();
+                } else {
+                    startSoulseekTransfer(r, SOULSEEK_ACTION_SAVE_AND_STEMS);
+                }
+            }
+        });
+        containerBrowserItems.addView(saveStems);
+
         Button saveThanks = createListButton(getString(R.string.soulseek_save_and_thanks));
         saveThanks.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -53551,8 +54532,12 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             if (currentScreenState == STATE_SOULSEEK) buildSoulseekResultsUI();
         } else if (file != null) {
             soulseekUiMode = SOULSEEK_UI_SEARCH;
-            Toast.makeText(this, getString(R.string.soulseek_download_saved, file.getName()),
-                    Toast.LENGTH_SHORT).show();
+            if (action == SOULSEEK_ACTION_SAVE_AND_STEMS) {
+                startSaveSongAndStems(file, reachMeta);
+            } else {
+                Toast.makeText(this, getString(R.string.soulseek_download_saved, file.getName()),
+                        Toast.LENGTH_SHORT).show();
+            }
             if (currentScreenState == STATE_SOULSEEK) buildSoulseekResultsUI();
             scanMediaLibraryAsync();
         }
@@ -53648,7 +54633,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         soulseekLastProgressUiMs = 0;
         watchDownloadPeerSharing(r.username);
         buildSoulseekDownloadUI(r, action);
-        File dest = action == SOULSEEK_ACTION_SAVE ? rootFolder : reachCacheDir();
+        File dest = (action == SOULSEEK_ACTION_SAVE || action == SOULSEEK_ACTION_SAVE_AND_STEMS)
+                ? rootFolder : reachCacheDir();
         SoulseekClient client = ensureSoulseekClient();
         if (client == null) {
             showSoulseekDownloadFailure(r, getString(R.string.soulseek_error_unknown));
@@ -54486,6 +55472,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                         } catch (Exception ignored) {}
                         // #endregion
                     }
+                    if (userAudioSeekRecently()) return;
                     nextTrack();
                 }
             });
@@ -55986,6 +56973,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                         return;
                     }
                 }
+                if (userAudioSeekRecently()) return;
                 PodcastResumeStore.clear(getApplicationContext(), podcastResumeKey);
                 if (repeatMode == 1) {
                     preparePodcastEpisode(playback.podcastIndex());
@@ -56032,6 +57020,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         }
     }
 
+    /** Save a podcast episode to the podcast library; podcasts are never stem-separated. */
     private void savePodcastEpisodeToLibrary(final OpenRssClient.Episode ep) {
         if (podcastSelected == null || ep == null) return;
         if (!requireInternet(R.string.podcasts_wifi_required_stream)) return;
@@ -56972,6 +57961,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             mediaPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
                 @Override
                 public void onCompletion(MediaPlayer mp) {
+                    if (userAudioSeekRecently()) return;
                     try {
                         if (repeatMode == 1) {
                             mediaPlayer.seekTo(0);
@@ -57081,6 +58071,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             ijk.setOnCompletionListener(new com.solar.launcher.podcast.PodcastIjkPlayer.OnCompletionListener() {
                 @Override
                 public void onCompletion(com.solar.launcher.podcast.PodcastIjkPlayer mp) {
+                    if (userAudioSeekRecently()) return;
                     try {
                         if (repeatMode == 1) {
                             mp.seekTo(0);
@@ -57154,6 +58145,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             mediaPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
                 @Override
                 public void onCompletion(MediaPlayer mp) {
+                    if (userAudioSeekRecently()) return;
                     try {
                         nextTrack();
                     } catch (Exception ignored) {
@@ -57215,12 +58207,61 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     private void toggleLyrics() {
         if (npOverlay == null) return;
         if (!npOverlay.isLyricsShowing() && lyricsHost != null && !lyricsHost.hasLyrics()) {
-            Toast.makeText(this, getString(R.string.np_lyrics_none), Toast.LENGTH_SHORT).show();
+            // 2026-08-05 — LRCGET-in-Solar: no local lyrics → fetch from LRCLIB on demand.
+            final File noLyricsTrack = currentMusicFileForLyrics();
+            if (noLyricsTrack == null || !ConnectivityHelper.isOnline(this)) {
+                Toast.makeText(this, getString(R.string.np_lyrics_none), Toast.LENGTH_SHORT).show();
+                return;
+            }
+            Toast.makeText(this, getString(R.string.np_lyrics_fetching), Toast.LENGTH_SHORT).show();
+            final MainActivity lyricsSelf = this;
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    final int result = LyricsLibraryMatcher.fetchTrack(lyricsSelf, prefs, noLyricsTrack);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            // User may have skipped to another track while the fetch ran.
+                            File stillCurrent = currentMusicFileForLyrics();
+                            if (result == LyricsLibraryMatcher.RESULT_FETCHED
+                                    && stillCurrent != null
+                                    && stillCurrent.getAbsolutePath().equals(noLyricsTrack.getAbsolutePath())) {
+                                if (lyricsHost != null) lyricsHost.bindFile(noLyricsTrack);
+                                if (npOverlay != null) {
+                                    npOverlay.setLyricsShowing(true);
+                                    npOverlay.saveToPrefs(prefs);
+                                }
+                                applyNowPlayingOverlay();
+                                Toast.makeText(lyricsSelf, getString(R.string.np_lyrics_fetched),
+                                        Toast.LENGTH_SHORT).show();
+                            } else if (result == LyricsLibraryMatcher.RESULT_OFFLINE
+                                    || result == LyricsLibraryMatcher.RESULT_IN_PROGRESS) {
+                                Toast.makeText(lyricsSelf, getString(R.string.np_lyrics_offline),
+                                        Toast.LENGTH_SHORT).show();
+                            } else {
+                                Toast.makeText(lyricsSelf, getString(R.string.np_lyrics_none),
+                                        Toast.LENGTH_SHORT).show();
+                            }
+                        }
+                    });
+                }
+            }).start();
             return;
         }
         npOverlay.setLyricsShowing(!npOverlay.isLyricsShowing());
         npOverlay.saveToPrefs(prefs);
         applyNowPlayingOverlay();
+    }
+
+    /** Current music file for lyrics fetch — playlist entry, else solo stem origin. */
+    private File currentMusicFileForLyrics() {
+        try {
+            if (playback != null && !playback.musicPlaylist().isEmpty()) {
+                return playback.musicPlaylist().get(playback.musicIndex());
+            }
+        } catch (Exception ignored) {}
+        return soloOriginatingFile;
     }
 
     private void toggleVisualizer() {
@@ -57957,12 +58998,14 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     private boolean isMediaNextKey(int keyCode) {
         return Y1InputKeys.isTrackNextKey(keyCode)
-                || (DeviceFeatures.isY2() && Y1InputKeys.isY2TrackNextKey(keyCode));
+                || (DeviceFeatures.isY2() && Y1InputKeys.isY2TrackNextKey(keyCode))
+                || Y1InputKeys.isGenericTrackNextKey(keyCode);
     }
 
     private boolean isMediaPrevKey(int keyCode) {
         return Y1InputKeys.isTrackPreviousKey(keyCode)
-                || (DeviceFeatures.isY2() && Y1InputKeys.isY2TrackPreviousKey(keyCode));
+                || (DeviceFeatures.isY2() && Y1InputKeys.isY2TrackPreviousKey(keyCode))
+                || Y1InputKeys.isGenericTrackPreviousKey(keyCode);
     }
 
     private boolean isMediaSkipKey(int keyCode) {
@@ -59256,6 +60299,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             if (shouldRouteMediaSkipKeys()) {
                 return handleMediaSkipKeyDown(keyCode, event);
             }
+            // 2026-08-02 — Generic keymaps (DPAD/arrow keys, S, D) fall through to normal
+            // navigation when no queue routes them — Flow carousel owns DPAD_LEFT/RIGHT.
+            if (Y1InputKeys.isGenericTrackSkipKey(keyCode)) return false;
             return true; // consume side buttons on menus when no queue
         }
 
@@ -59974,6 +61020,11 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             return true;
         }
         if (isMediaSkipKey(keyCode)) {
+            // 2026-08-02 — Generic keymaps: mirror the DOWN fall-through so LEFT/RIGHT
+            // key-up reaches Flow carousel / normal handling when no queue routes them.
+            if (Y1InputKeys.isGenericTrackSkipKey(keyCode) && !shouldRouteMediaSkipKeys()) {
+                return super.onKeyUp(keyCode, event);
+            }
             return handleMediaSkipKeyUp(keyCode, event);
         }
         return super.onKeyUp(keyCode, event);
@@ -60117,6 +61168,10 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         if (isScreenInteractive()) {
             maybeRestoreWifiAfterSleepPolicy();
         }
+        updateWifiOfflinePowerPolicy();
+        // Retry durable stem work after storage/network remount without doing a cold restore
+        // or filesystem scan on the UI thread.
+        if (backgroundStemPrepRestoreLoaded) startBackgroundStemPrepWorker();
         if (usbFocusHelper != null) usbFocusHelper.onResume();
         // 2026-07-10 — Drop sticky “USB storage in use” when LUN is not exported (Y1 false lock).
         clearStaleUsbMassStorageLockIfNeeded();
@@ -60231,6 +61286,12 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     @Override
     protected void onDestroy() {
+        // Keep the fallback in UI-policy mode while this process may still own playback during
+        // Activity recreation. A process death resets the static marker automatically.
+        stopStemPrepQueueObserver();
+        abortForegroundStemPrep();
+        stemPrepRetryHandler.removeCallbacks(stemPrepRetryRunnable);
+        if (instance == this) instance = null;
         // 2026-07-20 — Clear MemoryRelease host so trim doesn’t touch a dead Activity.
         MemoryRelease.setHost(null);
         if (usbFocusHelper != null) usbFocusHelper.onDestroy();
@@ -60249,6 +61310,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         progressHandler.removeCallbacks(podcastGrowingEdgePoll);
         volumeHandler.removeCallbacks(hideVolumeContextTask);
         soulseekUiHandler.removeCallbacksAndMessages(null);
+        soulseekUiHandler.removeCallbacks(wifiOfflinePowerOffRunnable);
         fastScrollHandler.removeCallbacksAndMessages(null);
 
         if (isServerRunning && webServer != null) {
@@ -61718,6 +62780,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                     layout.setTag("theme_filter");
                     layout.setOrientation(LinearLayout.VERTICAL);
                     layout.setFocusable(true);
+                    // 2026-08-02 — Phone chrome wheel parity: FITM or requestFocus() fails in touch mode.
+                    layout.setFocusableInTouchMode(true);
                     layout.setSoundEffectsEnabled(false);
                     int hPad = (int) (10 * getResources().getDisplayMetrics().density);
                     layout.setPadding(hPad, hPad / 2, hPad, hPad / 2);
@@ -61758,7 +62822,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                 } else {
                     tv = new TextView(MainActivity.this);
                     tv.setTag(tag);
-                    tv.setFocusable(kind == ThemeBrowser.KIND_STATUS);
+                    // Status/loading rows are informational, not selectable menu items.
+                    tv.setFocusable(false);
                     tv.setSoundEffectsEnabled(false);
                     tv.setPadding(10, kind == ThemeBrowser.KIND_SECTION ? 16 : 8, 10, 4);
                     tv.setLayoutParams(new android.widget.AbsListView.LayoutParams(
@@ -61808,7 +62873,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             final TextView label = (TextView) themeRow.getTag(HOME_MENU_TAG_LABEL);
             final ImageView arrow = (ImageView) themeRow.getTag(HOME_MENU_TAG_ARROW);
             label.setText(row.prefix + row.title);
-            applyY1ListRowStyle(themeRow, themeRow.hasFocus(), label, null, arrow, Y1_ROW_HOME);
+            applyThemeRowChrome(themeRow, position, row, Y1_ROW_HOME);
             themeRow.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View v) {
                     clickFeedback();
@@ -61819,31 +62884,59 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             return themeRow;
         }
 
+        /**
+         * Bind theme rows from the same selected-state contract as home rows.
+         * ListView focus can lag the wheel's logical position, and recycled rows must
+         * not retain the previous item's decoration.
+         */
+        private void applyThemeRowChrome(View v, int position, ThemeBrowser.Row row, int rowKind) {
+            applyThemeRowChrome(v, position, row, rowKind, position == themeBrowserFocus);
+        }
+
+        private void applyThemeRowChrome(View v, int position, ThemeBrowser.Row row, int rowKind,
+                boolean logicalSelected) {
+            boolean highlighted = ListWheelChromePolicy.rowHighlighted(
+                    logicalSelected, v.hasFocus());
+            if (v instanceof FrameLayout && "theme_home_row".equals(v.getTag())) {
+                TextView label = (TextView) v.getTag(HOME_MENU_TAG_LABEL);
+                ImageView arrow = (ImageView) v.getTag(HOME_MENU_TAG_ARROW);
+                applyY1ListRowStyle(v, highlighted, label, null, arrow, rowKind);
+                return;
+            }
+
+            int rowW = y1ActiveRowWidthPx();
+            v.setBackground(getY1RowStateBackground(rowW, rowKind));
+            v.setSelected(highlighted);
+            if (v instanceof Button) {
+                ThemeManager.applyThemedTextStyle((Button) v, highlighted
+                        ? y1RowTextColorSelected(rowKind) : y1RowTextColorNormal(rowKind));
+            } else if (v instanceof LinearLayout && row.kind == ThemeBrowser.KIND_FILTER) {
+                TextView tvTitle = (TextView) ((LinearLayout) v).findViewWithTag("title");
+                TextView tvSub = (TextView) ((LinearLayout) v).findViewWithTag("sub");
+                if (tvTitle != null) {
+                    ThemeManager.applyThemedTextStyle(tvTitle, highlighted
+                            ? y1RowTextColorSelected(rowKind) : ThemeManager.getTextColorPrimary());
+                }
+                if (tvSub != null) {
+                    ThemeManager.applyThemedTextStyle(tvSub, highlighted
+                            ? y1RowTextColorSelected(rowKind) : ThemeManager.getTextColorSecondary());
+                }
+            }
+        }
+
         private void bindThemeRowFocus(final View v, final int position, final ThemeBrowser.Row row, final int rowKind) {
+            applyThemeRowChrome(v, position, row, rowKind);
             v.setOnFocusChangeListener(new View.OnFocusChangeListener() {
                 @Override
                 public void onFocusChange(View view, boolean hasFocus) {
-                    if (v instanceof FrameLayout && "theme_home_row".equals(v.getTag())) {
-                        TextView label = (TextView) v.getTag(HOME_MENU_TAG_LABEL);
-                        ImageView arrow = (ImageView) v.getTag(HOME_MENU_TAG_ARROW);
-                        applyY1ListRowStyle(v, hasFocus, label, null, arrow, rowKind);
-                    } else if (v instanceof Button) {
-                        int rowW = y1ActiveRowWidthPx();
-                        v.setBackground(getY1RowBackground(hasFocus, rowW, rowKind));
-                        ThemeManager.applyThemedTextStyle((Button) v, hasFocus
-                                ? y1RowTextColorSelected(rowKind) : y1RowTextColorNormal(rowKind));
-                    } else if (v instanceof LinearLayout && row.kind == ThemeBrowser.KIND_FILTER) {
-                        int rowW = y1ActiveRowWidthPx();
-                        v.setBackground(getY1RowBackground(hasFocus, rowW, rowKind));
-                        TextView tvTitle = (TextView) ((LinearLayout) v).findViewWithTag("title");
-                        if (tvTitle != null) {
-                            ThemeManager.applyThemedTextStyle(tvTitle, hasFocus
-                                    ? y1RowTextColorSelected(rowKind) : ThemeManager.getTextColorPrimary());
-                        }
-                    }
                     if (hasFocus) {
                         themeBrowserFocus = position;
                         scheduleThemeRowPreview(row);
+                        applyThemeRowChrome(v, position, row, rowKind, true);
+                    } else {
+                        // Focus-loss can arrive before the next row gains focus. Do not
+                        // let the old logical position keep a stale selected drawable.
+                        applyThemeRowChrome(v, position, row, rowKind, false);
                     }
                 }
             });
@@ -64005,13 +65098,27 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         if (playing == null || com.solar.launcher.audio.SolarTransport.get().isLayerMode()) return;
         File origin = resolveSoloOriginatingTrack(playing);
         if (origin == null || !origin.isFile()) return;
-        
+
+        // 2026-08-05 — Remembered per-track Stems preference: when the NP context-modal
+        // "Stems" checkbox is checked (no .useoriginal marker) and stems are available,
+        // normal playback uses the 4-stem pads. Unchecked (.useoriginal present) or no
+        // stems → original track audio. Pads only — no in-line cooking from here.
         if (com.solar.launcher.stem.LalalClient.isOriginalForced(origin)) {
             return;
         }
-        
-        // Removed auto-starting stems here to prevent dual playback.
-        // Picking a song plays the song; Instrumental / Vocals stays a menu choice.
+        if (!com.solar.launcher.stem.StemFeatures.isOptedIn(prefs)) return;
+        if (StemOrMixSession.isActive()) return;
+        if (npStemSession != null && npStemSession.isStemsMasterOn()) return;
+        File cache = getCacheDir();
+        final boolean premix = com.solar.launcher.stem.LalalAccount.isPremixExperimental(prefs);
+        boolean stemsReady = com.solar.launcher.stem.LalalClient.trackStemsReady(
+                        this, origin, premix, cache)
+                || com.solar.launcher.stem.LalalClient.trackStemsReady(
+                        this, origin, !premix, cache);
+        if (!stemsReady) return;
+        try {
+            ensureNpStemSession().setStemsMaster(origin, true);
+        } catch (Exception ignored) {}
     }
 
     /**
@@ -64154,6 +65261,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
      */
     private void handleSolarTransportCompletion() {
         try {
+            if (userAudioSeekRecently()) return;
             if (repeatMode == 1) {
                 com.solar.launcher.audio.SolarTransport.get().seekTo(0);
                 if (!isPausedByHand) {
@@ -64910,55 +66018,23 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         } catch (Exception ignored) {}
         // #endregion
         File cacheDir = getCacheDir();
-        final boolean playingHere = isPlayingSoloOrigin(origin);
 
-        // Fast checks only: DO NOT call canOfferSoloModeFor (which hits Lalal API quota).
-        // Only check local cache for ready stems.
-        boolean localInstrReady = com.solar.launcher.stem.LalalClient.findReadySoloFileFast(
-                origin, com.solar.launcher.stem.SoloMode.INSTRUMENTAL, cacheDir) != null;
-        boolean localAcapReady = com.solar.launcher.stem.LalalClient.findReadySoloFileFast(
-                origin, com.solar.launcher.stem.SoloMode.ACAPELLA, cacheDir) != null;
-
-        boolean stemsReady = localInstrReady && localAcapReady;
-
-        // If not opted in and stems not ready locally, don't show stem options.
-        if (!stemsReady && !com.solar.launcher.stem.StemFeatures.isOptedIn(prefs)) {
-            return;
-        }
-
+        // 2026-08-05 — NP context modal: show the Stems On/Off checkbox (plus Vocals /
+        // Instrumentals sub-checkboxes) only for tracks with stems available. No in-line
+        // preparation from context modals — prep happens in the Stems menus or PC portal.
+        final boolean premix = com.solar.launcher.stem.LalalAccount.isPremixExperimental(prefs);
+        boolean stemsReady = com.solar.launcher.stem.LalalClient.trackStemsReady(
+                        this, origin, premix, cacheDir)
+                || com.solar.launcher.stem.LalalClient.trackStemsReady(
+                        this, origin, !premix, cacheDir);
         if (!stemsReady) {
-            addContextAction("Get Stems", new Runnable() {
-                @Override
-                public void run() {
-                    com.solar.launcher.audio.SolarTransport transport = com.solar.launcher.audio.SolarTransport.get();
-                    if (transport != null && transport.ownsPlayback()) {
-                        transport.pause();
-                    }
-                    closeContextMenu();
-
-                    final View prepUi = findViewById(R.id.stem_prep_root);
-                    if (prepUi != null) prepUi.setVisibility(View.VISIBLE);
-
-                    java.util.List<File> tracks = new java.util.ArrayList<>();
-                    tracks.add(origin);
-
-                    com.solar.launcher.stem.StemPrepHost host = new com.solar.launcher.stem.StemPrepHost(
-                            MainActivity.this, prepUi != null ? prepUi : findViewById(android.R.id.content), tracks,
-                            new com.solar.launcher.stem.StemPrepHost.Callbacks() {
-                                @Override
-                                public void onBatchFinished() {
-                                    if (prepUi != null) prepUi.setVisibility(View.GONE);
-                                }
-                                @Override
-                                public void onBatchError(String error) {
-                                    if (prepUi != null) prepUi.setVisibility(View.GONE);
-                                    Toast.makeText(MainActivity.this, error, Toast.LENGTH_SHORT).show();
-                                }
-                            }
-                    );
-                    host.start();
-                }
-            });
+            boolean localInstrReady = com.solar.launcher.stem.LalalClient.findReadySoloFileFast(
+                    origin, com.solar.launcher.stem.SoloMode.INSTRUMENTAL, cacheDir) != null;
+            boolean localAcapReady = com.solar.launcher.stem.LalalClient.findReadySoloFileFast(
+                    origin, com.solar.launcher.stem.SoloMode.ACAPELLA, cacheDir) != null;
+            stemsReady = localInstrReady && localAcapReady;
+        }
+        if (!stemsReady) {
             return;
         }
 
@@ -64979,9 +66055,23 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                             useOriginalFile.delete();
                         }
                         refreshContextMenuKeepOpenAfterSoloToggle();
-                        // 2026-07-24 - If we just toggled Stems during playback, reload the track to apply the change immediately
-                        if (isPlayingSoloOrigin(origin) && com.solar.launcher.audio.SolarTransport.get() != null) {
-                            com.solar.launcher.audio.SolarTransport.get().playFile(origin, com.solar.launcher.audio.SolarTransport.get().getPositionMs(), false, true);
+                        // 2026-08-05 — Apply immediately: checked → 4-stem pads; unchecked →
+                        // original track. Pads engage only when still available (no in-line cook).
+                        if (isPlayingSoloOrigin(origin)) {
+                            try {
+                                com.solar.launcher.stem.NpStemSession session = ensureNpStemSession();
+                                if (useOriginalFile.exists()) {
+                                    session.setStemsMaster(origin, false);
+                                } else {
+                                    boolean readyNow = com.solar.launcher.stem.LalalClient.trackStemsReady(
+                                            MainActivity.this, origin, premix, cacheDir)
+                                            || com.solar.launcher.stem.LalalClient.trackStemsReady(
+                                                    MainActivity.this, origin, !premix, cacheDir);
+                                    if (readyNow) {
+                                        session.setStemsMaster(origin, true);
+                                    }
+                                }
+                            } catch (Exception ignored) {}
                         }
                     }
                 }, true);
@@ -65005,7 +66095,12 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                                 muteInstrFile.delete();
                             }
                             refreshContextMenuKeepOpenAfterSoloToggle();
-                            if (isPlayingSoloOrigin(origin)) com.solar.launcher.audio.SolarTransport.get().playFile(origin, 0, false, false);
+                            // 2026-08-05 — live-apply layer gains when pads are active.
+                            if (npStemSession != null && npStemSession.isStemsMasterOn()) {
+                                npStemSession.setLayerToggles(
+                                        !new File(userStemsDir, ".mutevocals").exists(),
+                                        !new File(userStemsDir, ".muteinstr").exists());
+                            }
                         }
                     }, true);
 
@@ -65022,30 +66117,14 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                                 muteVocalsFile.delete();
                             }
                             refreshContextMenuKeepOpenAfterSoloToggle();
-                            if (isPlayingSoloOrigin(origin)) com.solar.launcher.audio.SolarTransport.get().playFile(origin, 0, false, false);
+                            // 2026-08-05 — live-apply layer gains when pads are active.
+                            if (npStemSession != null && npStemSession.isStemsMasterOn()) {
+                                npStemSession.setLayerToggles(
+                                        !new File(userStemsDir, ".mutevocals").exists(),
+                                        !new File(userStemsDir, ".muteinstr").exists());
+                            }
                         }
                     }, true);
-        }
-
-        // Not the playing track — Play Instrumental / Play Acapella starts that variant. 2026-07-20
-        // Routes through Stems master after play (retire stem_separator for NP). 2026-07-21
-        boolean canInstr = true;
-        boolean canAcap = true;
-        if (canInstr) {
-            addContextAction(getString(R.string.context_action_play_instrumental), new Runnable() {
-                @Override
-                public void run() {
-                    playNpStemsIsolation(origin, /*wantVocals*/ false, /*wantInstr*/ true);
-                }
-            });
-        }
-        if (canAcap) {
-            addContextAction(getString(R.string.context_action_play_acapella), new Runnable() {
-                @Override
-                public void run() {
-                    playNpStemsIsolation(origin, /*wantVocals*/ true, /*wantInstr*/ false);
-                }
-            });
         }
     }
 
@@ -65093,6 +66172,11 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                             if (prepUi != null) prepUi.setVisibility(android.view.View.GONE);
                             android.widget.Toast.makeText(MainActivity.this, error, android.widget.Toast.LENGTH_SHORT).show();
                         }
+                        @Override
+                        public void onBatchFinishedWithErrors(String error) {
+                            if (prepUi != null) prepUi.setVisibility(android.view.View.GONE);
+                            android.widget.Toast.makeText(MainActivity.this, error, android.widget.Toast.LENGTH_SHORT).show();
+                        }
                     }
             );
             host.start();
@@ -65119,8 +66203,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             return;
         }
         stemsHubRootMode = true;
+        stemPrepOnlyMode = false;
         stemPickMode = false;
-        com.solar.launcher.stem.StemPickSlots.clear(stemMashupQueue);
+        clearStemPickSelectionAndPending();
         dismissThemedContextMenu();
         changeScreen(STATE_BROWSER);
         currentBrowserMode = BROWSER_ROOT;
@@ -65143,7 +66228,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             public void onClick(View v) {
                 clickFeedback();
                 stemsHubRootMode = false;
-                enterStemPickBrowse();
+                enterStemPickBrowse(true);
             }
         });
         containerBrowserItems.addView(btnGet);
@@ -65253,6 +66338,15 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     }
 
     private void enterStemPickBrowse() {
+        enterStemPickBrowse(false);
+    }
+
+    /**
+     * Enter the stem picker either for a performance or for Get Stems preparation.
+     * Get Stems deliberately shares the picker UI, but its Play/Pause completion path
+     * must return to the stems hub instead of seeding or starting a performance.
+     */
+    private void enterStemPickBrowse(boolean preparationOnly) {
         // 2026-07-20 — A5: no Gen1 Stem Player face (wrong input map); Instrumental/Vocals stay.
         // Was: isOptedIn alone. Reversal: drop supportsStemPlayerFace check.
         if (!com.solar.launcher.stem.StemFeatures.supportsStemPlayerFace()) {
@@ -65262,7 +66356,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             Toast.makeText(this, R.string.solo_stem_need_opt_in, Toast.LENGTH_SHORT).show();
             return;
         }
-        com.solar.launcher.stem.StemPickSlots.clear(stemMashupQueue);
+        clearStemPickSelectionAndPending();
+        stemPrepOnlyMode = preparationOnly;
         stemPickMode = true;
         stemPickReturnScreen = currentScreenState;
         // 2026-07-20 — Default pick browse to Length so similar-duration mashups cluster.
@@ -65323,7 +66418,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         }
         // Stay in pick mode — do not clear marks when opening the filter. 2026-07-19
         if (!stemPickMode) {
-            com.solar.launcher.stem.StemPickSlots.clear(stemMashupQueue);
+            clearStemPickSelectionAndPending();
             stemPickMode = true;
             stemPickReturnScreen = currentScreenState;
             // 2026-07-20 — First entry into pick via Has Stems also defaults Length sort.
@@ -65430,82 +66525,422 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                 n > 0 ? getString(R.string.stem_pick_marked, n)
                         : getString(R.string.stem_pick_cleared),
                 Toast.LENGTH_SHORT).show();
-        if (n > 0) enqueueBackgroundStemPrep(track);
+        if (n > 0) {
+            enqueueBackgroundStemPrep(track);
+        } else {
+            removeBackgroundStemPrep(track);
+        }
         refreshStemPickListChrome();
         updateStatusBarTitle();
         return true;
     }
 
-    private final java.util.ArrayList<File> backgroundStemPrepQueue = new java.util.ArrayList<>();
-    private boolean isBackgroundStemPrepRunning = false;
-    private String backgroundStemPrepStatus = null;
+    /** Shared pending queue for quiet prefetch and foreground Get Stems takeover. */
+    private final java.util.ArrayList<File> backgroundStemPrepQueue = new java.util.ArrayList<File>();
+    private final Object backgroundStemPrepQueueLock = new Object();
+    private volatile boolean isBackgroundStemPrepRunning = false;
+    private volatile boolean foregroundStemPrepActive = false;
+    private volatile boolean backgroundStemPrepRestoreLoaded = false;
+    private volatile String backgroundStemPrepStatus = null;
+    /** Current item/progress published by the shared worker for observer UIs. */
+    private volatile File backgroundStemPrepActiveTrack = null;
+    private volatile int backgroundStemPrepActivePercent = 0;
+    /** Terminal-success paths published by the shared worker for the attached observer. */
+    private final java.util.Set<String> backgroundStemPrepCompletedPaths =
+            java.util.Collections.synchronizedSet(new java.util.HashSet<String>());
+    /** Last transient worker failure; the durable head remains queued for retry. */
+    private volatile String backgroundStemPrepRetryStatus = null;
     private java.util.concurrent.ExecutorService backgroundStemPrepExecutor = null;
-    private boolean cancelBackgroundStemPrep = false;
+    private volatile boolean cancelBackgroundStemPrep = false;
+    private volatile long backgroundStemPrepRetryAtMs = 0L;
+    private final Handler stemPrepRetryHandler = new Handler(android.os.Looper.getMainLooper());
+    private final Runnable stemPrepRetryRunnable = new Runnable() {
+        @Override public void run() {
+            if (!foregroundStemPrepActive) startBackgroundStemPrepWorker();
+        }
+    };
 
-    private void enqueueBackgroundStemPrep(File track) {
-        if (track == null || !track.isFile()) return;
-        boolean premix = com.solar.launcher.stem.LalalAccount.isPremixExperimental(prefs);
-        boolean ready = com.solar.launcher.stem.LalalClient.trackStemsReady(
-                this, track, premix, getCacheDir());
-        if (!ready) {
-            if (!backgroundStemPrepQueue.contains(track)) {
-                backgroundStemPrepQueue.add(track);
-            }
-            startBackgroundStemPrepWorker();
+    private void scheduleBackgroundStemPrepRetry() {
+        stemPrepRetryHandler.removeCallbacks(stemPrepRetryRunnable);
+        stemPrepRetryHandler.postDelayed(stemPrepRetryRunnable, 30000L);
+    }
+
+    private File stemPrepQueueStateFile() {
+        return new File(getFilesDir(), "stem_prep_queue.json");
+    }
+
+    private java.util.ArrayList<File> backgroundStemPrepSnapshot() {
+        synchronized (backgroundStemPrepQueueLock) {
+            return new java.util.ArrayList<File>(backgroundStemPrepQueue);
         }
     }
 
+    private void persistBackgroundStemPrepQueue() {
+        com.solar.launcher.stem.StemPrepQueueStore.save(
+                stemPrepQueueStateFile(), backgroundStemPrepSnapshot());
+    }
+
+    /** Restore pending paths once after prefs and storage are available. */
+    private void restoreBackgroundStemPrepQueue() {
+        if (backgroundStemPrepRestoreLoaded) return;
+        backgroundStemPrepRestoreLoaded = true;
+        java.util.List<File> restored = com.solar.launcher.stem.StemPrepQueueStore.load(
+                stemPrepQueueStateFile());
+        boolean changed = false;
+        synchronized (backgroundStemPrepQueueLock) {
+            for (int i = 0; i < restored.size(); i++) {
+                File track = restored.get(i);
+                if (!containsBackgroundStemPrepLocked(track)) {
+                    backgroundStemPrepQueue.add(track);
+                    changed = true;
+                }
+            }
+        }
+        if (changed) persistBackgroundStemPrepQueue();
+        startBackgroundStemPrepWorker();
+    }
+
+    private boolean containsBackgroundStemPrepLocked(File track) {
+        if (track == null) return false;
+        String path = track.getAbsolutePath();
+        for (int i = 0; i < backgroundStemPrepQueue.size(); i++) {
+            File queued = backgroundStemPrepQueue.get(i);
+            if (queued != null && path.equals(queued.getAbsolutePath())) return true;
+        }
+        return false;
+    }
+
+    private void removeBackgroundStemPrep(File track) {
+        if (track == null) return;
+        String path = track.getAbsolutePath();
+        synchronized (backgroundStemPrepQueueLock) {
+            for (int i = backgroundStemPrepQueue.size() - 1; i >= 0; i--) {
+                File queued = backgroundStemPrepQueue.get(i);
+                if (queued != null && path.equals(queued.getAbsolutePath())) {
+                    backgroundStemPrepQueue.remove(i);
+                }
+            }
+        }
+        persistBackgroundStemPrepQueue();
+    }
+
+    /**
+     * Full-screen Get Stems observer. It never owns or recreates the extraction worker;
+     * it only renders the existing durable FIFO while the background lane continues.
+     */
+    private final Handler stemPrepObserverHandler = new Handler(android.os.Looper.getMainLooper());
+    private final java.util.ArrayList<File> stemPrepObservedTracks =
+            new java.util.ArrayList<File>();
+    private boolean stemPrepObserverActive;
+    private final Runnable stemPrepObserverRunnable = new Runnable() {
+        @Override public void run() {
+            if (!stemPrepObserverActive) return;
+            updateStemPrepObserverUi();
+            if (stemPrepObserverActive) {
+                stemPrepObserverHandler.postDelayed(this, 350L);
+            }
+        }
+    };
+
+    /** Attach Get Stems to existing work rather than creating a second StemPrepHost queue. */
+    private void startStemPrepQueueObserver(final java.util.List<File> tracks, final View prepUi) {
+        stemPrepObserverHandler.removeCallbacks(stemPrepObserverRunnable);
+        stemPrepObservedTracks.clear();
+        if (tracks != null) {
+            for (int i = 0; i < tracks.size(); i++) {
+                File track = tracks.get(i);
+                if (track != null && !containsObservedStemPrepTrack(track)) {
+                    stemPrepObservedTracks.add(track);
+                }
+            }
+        }
+        stemPrepObserverActive = true;
+        if (prepUi != null) prepUi.setVisibility(View.VISIBLE);
+        // Selection normally enqueues before this point. This only fills a missing durable
+        // entry; containsBackgroundStemPrepLocked prevents re-enqueueing an existing item.
+        for (int i = 0; i < stemPrepObservedTracks.size(); i++) {
+            File track = stemPrepObservedTracks.get(i);                    if (!backgroundStemPrepCompletedPaths.contains(track.getAbsolutePath())) {
+                synchronized (backgroundStemPrepQueueLock) {
+                    if (!containsBackgroundStemPrepLocked(track)) {
+                        backgroundStemPrepQueue.add(track);
+                    }
+                }
+            }
+        }
+        persistBackgroundStemPrepQueue();
+        startBackgroundStemPrepWorker();
+        updateStemPrepObserverUi();
+        stemPrepObserverHandler.post(stemPrepObserverRunnable);
+    }
+
+    private boolean containsObservedStemPrepTrack(File track) {
+        String path = track != null ? track.getAbsolutePath() : null;
+        if (path == null) return false;
+        for (int i = 0; i < stemPrepObservedTracks.size(); i++) {
+            File observed = stemPrepObservedTracks.get(i);
+            if (observed != null && path.equals(observed.getAbsolutePath())) return true;
+        }
+        return false;
+    }
+
+    private void stopStemPrepQueueObserver() {
+        stemPrepObserverActive = false;
+        stemPrepObserverHandler.removeCallbacks(stemPrepObserverRunnable);
+        stemPrepObservedTracks.clear();
+    }
+
+    private void updateStemPrepObserverUi() {
+        if (!stemPrepObserverActive) return;
+        final View prepUi = findViewById(R.id.stem_prep_root);
+        if (prepUi == null) return;
+        TextView subtitle = prepUi.findViewById(R.id.stem_prep_subtitle);
+        ProgressBar progress = prepUi.findViewById(R.id.stem_prep_progress);
+        TextView percent = prepUi.findViewById(R.id.stem_prep_percent);
+        int ready = 0;
+        for (int i = 0; i < stemPrepObservedTracks.size(); i++) {
+            File track = stemPrepObservedTracks.get(i);
+            if (track != null && backgroundStemPrepCompletedPaths.contains(
+                    track.getAbsolutePath())) {
+                ready++;
+            }
+        }
+        int total = stemPrepObservedTracks.size();
+        int active = backgroundStemPrepActiveTrack != null
+                && containsObservedStemPrepTrack(backgroundStemPrepActiveTrack)
+                ? backgroundStemPrepActivePercent : 0;
+        int overall = com.solar.launcher.stem.StemPrepQueueProgressPolicy.overallPercent(
+                ready, total, active);
+        String status = backgroundStemPrepStatus;
+        if (status == null || status.length() == 0) status = backgroundStemPrepRetryStatus;
+        if (status == null || status.length() == 0) {
+            status = ready >= total && total > 0
+                    ? "All selected songs prepared"
+                    : "Waiting for the existing stem queue…";
+        }
+        if (subtitle != null) subtitle.setText(status);
+        if (progress != null) progress.setProgress(overall);
+        if (percent != null) percent.setText(overall + "%");
+        if (total > 0 && ready >= total) {
+            stopStemPrepQueueObserver();
+            if (prepUi != null) prepUi.setVisibility(View.GONE);
+            finishStemPreparationOnly();
+        }
+    }
+
+    /** Foreground preparation owns the single worker until its batch has drained. */
+    private void takeOverBackgroundStemPrep(java.util.List<File> tracks) {
+        foregroundStemPrepActive = true;
+        cancelBackgroundStemPrep = true;
+        // Keep selected paths durable until the foreground host proves success. A failed
+        // Save/Get Stems run must remain retryable; the worker removes ready paths later.
+        if (tracks != null) {
+            synchronized (backgroundStemPrepQueueLock) {
+                for (int i = 0; i < tracks.size(); i++) {
+                    File track = tracks.get(i);
+                    if (track != null && !containsBackgroundStemPrepLocked(track)) {
+                        backgroundStemPrepQueue.add(track);
+                    }
+                }
+            }
+            persistBackgroundStemPrepQueue();
+        }
+    }
+
+    private void removeBackgroundStemPrep(java.util.List<File> tracks) {
+        if (tracks == null) return;
+        for (int i = 0; i < tracks.size(); i++) removeBackgroundStemPrep(tracks.get(i));
+    }
+
+    private void finishForegroundStemPrep() {
+        activeForegroundStemPrepHost = null;
+        foregroundStemPrepActive = false;
+        startBackgroundStemPrepWorker();
+    }
+
+    /** Cancel foreground extraction during Activity teardown without cancelling onPause. */
+    private void abortForegroundStemPrep() {
+        com.solar.launcher.stem.StemPrepHost host = activeForegroundStemPrepHost;
+        activeForegroundStemPrepHost = null;
+        foregroundStemPrepActive = false;
+        saveSongAndStemsInProgress = false;
+        if (host != null) {
+            try {
+                host.cancel();
+            } catch (Exception ignored) {}
+        }
+    }
+
+    private void enqueueBackgroundStemPrep(File track) {
+        if (track == null || !track.isFile()) return;
+        backgroundStemPrepCompletedPaths.remove(track.getAbsolutePath());
+        boolean premix = com.solar.launcher.stem.LalalAccount.isPremixExperimental(prefs);
+        if (com.solar.launcher.stem.LalalClient.trackStemsReady(
+                this, track, premix, getCacheDir())) return;
+        synchronized (backgroundStemPrepQueueLock) {
+            if (!containsBackgroundStemPrepLocked(track)) backgroundStemPrepQueue.add(track);
+        }
+        persistBackgroundStemPrepQueue();
+        startBackgroundStemPrepWorker();
+    }
+
     private void startBackgroundStemPrepWorker() {
-        if (isBackgroundStemPrepRunning) return;
-        if (backgroundStemPrepQueue.isEmpty()) return;
+        if (foregroundStemPrepActive || isBackgroundStemPrepRunning) return;
+        if (System.currentTimeMillis() < backgroundStemPrepRetryAtMs) return;
+        synchronized (backgroundStemPrepQueueLock) {
+            if (backgroundStemPrepQueue.isEmpty()) return;
+        }
         isBackgroundStemPrepRunning = true;
         cancelBackgroundStemPrep = false;
-        
         if (backgroundStemPrepExecutor == null) {
             backgroundStemPrepExecutor = java.util.concurrent.Executors.newSingleThreadExecutor();
         }
-        
         backgroundStemPrepExecutor.execute(new Runnable() {
             @Override
             public void run() {
                 try {
-                    SharedPreferences p = getSharedPreferences(com.solar.launcher.stem.LalalAccount.PREFS_NAME, Context.MODE_PRIVATE);
+                    SharedPreferences p = getSharedPreferences(
+                            com.solar.launcher.stem.LalalAccount.PREFS_NAME, Context.MODE_PRIVATE);
                     String key = com.solar.launcher.stem.LalalAccount.effectiveKey(p);
-                    if (key == null || key.length() < 8) return;
-                    com.solar.launcher.stem.LalalClient client = new com.solar.launcher.stem.LalalClient(key);
-                    
-                    while (!backgroundStemPrepQueue.isEmpty() && !cancelBackgroundStemPrep) {
-                        final File t = backgroundStemPrepQueue.get(0);
-                        File stemsDir = com.solar.launcher.stem.LalalClient.userStemsDir(t);
-                        if (stemsDir != null) {
-                            try {
-                                File workDir = new File(getCacheDir(), "stem_prep_work");
+                    if (key == null || key.length() < 8) {
+                        // Do not spin the executor when Lalal has not been configured yet.
+                        backgroundStemPrepRetryAtMs = System.currentTimeMillis() + 30000L;
+                        scheduleBackgroundStemPrepRetry();
+                        return;
+                    }
+                    com.solar.launcher.stem.LalalClient client =
+                            new com.solar.launcher.stem.LalalClient(key);
+                    while (!cancelBackgroundStemPrep) {
+                        final File t;
+                        synchronized (backgroundStemPrepQueueLock) {
+                            if (backgroundStemPrepQueue.isEmpty()) break;
+                            t = backgroundStemPrepQueue.get(0);
+                        }
+                        synchronized (com.solar.launcher.stem.StemPrepLock.global()) {
+                            if (!t.isFile()) {
+                                // Storage may be temporarily unmounted. Keep the path durable and
+                                // wait for onResume/media remount instead of dropping the job.
+                                backgroundStemPrepRetryAtMs = System.currentTimeMillis() + 30000L;
+                                scheduleBackgroundStemPrepRetry();
+                                break;
+                            }
+                            boolean premix = com.solar.launcher.stem.LalalAccount
+                                    .isPremixExperimental(prefs);
+                            boolean alreadyReady = com.solar.launcher.stem.LalalClient.trackStemsReady(
+                                    MainActivity.this, t, premix, getCacheDir());
+                            backgroundStemPrepActiveTrack = t;
+                            backgroundStemPrepActivePercent = alreadyReady ? 100 : 0;
+                            backgroundStemPrepRetryStatus = null;
+                            if (alreadyReady) {
+                                // Batch: warm the analysis cache for an already-ready track so
+                                // the next session opens with real BPM/beat/key. 2026-08-01
+                                com.solar.launcher.stem.analysis.StemBatchAnalyzer
+                                        .enqueueResolved(MainActivity.this, t, premix);
+                            } else {
+                                File workDir = com.solar.launcher.stem.LalalClient.workStemDir(
+                                        MainActivity.this, t, premix);
+                                if (workDir == null) throw new java.io.IOException(
+                                        "Stem work dir unavailable");
+                                // A killed process may leave partial pads. Never mix them into a retry.
+                                com.solar.launcher.stem.LalalClient.clearDirQuiet(workDir);
                                 workDir.mkdirs();
-                                client.separateToMp3(t, workDir, stemsDir, new com.solar.launcher.stem.LalalClient.Progress() {
+                                client.separateToMp3(t, workDir,
+                                        com.solar.launcher.stem.LalalClient.userStemsDir(t), premix,
+                                        new com.solar.launcher.stem.LalalClient.Progress() {
                                     @Override
-                                    public void onProgress(final String phase, final int percent, final String detail) {
+                                    public void onProgress(final String phase, final int percent,
+                                            final String detail) {
                                         if (cancelBackgroundStemPrep) return;
-                                        backgroundStemPrepStatus = "Prep: " + t.getName() + " " + Math.max(0, percent) + "%";
+                                        backgroundStemPrepActiveTrack = t;
+                                        backgroundStemPrepActivePercent = Math.max(0, Math.min(100, percent));
+                                        backgroundStemPrepStatus = "Prep: " + t.getName() + " "
+                                                + backgroundStemPrepActivePercent + "%";
                                         runOnUiThreadSafe(new Runnable() {
-                                            public void run() { updateStatusBarTitle(); }
+                                            @Override public void run() { updateStatusBarTitle(); }
                                         });
                                     }
                                 });
-                                if (!cancelBackgroundStemPrep) com.solar.launcher.stem.LalalClient.writeTrackMarkerIfOwned(stemsDir, t);
-                            } catch (Exception ignored) {}
+                                // Finish the active item even after foreground takeover was requested.
+                                java.util.List<com.solar.launcher.stem.LalalClient.StemFile> published =
+                                        com.solar.launcher.stem.StemDeferredPublish.publishAfterPlayback(
+                                                MainActivity.this, t, workDir, premix, getCacheDir());
+                                if (published == null || published.size() < 4
+                                        || !com.solar.launcher.stem.LalalClient.trackStemsReady(
+                                                MainActivity.this, t, premix, getCacheDir())) {
+                                    throw new java.io.IOException("Published stems were not found");
+                                }
+                                // Batch: analyse the freshly prepared stems in the background so
+                                // the next session has real BPM/beat/key, not the heuristic.
+                                // StemBatchAnalyzer owns its own lane — never blocks this worker.
+                                // 2026-08-01
+                                com.solar.launcher.stem.analysis.StemBatchAnalyzer.enqueue(
+                                        MainActivity.this, t, premix, published);
+                                final File publishedTrack = t;
+                                runOnUiThreadSafe(new Runnable() {
+                                    @Override public void run() {
+                                        refreshPreparedStemBrowseAfterPublish(publishedTrack);
+                                    }
+                                });
+                            }
                         }
-                        if (!cancelBackgroundStemPrep) backgroundStemPrepQueue.remove(t);
+                        // Publish terminal success before removing the durable queue head so an
+                        // attached Get Stems observer can advance without probing the filesystem.
+                        backgroundStemPrepCompletedPaths.add(t.getAbsolutePath());
+                        // 2026-08-01 — New pads landed: Mix dividers must refresh.
+                        invalidateQueueStemReadyMemo();
+                        // Remove unconditionally: completed items must not reappear after takeover.
+                        removeBackgroundStemPrep(t);
                     }
                 } catch (Exception ignored) {
+                    // Keep the head item durable for a later retry, but avoid a hot loop on
+                    // persistent API, storage, or publish failures. The attached Get Stems
+                    // observer can show this state instead of looking stalled.
+                    File retryTrack = backgroundStemPrepActiveTrack;
+                    backgroundStemPrepRetryStatus = "Retrying"
+                            + (retryTrack != null ? ": " + retryTrack.getName() : "") + "…";
+                    backgroundStemPrepRetryAtMs = System.currentTimeMillis() + 30000L;
+                    scheduleBackgroundStemPrepRetry();
                 } finally {
                     isBackgroundStemPrepRunning = false;
+                    backgroundStemPrepActiveTrack = null;
+                    backgroundStemPrepActivePercent = 0;
                     backgroundStemPrepStatus = null;
                     runOnUiThreadSafe(new Runnable() {
-                        public void run() { updateStatusBarTitle(); }
+                        @Override public void run() {
+                            updateStatusBarTitle();
+                            if (!foregroundStemPrepActive
+                                    && System.currentTimeMillis() >= backgroundStemPrepRetryAtMs) {
+                                startBackgroundStemPrepWorker();
+                            }
+                        }
                     });
                 }
             }
         });
+    }
+
+    /**
+     * Invalidate cached Has Stems bits after Lalal publishes pads, then refresh the visible
+     * prepared-stem browse. The index itself remains off the UI thread.
+     */
+    private void refreshPreparedStemBrowseAfterPublish(File publishedTrack) {
+        synchronized (customLibrary) {
+            for (SongItem song : customLibrary) {
+                if (song == null) continue;
+                if (publishedTrack == null || song.file == null
+                        || publishedTrack.getAbsolutePath().equals(song.file.getAbsolutePath())) {
+                    song.hasStemsBit = -1;
+                }
+            }
+        }
+        stemsHubHasPrepared = false;
+        refreshStemPickListChrome();
+        if (currentScreenState != STATE_BROWSER) return;
+        if (currentBrowserMode == BROWSER_VIRTUAL_SONGS
+                && "HAS_STEMS".equals(virtualQueryType)) {
+            buildVirtualSongs();
+        } else if (stemsHubRootMode && currentBrowserMode == BROWSER_ROOT) {
+            probeStemsHubPreparedAsync();
+        }
     }
 
     /** Refresh song-list rows so (N) badges update. 2026-07-19 / 2026-07-20 / 2026-07-21 */
@@ -65527,7 +66962,34 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         return mark + " · " + base;
     }
 
-    /** Play confirms stem pick → openStemPlayer (≥1 mark). 2026-07-19 / 2026-07-20 */
+    /**
+     * Return to the stems hub after a Get Stems-only batch. No queue seed, transport
+     * handoff, or STATE_STEM_PLAYER transition is allowed on this path.
+     */
+    private void clearStemPickSelectionAndPending() {
+        stopStemPrepQueueObserver();
+        java.util.ArrayList<File> marked =
+                com.solar.launcher.stem.StemPickSlots.orderedTracks(stemMashupQueue);
+        com.solar.launcher.stem.StemPickSlots.clear(stemMashupQueue);
+        removeBackgroundStemPrep(marked);
+    }
+
+    private void finishStemPreparationOnly() {
+        stopStemPrepQueueObserver();
+        refreshPreparedStemBrowseAfterPublish(null);
+        stemPrepOnlyMode = false;
+        stemPickMode = false;
+        clearStemPickSelectionAndPending();
+        stemsHubRootMode = true;
+        dismissThemedContextMenu();
+        changeScreen(STATE_BROWSER);
+        currentBrowserMode = BROWSER_ROOT;
+        buildFileBrowserUI();
+        updateStatusBarTitle();
+        probeStemsHubPreparedAsync();
+    }
+
+    /** Play confirms stem pick → openStemPlayer (≥1 mark), or prepare-only Get Stems. */
     private void confirmStemPickAndOpen() {
         if (!com.solar.launcher.stem.StemPickSlots.canStart(stemMashupQueue)) {
             Toast.makeText(this, R.string.stem_pick_need_mark, Toast.LENGTH_SHORT).show();
@@ -65568,6 +67030,16 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
      * Reversal: changeScreen(STATE_PLAYER) from onExit* callbacks.
      */
     private void exitStemOrMixToHome() {
+        // 2026-08-01 — Queue-launched stem performance: restore the pre-session queue
+        // (content + position) before landing home so playback continues where it left off.
+        if (stemSessionQueueSnapshot != null) {
+            try {
+                playback.restoreQueueState(stemSessionQueueSnapshot, stemSessionQueueSnapshotIndex);
+                persistPlaybackQueue();
+            } catch (Exception ignored) {}
+            stemSessionQueueSnapshot = null;
+            stemSessionQueueSnapshotIndex = -1;
+        }
         mixAssignMode = false;
         stemReassignSong = -1;
         pendingStemTrackFiles.clear();
@@ -65628,6 +67100,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
      */
     private void markHasStemsBits(java.util.List<File> tracks) {
         if (tracks == null || tracks.isEmpty()) return;
+        // 2026-08-01 — Foreground prep finished / stems opened: Mix dividers refresh.
+        invalidateQueueStemReadyMemo();
         boolean premix = com.solar.launcher.stem.LalalAccount.isPremixExperimental(prefs);
         for (File f : tracks) {
             if (f == null) continue;
@@ -65695,13 +67169,20 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             Debug8b0481Log.log("MainActivity.openStemPlayer", "mashup gate", "H-MIX1", d);
         } catch (Exception ignored) {}
         // #endregion
+        final boolean preparationOnly = stemPrepOnlyMode;
         if (!online && needLal > 0) {
             Toast.makeText(this,
                     needLal == ok.size()
                             ? getString(R.string.stem_player_need_wifi)
                             : getString(R.string.stem_player_need_wifi_partial, needLal),
                     Toast.LENGTH_LONG).show();
-            stemPickMode = true;
+            if (preparationOnly) {
+                stemPrepOnlyMode = false;
+                stemPickMode = false;
+                clearStemPickSelectionAndPending();
+            } else {
+                stemPickMode = true;
+            }
             return;
         }
 
@@ -65710,9 +67191,22 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         final boolean onlineFinal = online;
         final boolean[] readyFinal = readyFlags;
         final int stemmedFinal = stemmedCount;
-
         if (needLal > 0) {
-            cancelBackgroundStemPrep = true;
+            if (!com.solar.launcher.stem.StemPreparationPolicy
+                    .shouldStartPerformance(preparationOnly)) {
+                // Get Stems is preparation-only: observe the worker already processing the
+                // selected FIFO instead of restarting the first item in a new host. The
+                // readiness scan above is also the observer's initial terminal snapshot.
+                for (int i = 0; i < ok.size(); i++) {
+                    if (readyFlags[i] && ok.get(i) != null) {
+                        backgroundStemPrepCompletedPaths.add(ok.get(i).getAbsolutePath());
+                    }
+                }
+                startStemPrepQueueObserver(ok, findViewById(R.id.stem_prep_root));
+                return;
+            }
+
+            takeOverBackgroundStemPrep(ok);
             final java.util.ArrayList<File> unready = new java.util.ArrayList<>();
             for (int i = 0; i < ok.size(); i++) {
                 if (!readyFlags[i]) unready.add(ok.get(i));
@@ -65726,16 +67220,47 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                         @Override
                         public void onBatchFinished() {
                             if (prepUi != null) prepUi.setVisibility(View.GONE);
-                            openStemPlayerAfterGates(okFinal, 0, onlineFinal, null);
+                            finishForegroundStemPrep();
+                            removeBackgroundStemPrep(okFinal);
+                            if (!com.solar.launcher.stem.StemPreparationPolicy
+                                    .shouldStartPerformance(preparationOnly)) {
+                                finishStemPreparationOnly();
+                            } else {
+                                openStemPlayerAfterGates(okFinal, 0, onlineFinal, null);
+                            }
                         }
                         @Override
                         public void onBatchError(String error) {
                             if (prepUi != null) prepUi.setVisibility(View.GONE);
-                            Toast.makeText(MainActivity.this, error, Toast.LENGTH_SHORT).show();
+                            finishForegroundStemPrep();
+                            if (!com.solar.launcher.stem.StemPreparationPolicy
+                                    .shouldStartPerformance(preparationOnly)) {
+                                finishStemPreparationOnly();
+                            } else {
+                                Toast.makeText(MainActivity.this, error, Toast.LENGTH_SHORT).show();
+                            }
+                        }
+                        @Override
+                        public void onBatchFinishedWithErrors(String error) {
+                            if (prepUi != null) prepUi.setVisibility(View.GONE);
+                            finishForegroundStemPrep();
+                            if (!com.solar.launcher.stem.StemPreparationPolicy
+                                    .shouldStartPerformance(preparationOnly)) {
+                                finishStemPreparationOnly();
+                            } else {
+                                Toast.makeText(MainActivity.this, error, Toast.LENGTH_SHORT).show();
+                            }
                         }
                     }
             );
+            activeForegroundStemPrepHost = host;
             host.start();
+            return;
+        }
+        if (!com.solar.launcher.stem.StemPreparationPolicy
+                .shouldStartPerformance(preparationOnly)) {
+            // All selected songs were already prepared; Get Stems still returns to its hub.
+            finishStemPreparationOnly();
             return;
         }
         File[] okArr = ok.toArray(new File[ok.size()]);
@@ -65895,51 +67420,6 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         stemStartWaitNeedLal = 0;
         stemStartWaitOnline = false;
         stemStartWaitCatalog = false;
-    }
-
-    /**
-     * Pre-Save Stems — cook queue tracks (+ 4→2 instrumental bake when full pads ready).
-     * Layman: prepare stems ahead of time so jams start faster.
-     * Was: on-demand only at jam open. Reversal: drop menu row; keep on-demand.
-     * 2026-07-21
-     */
-    private void startPreSaveStemsForCurrentQueue() {
-        java.util.List<File> music = playback.unifiedQueue().musicFiles();
-        if (music == null || music.isEmpty()) {
-            Toast.makeText(this, R.string.stem_player_need_file, Toast.LENGTH_SHORT).show();
-            return;
-        }
-        final boolean premix = com.solar.launcher.stem.LalalAccount.isPremixExperimental(prefs);
-        File[] arr = music.toArray(new File[music.size()]);
-        boolean[] ready = new boolean[arr.length];
-        for (int i = 0; i < arr.length; i++) {
-            ready[i] = com.solar.launcher.stem.LalalClient.trackStemsReady(
-                    this, arr[i], premix, getCacheDir());
-        }
-        final java.util.List<File> need =
-                com.solar.launcher.stem.StemMixPreSavePolicy.needingCook(arr, ready);
-        if (com.solar.launcher.stem.StemMixPreSavePolicy.isNoop(need)) {
-            Toast.makeText(this, "Stems already ready", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        Runnable go = new Runnable() {
-            @Override
-            public void run() {
-                runPreSaveStemsBatch(need, premix);
-            }
-        };
-        if (com.solar.launcher.stem.StemMixLossless.shouldWarnLosslessBatch(
-                need.toArray(new File[need.size()]), null)) {
-            showThemedConfirm(
-                    com.solar.launcher.stem.StemMixLossless.warnTitle(),
-                    com.solar.launcher.stem.StemMixLossless.warnBody(),
-                    com.solar.launcher.stem.StemMixLossless.continueLabel(),
-                    com.solar.launcher.stem.StemMixLossless.cancelLabel(),
-                    go,
-                    null);
-            return;
-        }
-        go.run();
     }
 
     /** Background Pre-Save cook with queue row marquees. 2026-07-21 */
@@ -66195,6 +67675,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             Toast.makeText(this, getString(R.string.stem_pick_marked,
                     com.solar.launcher.stem.StemPickSlots.filled(stemMashupQueue)),
                     Toast.LENGTH_SHORT).show();
+            for (int i = 0; i < candidates.size(); i++) {
+                enqueueBackgroundStemPrep(candidates.get(i));
+            }
             if (added >= 0) refreshStemPickListChrome();
             updateStatusBarTitle();
             return;
@@ -66226,7 +67709,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
      */
     private void performStemMixPickClearAll() {
         if (stemPickMode) {
-            com.solar.launcher.stem.StemPickSlots.clear(stemMashupQueue);
+            clearStemPickSelectionAndPending();
             Toast.makeText(this, R.string.stem_pick_cleared, Toast.LENGTH_SHORT).show();
             refreshStemPickListChrome();
             updateStatusBarTitle();
@@ -66258,9 +67741,10 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
      * @param slotSongIndex −1 session; 0/1 Track N; Mix decks reuse same labels
      * 2026-07-21
      */
-    private void openStemMixJamContextMenu(final int slotSongIndex) {
+    private void openStemMixJamContextMenu(final int slotSongIndex, final int slotZone) {
         // Do not call stopCompetingAudio — jam must keep playing under the sheet. 2026-07-21
         stemMixJamContextSong = slotSongIndex;
+        stemMixJamContextZone = slotZone;
         showThemedContextMenu();
     }
 
@@ -66357,7 +67841,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                 // Replace focused pad’s track — land on Has Stems song list. 2026-07-21
                 // Was: Music hub root + Prev/Next assign. Reversal: BROWSER_ROOT buildFileBrowserUI.
                 stemReassignSong = slot < 0 ? 0 : slot;
-                com.solar.launcher.stem.StemPickSlots.clear(stemMashupQueue);
+                clearStemPickSelectionAndPending();
                 stemPickMode = true;
                 stemPickReturnScreen = STATE_STEM_PLAYER;
                 enterHasStemsBrowse();
@@ -66370,6 +67854,16 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         }
         if (row == com.solar.launcher.stem.StemMixContextRows.SLOT_PLAY_QUEUE) {
             openPlaybackQueueInContextMenu();
+            return;
+        }
+        if (com.solar.launcher.stem.StemMixContextRows.isSlotPlayBothRow(row)) {
+            if (!mix && stemPlayerHost != null) {
+                // Stack this pad’s stem from both songs (vocals together etc). 2026-08-01
+                stemPlayerHost.toggleZonePlayBoth(stemMixJamContextZone);
+            } else if (mix) {
+                // Mix decks share the slot rows; stacking is a Stem Player feature. 2026-08-01
+                Toast.makeText(this, "Play both is a Stem Player feature", Toast.LENGTH_SHORT).show();
+            }
             return;
         }
         if (row == com.solar.launcher.stem.StemMixContextRows.SLOT_START_NEXT) {
@@ -66391,7 +67885,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                             && playback.applyStemMixAdvance(slot, src, true)) {
                         persistPlaybackQueue();
                         refreshContextQueueTierIfOpen();
-                        if (mixPlayerHost != null) mixPlayerHost.fadeReplaceDeck(slot, f);
+                        // DJ chain: lead deck finish keeps the survivor as the new
+                        // lead (end of pair 1 → start of pair 2). 2026-08-01
+                        if (mixPlayerHost != null) mixPlayerHost.chainAdvanceDeck(slot, f);
                         return;
                     }
                 }
@@ -66411,7 +67907,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                                 && playback.applyStemMixAdvance(slot, src, false)) {
                             persistPlaybackQueue();
                             refreshContextQueueTierIfOpen();
-                            stemPlayerHost.softReplaceSong(slot, next);
+                            // DJ chain: advancing the seed keeps the survivor as the
+                            // new seed (end of pair 1 → start of pair 2). 2026-08-01
+                            stemPlayerHost.chainAdvanceSong(slot, next, false);
                             return;
                         }
                     }
@@ -66450,6 +67948,16 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             exitStemOrMixToHome();
             return;
         }
+        int qmode = com.solar.launcher.stem.StemMixContextRows.quantizeModeForSessionRow(row);
+        if (qmode >= 0) {
+            if (!mix && stemPlayerHost != null) {
+                stemPlayerHost.applyJamQuantizeMode(qmode);
+            } else if (mix && mixPlayerHost != null) {
+                // Quantize Performance is a Stem Player feature — Mix decks stay instant.
+                Toast.makeText(this, "Quantize is a Stem Player feature", Toast.LENGTH_SHORT).show();
+            }
+            return;
+        }
         int preset = com.solar.launcher.stem.StemMixContextRows.transitionPresetForSessionRow(row);
         if (preset >= 0) {
             if (!mix && stemPlayerHost != null) {
@@ -66459,10 +67967,12 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             if (mix && mixPlayerHost != null) {
                 mixPlayerHost.applyJamTransitionPreset(preset);
             }
-            String toast = preset == com.solar.launcher.stem.StemControls.TRANSITION_PRESET_OVERLAP
-                    ? "Blend ∞"
-                    : preset == com.solar.launcher.stem.StemControls.TRANSITION_PRESET_WAVE
-                    ? "Blend wave" : "Blend LONG";
+            String toast = preset == com.solar.launcher.stem.StemControls.TRANSITION_PRESET_BALANCED
+                    ? "Blend · Balanced Mix"
+                    : preset == com.solar.launcher.stem.StemControls.TRANSITION_PRESET_SHORT
+                    ? "Blend · Short & Punchy"
+                    : preset == com.solar.launcher.stem.StemControls.TRANSITION_PRESET_INSTANT
+                    ? "Blend · Instant" : "Blend · Full Tracks";
             Toast.makeText(this, toast, Toast.LENGTH_SHORT).show();
         }
     }
@@ -66539,7 +68049,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                             // Mid-jam replace → Has Stems; OK confirms focused seat. 2026-07-21
                             // Was: Music hub root + Prev/Next/Center commit. Reversal: BROWSER_ROOT path.
                             stemReassignSong = songIndex < 0 ? 0 : songIndex;
-                            com.solar.launcher.stem.StemPickSlots.clear(stemMashupQueue);
+                            clearStemPickSelectionAndPending();
                             stemPickMode = true;
                             stemPickReturnScreen = STATE_STEM_PLAYER;
                             enterHasStemsBrowse();
@@ -66578,9 +68088,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                         }
 
                         @Override
-                        public void openStemMixContextMenu(int slotSongIndex) {
+                        public void openStemMixContextMenu(int slotSongIndex, int slotZone) {
                             // Do not pause mixers — jam keeps playing under ThemedContextMenu. 2026-07-21
-                            openStemMixJamContextMenu(slotSongIndex);
+                            openStemMixJamContextMenu(slotSongIndex, slotZone);
                         }
 
                         @Override
@@ -66589,6 +68099,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                             try {
                                 if (isSolarContextMenuOpen()) {
                                     stemMixJamContextSong = Integer.MIN_VALUE;
+                                    stemMixJamContextZone = -1;
                                     dismissThemedContextMenu();
                                 }
                             } catch (Exception ignored) {}
@@ -66616,8 +68127,56 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                                                     MainActivity.this, tf, premix, getCacheDir());
                                 }
                             } catch (Exception ignored) {}
+                            // StemFM-style transition: of the next two upcoming songs, play the
+                            // closest tempo/beat match to the song that just finished first.
+                            // Finished BPM comes from a fresh duration probe of the finished
+                            // track itself (SongState.bpm can be stale after soft-replaces,
+                            // which never re-probe). 2026-08-01
+                            float finishedBpm = 120f;
+                            try {
+                                com.solar.launcher.stem.StemSession ss =
+                                        stemPlayerHost != null ? stemPlayerHost.session() : null;
+                                // DJ chain: when the seed (slot 0) finishes, the
+                                // survivor (slot 1) becomes the new tempo master, so
+                                // match the incoming to the survivor — the track that
+                                // keeps playing — not the finished seed. 2026-08-01
+                                int masterSlot = finishedLiveSlot == 0 && ss != null
+                                        && ss.songCount() > 1 ? 1 : finishedLiveSlot;
+                                com.solar.launcher.stem.StemSession.SongState fin =
+                                        ss != null ? ss.song(masterSlot) : null;
+                                File ft = fin != null ? fin.track : null;
+                                if (ft != null && ft.isFile()) {
+                                    finishedBpm = com.solar.launcher.stem.StemBpm
+                                            .estimateFromDurationMs(
+                                                    com.solar.launcher.stem.StemPlayerHost
+                                                            .probeDurationMs(ft));
+                                } else if (fin != null && fin.bpm > 30f) {
+                                    finishedBpm = fin.bpm;
+                                }
+                            } catch (Exception ignored) {}
+                            float[] candBpm = null;
+                            try {
+                                int nextIdx = com.solar.launcher.stem.StemMixQueuePolicy
+                                        .nextUpIndex(q, liveWin);
+                                if (nextIdx >= 0) {
+                                    java.util.List<PlayQueue.QueueItem> items = q.items();
+                                    int last = Math.min(nextIdx + 1, items.size() - 1);
+                                    candBpm = new float[items.size()];
+                                    for (int i = nextIdx; i <= last; i++) {
+                                        PlayQueue.QueueItem it = items.get(i);
+                                        File tf = it != null ? it.file : null;
+                                        if (tf != null && tf.isFile()) {
+                                            candBpm[i] = com.solar.launcher.stem.StemBpm
+                                                    .estimateFromDurationMs(
+                                                            com.solar.launcher.stem.StemPlayerHost
+                                                                    .probeDurationMs(tf));
+                                        }
+                                    }
+                                }
+                            } catch (Exception ignored) {}
                             int src = com.solar.launcher.stem.StemMixQueuePolicy
-                                    .advanceSourcePreferReady(q, liveWin, ready);
+                                    .advanceSourceClosestTempo(q, liveWin, ready,
+                                            finishedBpm, candBpm);
                             if (src < 0) return null;
                             boolean alert = com.solar.launcher.stem.StemMixQueuePolicy
                                     .prepAwareReordered(def, src);
@@ -66695,6 +68254,17 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         int sk = event.getKeyCode();
         if (currentScreenState == STATE_STEM_PLAYER && stemPlayerHost != null) {
             if (Y1InputKeys.isVolumeUpKey(sk) || Y1InputKeys.isVolumeDownKey(sk)) {
+                return true;
+            }
+            // Stock Y1/A5 face Top/Bottom buttons arrive as DPAD with scan codes 103/108;
+            // Y1 wheel DPAD_UP/DOWN arrives as 114/115 and must remain wheel input.
+            // 2026-08-03
+            if ((Y1InputKeys.isTopPadEvent(event) || Y1InputKeys.isBottomPadEvent(event))
+                    && event.getAction() != KeyEvent.ACTION_MULTIPLE) {
+                stemPlayerHost.onKey(sk, event);
+                if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+                    clickFeedback();
+                }
                 return true;
             }
             if (Y1InputKeys.isWheelUp(sk) && event.getAction() == KeyEvent.ACTION_DOWN) {
@@ -67116,7 +68686,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                         @Override
                         public void openStemMixContextMenu(int slotDeckIndex) {
                             // Do not pause decks — jam keeps playing under Options. 2026-07-21
-                            openStemMixJamContextMenu(slotDeckIndex);
+                            openStemMixJamContextMenu(slotDeckIndex, slotDeckIndex);
                         }
 
                         @Override
@@ -67627,6 +69197,155 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     }
 
     /** Shared host for NP↔Flow handoff cover resolve — art or ♪ placeholder. */
+    // 2026-08-01 — Queue row art: one background worker + tiny LRU (path → 16px square).
+    private static final java.util.concurrent.ExecutorService QUEUE_ART_WORKER =
+            java.util.concurrent.Executors.newSingleThreadExecutor();
+    private final java.util.Map<String, android.graphics.Bitmap> queueArtLru =
+            new java.util.LinkedHashMap<String, android.graphics.Bitmap>(64, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(
+                        java.util.Map.Entry<String, android.graphics.Bitmap> eldest) {
+                    return size() > 96;
+                }
+            };
+    private final java.util.Set<String> queueArtInflight = new java.util.HashSet<String>();
+
+    /** Per-path stems-ready memo for queue Mix dividers (path → ready). 2026-08-01 */
+    private final java.util.Map<String, Boolean> queueStemReadyMemo =
+            new java.util.HashMap<String, Boolean>();
+
+    /** Pre-session queue snapshot for queue-launched stem performances. 2026-08-01 */
+    private java.util.List<PlayQueue.QueueItem> stemSessionQueueSnapshot = null;
+    private int stemSessionQueueSnapshotIndex = -1;
+
+    /**
+     * Synchronous main-thread lookup for a queue row's 16px art square; kicks off an
+     * async resolve (shared FlowCoverResolver pipeline) when the file isn't cached yet.
+     * Layman: the little album square next to each queue song, loaded off-thread.
+     * Reversal: return null always (no row art). 2026-08-01
+     */
+    private android.graphics.Bitmap queueRowArtFor(final java.io.File file) {
+        if (file == null || !file.isFile()) return null;
+        final String key = file.getAbsolutePath();
+        synchronized (queueArtLru) {
+            android.graphics.Bitmap cached = queueArtLru.get(key);
+            if (cached != null && !cached.isRecycled()) return cached;
+        }
+        synchronized (queueArtInflight) {
+            if (queueArtInflight.contains(key)) return null;
+            queueArtInflight.add(key);
+        }
+        QUEUE_ART_WORKER.execute(new Runnable() {
+            @Override
+            public void run() {
+                android.graphics.Bitmap bmp = null;
+                try {
+                    java.io.File artDir = com.solar.launcher.flow.AlbumArtCache.cacheDir(
+                            MainActivity.this);
+                    bmp = com.solar.launcher.flow.FlowCoverResolver.resolveFromTracks(
+                            java.util.Collections.singletonList(file),
+                            handoffCoverHost(artDir),
+                            QUEUE_ROW_ART_PX,
+                            null, artDir,
+                            com.solar.launcher.flow.FlowThumbCache.cacheDir(
+                                    getApplicationContext()));
+                } catch (Exception ignored) {}
+                final android.graphics.Bitmap result = bmp;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        synchronized (queueArtInflight) {
+                            queueArtInflight.remove(key);
+                        }
+                        if (result != null && !result.isRecycled()) {
+                            synchronized (queueArtLru) {
+                                queueArtLru.put(key, result);
+                            }
+                            if (themedContextMenu != null) themedContextMenu.refreshQueueArt();
+                        }
+                    }
+                });
+            }
+        });
+        return null;
+    }
+
+    /** Drop the per-path stems-ready memo when prep completes (new pads appear). 2026-08-01 */
+    private void invalidateQueueStemReadyMemo() {
+        synchronized (queueStemReadyMemo) {
+            queueStemReadyMemo.clear();
+        }
+    }
+
+    /**
+     * True when this queue track already has playable stems. Fast path: the cached
+     * {@link SongItem#hasStemsBit} (set by the Has Stems index / stem open) avoids a
+     * disk probe; otherwise one memoized {@link LalalClient#trackStemsReady} probe.
+     * Layman: only pairs with ready pads get a Mix divider in the play queue.
+     * Reversal: always true (Mix between every adjacent pair). 2026-08-01
+     */
+    private boolean queueFileStemsReady(java.io.File f) {
+        if (f == null || !f.isFile()) return false;
+        String path = f.getAbsolutePath();
+        // Cheapest first — the per-path memo (pure HashMap, no SQLite). 2026-08-01
+        synchronized (queueStemReadyMemo) {
+            Boolean cached = queueStemReadyMemo.get(path);
+            if (cached != null) return cached.booleanValue();
+        }
+        // Fast path — Has Stems index already probed this library track.
+        SongItem song = findSongItem(f);
+        if (song != null && song.hasStemsBit >= 0) return song.hasStemsBit == 1;
+        boolean premix = com.solar.launcher.stem.LalalAccount.isPremixExperimental(prefs);
+        boolean ready = com.solar.launcher.stem.LalalClient.trackStemsReady(
+                this, f, premix, getCacheDir());
+        if (song != null) song.hasStemsBit = ready ? 1 : 0;
+        synchronized (queueStemReadyMemo) {
+            if (queueStemReadyMemo.size() > 256) queueStemReadyMemo.clear();
+            queueStemReadyMemo.put(path, Boolean.valueOf(ready));
+        }
+        return ready;
+    }
+
+    /**
+     * Per-adjacent-pair Mix divider mask for the current unified queue: mask[i] true
+     * only when BOTH track i and track i+1 have ready stems. null when mixes are off
+     * (moves / playlist edit). Layman: the Mix word appears only between songs that
+     * can actually blend on the pads. 2026-08-01
+     */
+    private boolean[] queueMixPairMask(PlayQueue q) {
+        if (q == null || q.size() < 2) return null;
+        int n = q.size() - 1;
+        boolean[] mask = new boolean[n];
+        for (int i = 0; i < n; i++) {
+            PlayQueue.QueueItem a = q.items().get(i);
+            PlayQueue.QueueItem b = q.items().get(i + 1);
+            mask[i] = queueFileStemsReady(a != null ? a.file : null)
+                    && queueFileStemsReady(b != null ? b.file : null);
+        }
+        return mask;
+    }
+
+    /**
+     * Prebake tiny 16px row art for every queue row (and Mix pair) in the background
+     * worker so scrolling paints instantly instead of popping art in per row.
+     * Layman: warm the little album squares before you scroll the queue.
+     * 2026-08-01
+     */
+    private void prewarmQueueRowArt(ThemedContextMenu.QueueRowSpec[] specs) {
+        if (specs == null) return;
+        java.util.HashSet<String> seen = new java.util.HashSet<String>();
+        for (int i = 0; i < specs.length; i++) {
+            ThemedContextMenu.QueueRowSpec s = specs[i];
+            if (s == null) continue;
+            if (s.artFile != null && seen.add(s.artFile.getAbsolutePath())) {
+                queueRowArtFor(s.artFile);
+            }
+            if (s.artFile2 != null && seen.add(s.artFile2.getAbsolutePath())) {
+                queueRowArtFor(s.artFile2);
+            }
+        }
+    }
+
     private com.solar.launcher.flow.FlowCoverResolver.Host handoffCoverHost(final File artDir) {
         final File flowDir = com.solar.launcher.flow.FlowThumbCache.cacheDir(getApplicationContext());
         return new com.solar.launcher.flow.FlowCoverResolver.Host() {

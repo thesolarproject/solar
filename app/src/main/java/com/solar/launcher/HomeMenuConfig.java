@@ -116,6 +116,27 @@ public final class HomeMenuConfig {
         return out;
     }
 
+    /**
+     * Editor catalog with the actual current home rows first.
+     * The ordinary catalog remains available below them for enabling shortcuts,
+     * but the top section now follows the same connectivity/Now Playing rules as Home.
+     */
+    public static List<Entry> loadEditorCatalogEntries(SharedPreferences prefs,
+            boolean internetAvailable, boolean localNetworkAvailable, boolean showNowPlaying) {
+        List<Entry> out = new ArrayList<Entry>();
+        Set<String> seen = new HashSet<String>();
+        for (String id : loadHomeDisplayIds(prefs, internetAvailable, localNetworkAvailable,
+                showNowPlaying)) {
+            if (ID_MORE.equals(id) || isHiddenByExperimentGate(id, prefs)) continue;
+            Entry e = find(id);
+            if (e != null && seen.add(e.id)) out.add(e);
+        }
+        for (Entry e : loadEditorCatalogEntries(prefs)) {
+            if (e != null && seen.add(e.id)) out.add(e);
+        }
+        return out;
+    }
+
     /** @deprecated use {@link #loadEditorCatalogEntries} */
     public static List<Entry> loadEditorHomeEntries(SharedPreferences prefs) {
         List<Entry> out = new ArrayList<Entry>();
@@ -511,6 +532,10 @@ public final class HomeMenuConfig {
             if (ID_NOW_PLAYING.equals(e.id) && !showNowPlaying) continue;
             out.add(e.id);
         }
+        // Match MainActivity.buildHomeMenu's dynamic Now Playing insertion.
+        if (showNowPlaying && !out.contains(ID_NOW_PLAYING)) {
+            out.add(0, ID_NOW_PLAYING);
+        }
         if (shouldShowMoreTile(prefs, internetAvailable, localNetworkAvailable)) {
             out.add(ID_MORE);
         }
@@ -577,6 +602,34 @@ public final class HomeMenuConfig {
     }
 
     /**
+     * Persist a reordered subset of the currently displayed Home rows while
+     * retaining configured-but-unavailable rows in the saved order.
+     */
+    public static boolean saveVisibleHomeOrder(SharedPreferences prefs, List<String> visibleOrder) {
+        if (prefs == null || visibleOrder == null || visibleOrder.isEmpty()) return false;
+        List<String> raw = new ArrayList<String>(loadHomeOrderIds(prefs));
+        List<String> replacement = new ArrayList<String>();
+        for (String id : visibleOrder) {
+            String canonical = migrateId(id != null ? id.trim() : null);
+            if (canonical == null || canonical.isEmpty()
+                    || ID_SETTINGS.equals(canonical) || find(canonical) == null
+                    || replacement.contains(canonical)) continue;
+            replacement.add(canonical);
+        }
+        if (replacement.isEmpty()) return false;
+        Set<String> visible = new HashSet<String>(replacement);
+        int next = 0;
+        for (int i = 0; i < raw.size() && next < replacement.size(); i++) {
+            if (visible.contains(raw.get(i)) && !ID_SETTINGS.equals(raw.get(i))) {
+                raw.set(i, replacement.get(next++));
+            }
+        }
+        if (next != replacement.size()) return false;
+        saveOrder(prefs, raw);
+        return true;
+    }
+
+    /**
      * 2026-07-15 — Swap two enabled home shortcut ids (Settings immovable).
      * Returns false when move refused.
      */
@@ -584,6 +637,7 @@ public final class HomeMenuConfig {
         if (prefs == null || from == to || from < 0 || to < 0) return false;
         List<String> ids = new ArrayList<String>(loadHomeOrderIds(prefs));
         if (from >= ids.size() || to >= ids.size()) return false;
+        if (ID_SETTINGS.equals(ids.get(from)) || ID_SETTINGS.equals(ids.get(to))) return false;
         String fromId = ids.get(from);
         ids.remove(from);
         ids.add(to, fromId);
