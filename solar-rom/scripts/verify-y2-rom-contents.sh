@@ -91,10 +91,10 @@ if debugfs -R "stat /priv-app/com.themoon.y1.apk" "$sys" 2>/dev/null | grep -q '
 fi
 fi
 
-# Launcher switch + keymap scripts (Rockbox-Y1 handoff parity).
+# Launcher switch + keymap scripts. Solar-only ROMs intentionally omit the
+# legacy switch-to-rockbox entry point; Rockbox is prep-delivered, not baked.
 for p in \
     /etc/solar/switch-to-stock.sh \
-    /etc/solar/switch-to-rockbox.sh \
     /etc/solar/sync-y1-keymap.sh \
     /etc/solar/sync-rockbox-libs.sh \
     /etc/solar/sync-rockbox-assets.sh \
