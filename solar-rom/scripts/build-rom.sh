@@ -169,6 +169,84 @@ prepare_image_for_mount() {
     fi
 }
 
+# ATA firmware can carry a userdata filesystem larger than the slot declared by its
+# scatter (notably Y2 bases with a multi-gigabyte raw userdata image). Linux can mount
+# that image, but SP Flash Tool/MTKclient will reject the resulting ROM. Shrink the
+# filesystem, rather than truncating bytes, and only trim verified trailing padding.
+# The active scatter is the source of truth for every device family.
+fit_ext4_image_to_usrdata_partition() {
+    local img="$1"
+    local scatter="$BASE_DIR/$SCATTER_FILE"
+    local partition_hex max_bytes block_size block_count fs_bytes target_blocks min_blocks
+    local current_bytes fsck_rc resized_bytes
+
+    [ -f "$img" ] || die "userdata mount source missing: $img"
+    [ -f "$scatter" ] || die "missing active scatter for userdata sizing: $scatter"
+    require_cmd e2fsck
+    require_cmd resize2fs
+    require_cmd tune2fs
+
+    partition_hex="$(awk '
+        /partition_name:[[:space:]]*USRDATA[[:space:]]*$/ { found=1; next }
+        found && /partition_size:/ { print $2; exit }
+        found && /partition_name:/ { exit }
+    ' "$scatter")"
+    [ -n "$partition_hex" ] || die "scatter has no USRDATA partition_size: $scatter"
+    if [[ ! "$partition_hex" =~ ^0[xX][0-9a-fA-F]+$ && ! "$partition_hex" =~ ^[0-9]+$ ]]; then
+        die "invalid USRDATA partition_size '$partition_hex' in $scatter"
+    fi
+    max_bytes=$((partition_hex))
+
+    block_size="$(tune2fs -l "$img" 2>/dev/null \
+        | awk -F: '$1 ~ /^[[:space:]]*Block size[[:space:]]*$/ {gsub(/[[:space:]]/, "", $2); print $2; exit}')"
+    block_count="$(tune2fs -l "$img" 2>/dev/null \
+        | awk -F: '$1 ~ /^[[:space:]]*Block count[[:space:]]*$/ {gsub(/[[:space:]]/, "", $2); print $2; exit}')"
+    [[ "$block_size" =~ ^[0-9]+$ && "$block_count" =~ ^[0-9]+$ ]] \
+        || die "could not read ext4 geometry from $(basename "$img")"
+    fs_bytes=$((block_size * block_count))
+    current_bytes="$(stat -c%s "$img")"
+
+    if [ "$fs_bytes" -gt "$max_bytes" ]; then
+        echo "==> Shrinking userdata ext4 filesystem from ${fs_bytes} to scatter ceiling ${max_bytes} bytes" >&2
+        set +e
+        e2fsck -f -y "$img" >/dev/null 2>&1
+        fsck_rc=$?
+        set -e
+        [ "$fsck_rc" -le 1 ] \
+            || die "e2fsck failed before userdata resize (exit $fsck_rc)"
+
+        target_blocks=$((max_bytes / block_size))
+        min_blocks="$(resize2fs -P "$img" 2>/dev/null | awk 'END {print $NF}')"
+        [[ "$min_blocks" =~ ^[0-9]+$ ]] \
+            || die "could not determine minimum userdata filesystem size"
+        [ "$target_blocks" -ge "$min_blocks" ] \
+            || die "userdata contents require ${min_blocks} blocks, over scatter ceiling ${target_blocks} blocks"
+
+        resize2fs "$img" "$target_blocks" >/dev/null \
+            || die "could not shrink userdata filesystem to ${target_blocks} blocks"
+        set +e
+        e2fsck -f -y "$img" >/dev/null 2>&1
+        fsck_rc=$?
+        set -e
+        [ "$fsck_rc" -le 1 ] \
+            || die "e2fsck failed after userdata resize (exit $fsck_rc)"
+        echo "==> Userdata ext4 filesystem now fits $(basename "$scatter") USRDATA=${partition_hex}" >&2
+    fi
+
+    # A valid ext4 image may still have zero-filled padding beyond its filesystem.
+    # Remove only that verified tail; never truncate live filesystem blocks.
+    block_count="$(tune2fs -l "$img" 2>/dev/null \
+        | awk -F: '$1 ~ /^[[:space:]]*Block count[[:space:]]*$/ {gsub(/[[:space:]]/, "", $2); print $2; exit}')"
+    fs_bytes=$((block_size * block_count))
+    resized_bytes="$(stat -c%s "$img")"
+    if [ "$resized_bytes" -gt "$fs_bytes" ]; then
+        truncate -s "$fs_bytes" "$img"
+    fi
+    resized_bytes="$(stat -c%s "$img")"
+    [ "$resized_bytes" -le "$max_bytes" ] \
+        || die "userdata image remains ${resized_bytes} bytes above USRDATA ceiling ${max_bytes}"
+}
+
 # GitHub-hosted runners can mount a padded ext4 image read-only when its journal/error state
 # is dirty. That makes the later userdata seed fail with a misleading `rm: Read-only file
 # system` even though mount was requested without `ro`. Repair the image before mounting and
@@ -1324,6 +1402,7 @@ fi
 
 SYSTEM_MOUNT_SRC="$(prepare_image_for_mount "$BASE_DIR/system.img")"
 USERDATA_MOUNT_SRC="$(prepare_image_for_mount "$BASE_DIR/userdata.img")"
+fit_ext4_image_to_usrdata_partition "$USERDATA_MOUNT_SRC"
 prepare_ext4_image_for_rw_mount "$SYSTEM_MOUNT_SRC"
 prepare_ext4_image_for_rw_mount "$USERDATA_MOUNT_SRC"
 
