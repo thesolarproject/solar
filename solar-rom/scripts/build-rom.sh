@@ -169,6 +169,43 @@ prepare_image_for_mount() {
     fi
 }
 
+# GitHub-hosted runners can mount a padded ext4 image read-only when its journal/error state
+# is dirty. That makes the later userdata seed fail with a misleading `rm: Read-only file
+# system` even though mount was requested without `ro`. Repair the image before mounting and
+# assert that the kernel accepted a writable mount. This is intentionally done on the temporary
+# mount source (raw conversion for sparse images), never on the pristine Y2 copy.
+prepare_ext4_image_for_rw_mount() {
+    local img="$1"
+    [ -f "$img" ] || die "ext4 mount source missing: $img"
+    require_cmd e2fsck
+    require_cmd tune2fs
+    chmod u+rw "$img" 2>/dev/null || true
+    echo "==> Checking ext4 mount source $(basename "$img")" >&2
+    set +e
+    e2fsck -f -y "$img" >/dev/null 2>&1
+    local fsck_rc=$?
+    set -e
+    if [ "$fsck_rc" -gt 1 ]; then
+        die "e2fsck failed before mounting $(basename "$img") (exit $fsck_rc)"
+    fi
+}
+
+assert_mount_is_rw() {
+    local mount_dir="$1"
+    local options
+    require_cmd findmnt
+    options="$(findmnt -n -o OPTIONS --target "$mount_dir" 2>/dev/null || true)"
+    case ",$options," in
+        *,rw,*) ;;
+        *)
+            echo "error: mount $mount_dir is not writable (options=${options:-unknown})" >&2
+            echo "error: mount table:" >&2
+            findmnt -n --target "$mount_dir" >&2 || true
+            return 1
+            ;;
+    esac
+}
+
 # MTK SP Flash Tool rejects corrupt ext4 sparse images — fsck raw before img2simg repack.
 verify_sparse_roundtrip() {
     local sparse="$1"
@@ -1287,11 +1324,15 @@ fi
 
 SYSTEM_MOUNT_SRC="$(prepare_image_for_mount "$BASE_DIR/system.img")"
 USERDATA_MOUNT_SRC="$(prepare_image_for_mount "$BASE_DIR/userdata.img")"
+prepare_ext4_image_for_rw_mount "$SYSTEM_MOUNT_SRC"
+prepare_ext4_image_for_rw_mount "$USERDATA_MOUNT_SRC"
 
-echo "==> Mounting system.img and userdata.img"
+echo "==> Mounting system.img and userdata.img read-write"
 sudo modprobe loop 2>/dev/null || true
-sudo mount -t ext4 -o loop "$SYSTEM_MOUNT_SRC" "$MOUNT_SYS"
-sudo mount -t ext4 -o loop "$USERDATA_MOUNT_SRC" "$MOUNT_USER"
+sudo mount -t ext4 -o loop,rw "$SYSTEM_MOUNT_SRC" "$MOUNT_SYS"
+sudo mount -t ext4 -o loop,rw "$USERDATA_MOUNT_SRC" "$MOUNT_USER"
+assert_mount_is_rw "$MOUNT_SYS" || die "system.img mounted read-only"
+assert_mount_is_rw "$MOUNT_USER" || die "userdata.img mounted read-only"
 
 echo "==> Patching system partition"
 while IFS= read -r apk; do
