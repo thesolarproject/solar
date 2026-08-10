@@ -69213,6 +69213,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     /** Per-path stems-ready memo for queue Mix dividers (path → ready). 2026-08-01 */
     private final java.util.Map<String, Boolean> queueStemReadyMemo =
             new java.util.HashMap<String, Boolean>();
+    private final java.util.Set<String> queueStemReadyInflight = new java.util.HashSet<String>();
 
     /** Pre-session queue snapshot for queue-launched stem performances. 2026-08-01 */
     private java.util.List<PlayQueue.QueueItem> stemSessionQueueSnapshot = null;
@@ -69284,26 +69285,49 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
      * Layman: only pairs with ready pads get a Mix divider in the play queue.
      * Reversal: always true (Mix between every adjacent pair). 2026-08-01
      */
-    private boolean queueFileStemsReady(java.io.File f) {
+    private boolean queueFileStemsReady(final java.io.File f) {
         if (f == null || !f.isFile()) return false;
-        String path = f.getAbsolutePath();
+        final String path = f.getAbsolutePath();
         // Cheapest first — the per-path memo (pure HashMap, no SQLite). 2026-08-01
         synchronized (queueStemReadyMemo) {
             Boolean cached = queueStemReadyMemo.get(path);
             if (cached != null) return cached.booleanValue();
         }
         // Fast path — Has Stems index already probed this library track.
-        SongItem song = findSongItem(f);
+        final SongItem song = findSongItem(f);
         if (song != null && song.hasStemsBit >= 0) return song.hasStemsBit == 1;
-        boolean premix = com.solar.launcher.stem.LalalAccount.isPremixExperimental(prefs);
-        boolean ready = com.solar.launcher.stem.LalalClient.trackStemsReady(
-                this, f, premix, getCacheDir());
-        if (song != null) song.hasStemsBit = ready ? 1 : 0;
-        synchronized (queueStemReadyMemo) {
-            if (queueStemReadyMemo.size() > 256) queueStemReadyMemo.clear();
-            queueStemReadyMemo.put(path, Boolean.valueOf(ready));
+
+        synchronized (queueStemReadyInflight) {
+            if (queueStemReadyInflight.contains(path)) return false;
+            queueStemReadyInflight.add(path);
         }
-        return ready;
+
+        QUEUE_ART_WORKER.execute(new Runnable() {
+            @Override
+            public void run() {
+                boolean premix = com.solar.launcher.stem.LalalAccount.isPremixExperimental(prefs);
+                boolean ready = com.solar.launcher.stem.LalalClient.trackStemsReady(
+                        MainActivity.this, f, premix, getCacheDir());
+                if (song != null) song.hasStemsBit = ready ? 1 : 0;
+                synchronized (queueStemReadyMemo) {
+                    if (queueStemReadyMemo.size() > 256) queueStemReadyMemo.clear();
+                    queueStemReadyMemo.put(path, Boolean.valueOf(ready));
+                }
+                synchronized (queueStemReadyInflight) {
+                    queueStemReadyInflight.remove(path);
+                }
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (themedContextMenu != null && themedContextMenu.isQueueMode()) {
+                            // Only trigger a rebuild if we are still looking at the queue
+                            rebuildContextQueueTier(false);
+                        }
+                    }
+                });
+            }
+        });
+        return false;
     }
 
     /**
@@ -69334,7 +69358,15 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     private void prewarmQueueRowArt(ThemedContextMenu.QueueRowSpec[] specs) {
         if (specs == null) return;
         java.util.HashSet<String> seen = new java.util.HashSet<String>();
-        for (int i = 0; i < specs.length; i++) {
+        int start = 0;
+        int end = specs.length;
+        if (themedContextMenu != null) {
+            int focus = contextQueueFocusIndex;
+            int visible = Math.max(7, com.solar.launcher.QueueBrowseWindow.windowSize(3, 2));
+            start = Math.max(0, focus - visible);
+            end = Math.min(specs.length, focus + visible);
+        }
+        for (int i = start; i < end; i++) {
             ThemedContextMenu.QueueRowSpec s = specs[i];
             if (s == null) continue;
             if (s.artFile != null && seen.add(s.artFile.getAbsolutePath())) {
