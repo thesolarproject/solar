@@ -62186,6 +62186,11 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                     java.io.FileOutputStream fos = new java.io.FileOutputStream(coverFile);
                     coverBitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, fos);
                     fos.close();
+
+                    // After successfully fetching and saving the cover art,
+                    // attempt to embed the metadata and cover into the file permanently
+                    tryEmbedMetadataFromPrefs(track, coverFile);
+
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
@@ -62249,13 +62254,20 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                         final String finalArtist = fetchedArtist;
                         final String finalAlbum = fetchedAlbum;
 
-                        String coverUrl = trackInfo.getJSONObject("album").getString("cover_xl").replace("https://", "http://");
-                        java.net.URL imgUrl = new java.net.URL(coverUrl);
-                        java.net.HttpURLConnection imgConn = (java.net.HttpURLConnection) imgUrl.openConnection();
-                        java.io.InputStream in = imgConn.getInputStream();
-                        final android.graphics.Bitmap coverBitmap = android.graphics.BitmapFactory.decodeStream(in);
-                        in.close();
+                        android.graphics.Bitmap tempBitmap = null;
+                        try {
+                            String coverUrl = trackInfo.getJSONObject("album").optString("cover_xl", "");
+                            if (!coverUrl.isEmpty()) {
+                                coverUrl = coverUrl.replace("https://", "http://");
+                                java.net.URL imgUrl = new java.net.URL(coverUrl);
+                                java.net.HttpURLConnection imgConn = (java.net.HttpURLConnection) imgUrl.openConnection();
+                                java.io.InputStream in = imgConn.getInputStream();
+                                tempBitmap = android.graphics.BitmapFactory.decodeStream(in);
+                                in.close();
+                            }
+                        } catch (Exception ignored) {}
 
+                        final android.graphics.Bitmap coverBitmap = tempBitmap;
                         persistFetchedMetadata(track, finalTitle, finalArtist, finalAlbum, coverBitmap);
                         final File coverFile = coverFileForTrack(track);
 
@@ -62267,7 +62279,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                                     // 🚀 화면의 글씨도 즉각 공식 정보로 갈아치웁니다!
                                     tvPlayerTitle.setText(finalTitle);
                                     bindNowPlayingArtistAlbum(finalArtist, finalAlbum);
-                                    applyCachedCoverArt(coverFile.getAbsolutePath());
+                                    if (coverFile.exists()) {
+                                        applyCachedCoverArt(coverFile.getAbsolutePath());
+                                    }
                                 }
                             }
                         });
