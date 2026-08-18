@@ -70,6 +70,7 @@ public final class FmPresetStore extends SolarDbHelper {
     if (oldVersion < 2) {
       db.execSQL("ALTER TABLE presets ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0");
       SolarCursor c = db.rawQuery("SELECT id FROM presets ORDER BY freq_khz ASC", null);
+      db.beginTransaction();
       try {
         int order = 0;
         while (c.moveToNext()) {
@@ -77,7 +78,9 @@ public final class FmPresetStore extends SolarDbHelper {
               "UPDATE presets SET sort_order=? WHERE id=?",
               new Object[] {order++, c.getLong(0)});
         }
+        db.setTransactionSuccessful();
       } finally {
+        db.endTransaction();
         c.close();
       }
       return;
@@ -160,13 +163,20 @@ public final class FmPresetStore extends SolarDbHelper {
   /** 2026-07-06 — Scan replaces list; sort_order follows scan discovery order. */
   public synchronized void replaceAll(List<Preset> presets) {
     SolarDatabase db = openWritable();
-    db.execSQL("DELETE FROM presets");
-    if (presets == null) return;
-    int order = 0;
-    for (Preset p : presets) {
-      db.execSQL(
-          "INSERT INTO presets (freq_khz, label, sort_order) VALUES (?, ?, ?)",
-          new Object[] {p.freqKhz, p.label != null ? p.label : "", order++});
+    db.beginTransaction();
+    try {
+      db.execSQL("DELETE FROM presets");
+      if (presets != null) {
+        int order = 0;
+        for (Preset p : presets) {
+          db.execSQL(
+              "INSERT INTO presets (freq_khz, label, sort_order) VALUES (?, ?, ?)",
+              new Object[] {p.freqKhz, p.label != null ? p.label : "", order++});
+        }
+      }
+      db.setTransactionSuccessful();
+    } finally {
+      db.endTransaction();
     }
   }
 
@@ -180,10 +190,16 @@ public final class FmPresetStore extends SolarDbHelper {
     Preset moved = presets.remove(fromIndex);
     presets.add(toIndex, moved);
     SolarDatabase db = openWritable();
-    for (int i = 0; i < presets.size(); i++) {
-      db.execSQL(
-          "UPDATE presets SET sort_order=? WHERE id=?",
-          new Object[] {i, presets.get(i).id});
+    db.beginTransaction();
+    try {
+      for (int i = 0; i < presets.size(); i++) {
+        db.execSQL(
+            "UPDATE presets SET sort_order=? WHERE id=?",
+            new Object[] {i, presets.get(i).id});
+      }
+      db.setTransactionSuccessful();
+    } finally {
+      db.endTransaction();
     }
   }
 
@@ -220,12 +236,15 @@ public final class FmPresetStore extends SolarDbHelper {
 
   private static void normalizeSortOrder(SolarDatabase db) {
     SolarCursor c = db.rawQuery("SELECT id FROM presets ORDER BY sort_order ASC, freq_khz ASC", null);
+    db.beginTransaction();
     try {
       int order = 0;
       while (c.moveToNext()) {
         db.execSQL("UPDATE presets SET sort_order=? WHERE id=?", new Object[] {order++, c.getLong(0)});
       }
+      db.setTransactionSuccessful();
     } finally {
+      db.endTransaction();
       c.close();
     }
   }
