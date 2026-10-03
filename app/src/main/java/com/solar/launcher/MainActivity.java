@@ -6644,6 +6644,44 @@ public class MainActivity extends Activity {
         return states;
     }
 
+    /** 2026-10-03 — Shared state for {@link #getY1ListRowStateBackground}; rebuilt when size/kind change. */
+    private android.graphics.drawable.Drawable.ConstantState y1ListRowBgState;
+    private int y1ListRowBgKey = Integer.MIN_VALUE;
+
+    /**
+     * 2026-10-03 — Library ListView row background: lights on selected, pressed, or focused.
+     * Layman: Artists/Albums rows show the blue bar on the row the wheel is on.
+     * Technical: {@link Y1RowChromePolicy#listRowChromeStates()}; one ConstantState shared by
+     * every row (newDrawable per view), so binds never rebuild bitmaps.
+     */
+    private android.graphics.drawable.Drawable getY1ListRowStateBackground(int widthPx, int rowKind) {
+        int key = widthPx * 31 + rowKind;
+        if (y1ListRowBgState == null || y1ListRowBgKey != key) {
+            android.graphics.drawable.StateListDrawable states =
+                    new android.graphics.drawable.StateListDrawable();
+            android.graphics.drawable.Drawable sel = getY1RowBackground(true, widthPx, rowKind);
+            int[][] chrome = Y1RowChromePolicy.listRowChromeStates();
+            for (int i = 0; i < chrome.length; i++) {
+                states.addState(chrome[i], sel);
+            }
+            states.addState(new int[] {}, getY1RowBackground(false, widthPx, rowKind));
+            y1ListRowBgState = states.getConstantState();
+            y1ListRowBgKey = key;
+        }
+        return y1ListRowBgState.newDrawable(getResources());
+    }
+
+    /** 2026-10-03 — Apply the library-row background once per recycled view. */
+    private void applyY1ListRowBackground(View row, int widthPx, int rowKind) {
+        android.graphics.drawable.Drawable bg = row.getBackground();
+        int key = widthPx * 31 + rowKind;
+        if (bg != null && y1ListRowBgState != null && y1ListRowBgKey == key
+                && bg.getConstantState() == y1ListRowBgState) {
+            return;
+        }
+        row.setBackground(getY1ListRowStateBackground(widthPx, rowKind));
+    }
+
     private void refreshBatteryStatus() {
         try {
             Intent intent = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
@@ -46617,18 +46655,14 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             final int rowW = y1ActiveRowWidthPx();
             btn.setText(getString(R.string.browser_search_ellipsis));
             // 2026-07-20 — StateListDrawable once (was setBackground every focus — Y1 music lag).
-            if (!(btn.getBackground() instanceof android.graphics.drawable.StateListDrawable)) {
-                btn.setBackground(getY1RowStateBackground(rowW, rowKind));
-            }
+            applyY1ListRowBackground(btn, rowW, rowKind);
             btn.setSelected(btn.hasFocus());
             ThemeManager.applyThemedTextStyle(btn, btn.hasFocus()
                     ? y1RowTextColorSelected(rowKind) : y1RowTextColorNormal(rowKind));
             btn.setOnFocusChangeListener(new View.OnFocusChangeListener() {
                 @Override
                 public void onFocusChange(View v, boolean hasFocus) {
-                    if (!(btn.getBackground() instanceof android.graphics.drawable.StateListDrawable)) {
-                        btn.setBackground(getY1RowStateBackground(rowW, rowKind));
-                    }
+                    applyY1ListRowBackground(btn, rowW, rowKind);
                     btn.setSelected(hasFocus);
                     ThemeManager.applyThemedTextStyle(btn, hasFocus
                             ? y1RowTextColorSelected(rowKind) : y1RowTextColorNormal(rowKind));
@@ -46730,9 +46764,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             final int rowKind = Y1_ROW_ITEM;
             final int rowW = y1ActiveRowWidthPx();
             // 2026-07-20 — StateListDrawable once + setSelected (home/settings parity).
-            if (!(btn.getBackground() instanceof android.graphics.drawable.StateListDrawable)) {
-                btn.setBackground(getY1RowStateBackground(rowW, rowKind));
-            }
+            applyY1ListRowBackground(btn, rowW, rowKind);
             ThemeManager.applyThemedTextStyle(btn, y1RowTextColorNormal(rowKind));
             // 2026-07-21 — selected|focused (mid-spin without requestFocus). Was: hasFocus only.
             boolean catLit = ListWheelChromePolicy.rowHighlighted(
@@ -46746,9 +46778,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             btn.setOnFocusChangeListener(new View.OnFocusChangeListener() {
                 @Override
                 public void onFocusChange(View v, boolean hasFocus) {
-                    if (!(btn.getBackground() instanceof android.graphics.drawable.StateListDrawable)) {
-                        btn.setBackground(getY1RowStateBackground(rowW, rowKind));
-                    }
+                    applyY1ListRowBackground(btn, rowW, rowKind);
                     boolean lit = ListWheelChromePolicy.rowHighlighted(
                             listVirtualSongs != null
                                     && listVirtualSongs.getSelectedItemPosition() == position,
