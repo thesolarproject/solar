@@ -24,7 +24,7 @@ public final class Debug0b8f80Log {
             "http://127.0.0.1:7652/ingest/a52e4428-848e-4c3a-b047-de416047f443";
 
     /** 2026-07-20 — On for Hello/scan hunt; flip false after confirmed. */
-    public static final boolean ENABLED = true;
+    public static final boolean ENABLED = false;
 
     private static volatile String runId = "pre-fix";
 

@@ -30,7 +30,7 @@ public final class Debug2b0d3bLog {
             "/home/deck/Documents/Cursor Workspaces/TheSolarProject/solar/.cursor/debug-2b0d3b.log";
 
     /** 2026-07-20 — On while hunting total key deadness; flip false after fix verified. */
-    public static final boolean ENABLED = true;
+    public static final boolean ENABLED = false;
 
     private static volatile String runId = "pre-fix";
     /** Rate-limit key-swallow spam while dial spins. */

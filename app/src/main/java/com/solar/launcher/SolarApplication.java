@@ -5,7 +5,6 @@ import android.content.ComponentCallbacks2;
 import android.content.Intent;
 import android.content.res.Configuration;
 import android.os.Bundle;
-import com.solar.launcher.service.ProcessManagerService;
 
 import com.solar.launcher.net.TlsHelper;
 
@@ -295,7 +294,8 @@ public class SolarApplication extends Application {
         SolarOverlayHost.ensureStarted(this);
         SolarRescueHoldHost.ensureStarted(this);
         LauncherWatchdogService.ensureStarted(this);
-        startService(new Intent(this, ProcessManagerService.class));
+        // 2026-10-03 — ProcessManagerService no longer started: Solar lacks KILL_BACKGROUND_PROCESSES,
+        // so every 30s sweep threw a SecurityException per process (~30 system_server traces/min on Y1).
         // 2026-07-08 — JJ/Rockbox/Stock HOME: claim MEDIA_BUTTON before bootstrap I/O (H2).
         String earlyHomeTarget = LauncherPreference.getHomeTarget(this);
         if (LauncherDefault.TARGET_JJ.equals(earlyHomeTarget)

@@ -15,7 +15,7 @@ final class Bridge050a40DebugLog {
     private static final String SESSION = "050a40";
     private static final String FILE = "debug-050a40.log";
     /** 2026-07-19 — on for stock-USB diagnosis; flip false after verified fix. */
-    private static final boolean ENABLED = true;
+    private static final boolean ENABLED = false;
 
     private Bridge050a40DebugLog() {}
 
