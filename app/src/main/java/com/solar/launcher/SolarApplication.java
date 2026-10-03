@@ -43,6 +43,11 @@ public class SolarApplication extends Application {
     public void onCreate() {
         super.onCreate();
         sApp = this;
+        // 2026-10-03 — :watchdog only hosts LauncherWatchdogService (PreferredLauncherEnforcer: prefs +
+        // PackageManager + launch intent). It used to rerun the whole app bootstrap — pm enable/disable
+        // batch, install-location, Xposed pm path probes — duplicating the
+        // main process on every Solar start (~40 pm VM spawns over minutes on Y1).
+        if (isWatchdogProcess()) return;
         // #region agent log
         // 2026-07-20 — Tag wheel samples with family + short serial so 3-device A/B is readable.
         try {
@@ -426,6 +431,25 @@ public class SolarApplication extends Application {
                 // #endregion
             }
         }, "SolarAppBootstrap").start();
+    }
+
+    /** 2026-10-03 — True in {@code :watchdog}; reads /proc/self/cmdline (no AMS round-trip). */
+    private static boolean isWatchdogProcess() {
+        java.io.FileInputStream in = null;
+        try {
+            in = new java.io.FileInputStream("/proc/self/cmdline");
+            byte[] buf = new byte[256];
+            int n = in.read(buf);
+            int end = 0;
+            while (end < n && buf[end] != 0) end++;
+            return new String(buf, 0, end, "UTF-8").endsWith(":watchdog");
+        } catch (Exception e) {
+            return false;
+        } finally {
+            if (in != null) {
+                try { in.close(); } catch (Exception ignored) {}
+            }
+        }
     }
 
     /** True when running in {@code :overlay} — separate from main Solar / MainActivity process. */
