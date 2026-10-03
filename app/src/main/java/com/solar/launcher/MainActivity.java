@@ -56239,7 +56239,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         if (!keepReachStreamHandoffForScreen(to)) {
             progressHandler.removeCallbacks(reachGrowingEdgePoll);
         }
-        fastScrollHandler.removeCallbacks(hideFastScrollTask);
+        // 2026-10-03 — Hide, not just cancel the hide: a letter shown <800ms before a screen switch
+        // (e.g. pick a song → Now Playing) stayed stuck over the new screen. Was removeCallbacks only.
+        hideFastScrollLetter();
         if (to == STATE_BROWSER) {
             cancelReachDownloadIfAny(false);
         }
