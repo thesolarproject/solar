@@ -111,6 +111,21 @@ public class Y1SafeListView extends ListView {
         super.setAdapter(adapter);
     }
 
+    /**
+     * 2026-10-03 — Callers get the adapter they set, not the row-params wrapper.
+     * Layman: code asking "is this the song list?" or "refresh the list" works again.
+     * Technical: the wrapper is a plain ListAdapter, so `getAdapter() instanceof BaseAdapter /
+     * SongListAdapter / CategoryListAdapter` checks were always false — e.g. SEGMENTED All Songs
+     * never called notifyDataSetChanged when a page landed, leaving the first rows blank.
+     * ListView itself keeps using the wrapper (mAdapter); observers already go to the delegate.
+     */
+    @Override
+    public ListAdapter getAdapter() {
+        ListAdapter a = super.getAdapter();
+        return a instanceof AbsListViewRowParamsWrapper
+                ? ((AbsListViewRowParamsWrapper) a).delegate() : a;
+    }
+
     /** 2026-07-05: Header rows from createListButton also need ListView-safe params. */
     @Override
     public void addHeaderView(View v, Object data, boolean isSelectable) {
