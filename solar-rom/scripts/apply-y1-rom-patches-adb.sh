@@ -86,6 +86,14 @@ TLS_STAGE="$WORK/system-tls"
 chmod +x "$REPO_ROOT/scripts/stage-y1-system-prep.sh"
 "$REPO_ROOT/scripts/stage-y1-system-prep.sh" "$TLS_STAGE" "$APK" "$REPO_ROOT"
 adb_push_to_system "$TLS_STAGE/lib/libconscrypt_jni.so" /system/lib/libconscrypt_jni.so 644
+# 2026-10-05 — Same native libs as the ROM build (apply-y1-system-prep.sh); libc++ only if absent.
+[ -s "$TLS_STAGE/lib/libwolfssl.so" ] \
+    && adb_push_to_system "$TLS_STAGE/lib/libwolfssl.so" /system/lib/libwolfssl.so 644
+if [ -s "$TLS_STAGE/lib/libc++_shared.so" ] \
+    && ! "${SOLAR_ADB[@]}" shell "[ -f /system/lib/libc++_shared.so ] && echo present" 2>/dev/null \
+        | grep -q present; then
+    adb_push_to_system "$TLS_STAGE/lib/libc++_shared.so" /system/lib/libc++_shared.so 644
+fi
 for cert in "$TLS_STAGE/etc/security/cacerts"/*; do
     [ -f "$cert" ] || continue
     adb_push_to_system "$cert" "/system/etc/security/cacerts/$(basename "$cert")" 644

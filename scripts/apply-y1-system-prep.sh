@@ -26,6 +26,17 @@ mkdir -p "$LIB_DIR" "$CACERTS_DIR"
 cp "$STAGING/lib/libconscrypt_jni.so" "$LIB_DIR/libconscrypt_jni.so"
 chmod 644 "$LIB_DIR/libconscrypt_jni.so"
 
+# 2026-10-05 — Solar's own TLS proxy lib: always ours. libc++_shared.so: only when the base
+# lacks one (stock IJK libs may depend on the system copy) — same rule as install-test-apk.sh.
+if [[ -s "$STAGING/lib/libwolfssl.so" ]]; then
+  cp "$STAGING/lib/libwolfssl.so" "$LIB_DIR/libwolfssl.so"
+  chmod 644 "$LIB_DIR/libwolfssl.so"
+fi
+if [[ -s "$STAGING/lib/libc++_shared.so" && ! -f "$LIB_DIR/libc++_shared.so" ]]; then
+  cp "$STAGING/lib/libc++_shared.so" "$LIB_DIR/libc++_shared.so"
+  chmod 644 "$LIB_DIR/libc++_shared.so"
+fi
+
 count=0
 for cert in "$STAGING/etc/security/cacerts"/*; do
   [[ -f "$cert" ]] || continue
