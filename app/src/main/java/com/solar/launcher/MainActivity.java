@@ -23548,9 +23548,10 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         if (minutes <= 0) return;
 
         // Don't shut down if media is playing
-        boolean playing = false;
-        try { playing = mediaPlayer != null && mediaPlayer.isPlaying(); } catch (Exception ignored) {}
-        if (playing) {
+        // 2026-10-05 — Was: mediaPlayer.isPlaying() only — false under SolarTransport (gapless),
+        // podcast/music IJK, FM, internet radio and video, so the Y1 powered off mid-song after
+        // N idle minutes. Reversal: restore the mediaPlayer-only check.
+        if (isAnyPlaybackKeepingAwake()) {
             // Media is playing — reset timer so shutdown won't happen immediately after playback stops
             resetInactivityTimer();
             return;
@@ -23563,6 +23564,36 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         if (idleMs >= InactivityShutdownConfig.shutdownDelayMs(minutes)) {
             performInactivityShutdown();
         }
+    }
+
+    /**
+     * True when any engine is making sound — idle auto power-off must wait.
+     * Layman: if music, radio, a podcast or a video is playing, the player is "in use".
+     * Technical: ownership ladder ({@link #isActiveAudioPlaying}) + engines outside it.
+     * 2026-10-05
+     */
+    private boolean isAnyPlaybackKeepingAwake() {
+        boolean active = false, mp = false, fm = false, netRadio = false, video = false;
+        try { active = isActiveAudioPlaying(); } catch (Exception ignored) {}
+        try { mp = mediaPlayer != null && mediaPlayer.isPlaying(); } catch (Exception ignored) {}
+        if (mediaSuite != null) {
+            try { fm = mediaSuite.fmEngine() != null && mediaSuite.fmEngine().isAudioPlaying(); }
+            catch (Exception ignored) {}
+            try {
+                netRadio = mediaSuite.internetRadioPlayer() != null
+                        && mediaSuite.internetRadioPlayer().isPlaying();
+            } catch (Exception ignored) {}
+            try { video = mediaSuite.isVideoPlaying(); } catch (Exception ignored) {}
+        }
+        return isAnyPlaybackKeepingAwakeForTest(active, mp, fm, netRadio, video);
+    }
+
+    /** Host-testable: any audible engine blocks idle shutdown. 2026-10-05 */
+    static boolean isAnyPlaybackKeepingAwakeForTest(
+            boolean activeAudioPlaying, boolean mediaPlayerPlaying,
+            boolean fmPlaying, boolean internetRadioPlaying, boolean videoPlaying) {
+        return activeAudioPlaying || mediaPlayerPlaying || fmPlaying
+                || internetRadioPlaying || videoPlaying;
     }
 
     private void migrateInactivityShutdownPrefs() {
