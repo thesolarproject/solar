@@ -4540,13 +4540,7 @@ public class MainActivity extends Activity {
             Debug383b4eLog.log(this, "MainActivity.onCreate", "after home prefs migrate", "A", dbg);
         } catch (Exception ignored) {}
         // #endregion
-        clockHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                try { restorePlaybackQueue(); } catch (Exception ignored) {}
-            }
-        });
-        try { scheduleStartupMountRetry(); } catch (Exception e) {}
+        try { restorePlaybackQueueAtStartup(); } catch (Exception e) {}
         try { scheduleStartupUpdateNudge(); } catch (Exception e) {}
         try { WirelessAdbEnabler.checkAndRandomizeAdbId(this); } catch (Exception e) {}
         try {
@@ -25456,7 +25450,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                             }
                         }
                         if (missing > 0) {
-                            scheduleStartupMountRetry();
+                            armStartupMountRetry();
                         }
                         if (connectedA2dpAddress != null && avrcpTrackInfoWriter != null) {
                             avrcpTrackInfoWriter.ensureReady();
@@ -28976,9 +28970,34 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         persistPlaybackQueue();
     }
 
-    private void restorePlaybackQueue() {
-        PlayQueue q = new PlayQueue();
-        if (!PlayQueueStore.restore(getApplicationContext(), q) || q.isEmpty()) return;
+    /**
+     * Cold-start queue restore: parse + missing-file scan off the UI thread, apply on it.
+     * Layman: reading the saved queue no longer freezes startup.
+     * 2026-10-05 — Was: clockHandler.post(restorePlaybackQueue) + scheduleStartupMountRetry(), both
+     * on the UI thread — play_queue.json parsed twice and every queued path stat'ed on SD
+     * (822 tracks ≈ 1.4 s cold on Y1). Skips the apply if a queue was started meanwhile.
+     * Reversal: restore those two calls in onCreate.
+     */
+    private void restorePlaybackQueueAtStartup() {
+        final Context app = getApplicationContext();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final PlayQueue q = new PlayQueue();
+                final boolean hasDisk = PlayQueueStore.restore(app, q) && !q.isEmpty();
+                final int missing = PlayQueueStore.countMissingPaths(app);
+                runOnUiThreadSafe(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (hasDisk && !playback.hasAnyQueue()) applyRestoredPlaybackQueue(q);
+                        if (missing > 0) armStartupMountRetry();
+                    }
+                });
+            }
+        }, "SolarQueueRestore").start();
+    }
+
+    private void applyRestoredPlaybackQueue(PlayQueue q) {
         playback.restoreQueueState(q.items(), q.index());
         syncNowPlayingHomeVisibility();
         refreshRestoredQueuePreview();
@@ -29064,8 +29083,11 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         }
     }
 
-    private void scheduleStartupMountRetry() {
-        if (PlayQueueStore.countMissingPaths(getApplicationContext()) <= 0) return;
+    /**
+     * Start the mount retry loop when the caller already knows paths are missing.
+     * 2026-10-05 — Was scheduleStartupMountRetry(): recounted missing paths on the UI thread first.
+     */
+    private void armStartupMountRetry() {
         startupMountRetryAttempt = 0;
         startupMountHandler.removeCallbacks(startupMountRetryRunnable);
         startupMountHandler.postDelayed(startupMountRetryRunnable, STARTUP_MOUNT_RETRY_INTERVAL_MS);
