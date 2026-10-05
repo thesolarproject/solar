@@ -60984,7 +60984,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                     if (event != null && !WheelNavPolicy.acceptNotch(
                             event.getAction(), event.getRepeatCount(), wheelKeyHeld)) {
                         // #region agent log
-                        try {
+                        // 2026-10-05 — Gate on ENABLED (compile-time false → block removed). Was: JSON built
+                        // every dropped wheel event even with the logger off. Reversal: drop the if.
+                        if (Debug9cd8d5Log.ENABLED) try {
                             org.json.JSONObject d = new org.json.JSONObject();
                             d.put("repeat", event.getRepeatCount());
                             d.put("key", keyCode);
@@ -61011,7 +61013,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                     if (isPreReverseWheelCatchup(event, direction)) {
                         // Leftover old-direction ticks behind a reverse we already honored.
                         // #region agent log
-                        try {
+                        if (Debug9cd8d5Log.ENABLED) try {
                             org.json.JSONObject d = new org.json.JSONObject();
                             d.put("dir", direction);
                             Debug9cd8d5Log.log(this, "MainActivity.listWheel",
@@ -61042,7 +61044,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                     if (faStale) {
                         hardStopListWheel();
                         // #region agent log
-                        try {
+                        if (Debug9cd8d5Log.ENABLED || DebugFa8512Log.ENABLED) try {
                             org.json.JSONObject d = new org.json.JSONObject();
                             d.put("ageMs", faAge);
                             d.put("dir", direction);
@@ -61071,9 +61073,11 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                     }
                     // #region agent log
                     // Sparse: only interesting coast signals (age/vel/ghost/multi-step).
-                    if (faAge > 60L || wheelResult.rowSteps > 1
+                    // 2026-10-05 — listCount >= 500 made this fire on every tick in big libraries
+                    // with both loggers off; gate on ENABLED. Reversal: drop the ENABLED clause.
+                    if ((Debug9cd8d5Log.ENABLED || DebugFa8512Log.ENABLED) && (faAge > 60L || wheelResult.rowSteps > 1
                             || wheelResult.velocity > 2f || listWheelCoalescer.pendingDepth() > 0
-                            || listCount >= 500) {
+                            || listCount >= 500)) {
                         try {
                             org.json.JSONObject d = new org.json.JSONObject();
                             d.put("ageMs", faAge);
