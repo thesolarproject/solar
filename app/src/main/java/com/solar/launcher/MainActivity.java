@@ -47544,6 +47544,22 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     }
 
     /**
+     * Song sort for a SEGMENTED song list — same prefs as {@link #sortSongItems} in RAM mode.
+     * Album drills use the album-track sort; RECENT keeps date order (−1 = SQL default).
+     * 2026-10-05
+     */
+    private int segmentedSongSortFor(String qType) {
+        if ("ALBUM".equals(qType) || "ARTIST_ALBUM".equals(qType)) {
+            return libraryBrowsePrefs.albumSongSort();
+        }
+        if ("ALL".equals(qType) || "ARTIST".equals(qType) || "GENRE".equals(qType)
+                || "YEAR".equals(qType)) {
+            return libraryBrowsePrefs.songSort();
+        }
+        return -1;
+    }
+
+    /**
      * 2026-07-20 — SQLite → SongItem page (BG only). File checks stay off the UI thread.
      * Layman: read this chunk of the catalog from the library database.
      */
@@ -47551,23 +47567,25 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             String qType, String qValue, String qArtist, int offset, int bs) {
         MusicLibraryStore store = MusicLibraryStore.getInstance(this);
         java.util.List<MusicLibraryStore.Track> page;
+        // 2026-10-05 — Drills honour the sort prefs (was a fixed album/track ORDER BY).
+        final int sort = segmentedSongSortFor(qType);
         if ("ARTIST".equals(qType)) {
-            page = store.loadTracksByArtist(qValue, offset, bs);
+            page = store.loadTracksByArtist(qValue, offset, bs, sort);
         } else if ("ALBUM".equals(qType)) {
-            page = store.loadTracksByAlbum(qValue, offset, bs);
+            page = store.loadTracksByAlbum(qValue, offset, bs, sort);
         } else if ("ARTIST_ALBUM".equals(qType)) {
-            page = store.loadTracksByArtistAlbum(qArtist, qValue, offset, bs);
+            page = store.loadTracksByArtistAlbum(qArtist, qValue, offset, bs, sort);
         } else if ("GENRE".equals(qType)) {
             // 2026-07-20 — SEGMENTED Genre drill pages.
-            page = store.loadTracksByGenre(qValue, offset, bs);
+            page = store.loadTracksByGenre(qValue, offset, bs, sort);
         } else if ("YEAR".equals(qType)) {
-            page = store.loadTracksByYear(qValue, offset, bs);
+            page = store.loadTracksByYear(qValue, offset, bs, sort);
         } else if ("RECENT".equals(qType)) {
             // 2026-07-20 — SEGMENTED Recently Added: mtime DESC pages (not path order).
             page = store.loadRangeByMtimeDesc(offset, bs);
         } else {
             // 2026-10-05 — All Songs honours lib_song_sort (was path order regardless of the cycle).
-            page = store.loadRange(offset, bs, libraryBrowsePrefs.songSort());
+            page = store.loadRange(offset, bs, sort);
         }
         // Keep DB OFFSET indices 1:1 with block slots (null/missing → placeholder, not shrink).
         java.util.ArrayList<SongItem> rows = new java.util.ArrayList<SongItem>(page.size());
@@ -47743,7 +47761,10 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         final String qValue = songListSegmentedQueryValue != null ? songListSegmentedQueryValue : "";
         final String qArtist = songListSegmentedQueryArtist != null ? songListSegmentedQueryArtist : "";
 
-        java.util.List<File> files = collectTracksForQuerySegmented(qType, qValue, qArtist);
+        // 2026-10-05 — Same order as the visible pages, or dataIndex lands on a different song.
+        // Reversal: 3-arg collect (SQL default order).
+        java.util.List<File> files = collectTracksForQuerySegmented(qType, qValue, qArtist,
+                segmentedSongSortFor(qType));
         if (files == null || files.isEmpty()) {
             SongItem s = songBrowseSegments.get(dataIndex);
             if (s != null && s.file != null) {
@@ -48091,6 +48112,12 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
      */
     private java.util.List<File> collectTracksForQuerySegmented(
             String type, String value, String artistForAlbum) {
+        return collectTracksForQuerySegmented(type, value, artistForAlbum, -1);
+    }
+
+    /** songSort ≥ 0: same order as the visible list (play queue); −1: SQL default. 2026-10-05 */
+    private java.util.List<File> collectTracksForQuerySegmented(
+            String type, String value, String artistForAlbum, int songSort) {
         java.util.ArrayList<File> out = new java.util.ArrayList<File>();
         MusicLibraryStore store = MusicLibraryStore.getInstance(this);
         final int page = MusicLibraryStore.DEFAULT_PAGE_SIZE;
@@ -48098,21 +48125,19 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         while (true) {
             java.util.List<MusicLibraryStore.Track> rows;
             if ("ARTIST".equals(type)) {
-                rows = store.loadTracksByArtist(value, offset, page);
+                rows = store.loadTracksByArtist(value, offset, page, songSort);
             } else if ("ALBUM".equals(type)) {
-                rows = store.loadTracksByAlbum(value, offset, page);
+                rows = store.loadTracksByAlbum(value, offset, page, songSort);
             } else if ("ARTIST_ALBUM".equals(type)) {
-                rows = store.loadTracksByArtistAlbum(artistForAlbum, value, offset, page);
+                rows = store.loadTracksByArtistAlbum(artistForAlbum, value, offset, page, songSort);
             } else if ("GENRE".equals(type)) {
                 // 2026-07-20 — SEGMENTED Genre collect pages (was empty break).
-                rows = store.loadTracksByGenre(value, offset, page);
+                rows = store.loadTracksByGenre(value, offset, page, songSort);
             } else if ("YEAR".equals(type)) {
-                rows = store.loadTracksByYear(value, offset, page);
+                rows = store.loadTracksByYear(value, offset, page, songSort);
             } else if ("ALL".equals(type)) {
                 // Avoid whole-library File materialization — callers should not use ALL under SEGMENTED.
-                // 2026-10-05 — Same order as the All Songs pages, or playSegmentedAllSongsAt's
-                // dataIndex lands on a different song. Reversal: loadRange(offset, page).
-                rows = store.loadRange(offset, page, libraryBrowsePrefs.songSort());
+                rows = store.loadRange(offset, page, songSort);
             } else {
                 break;
             }
