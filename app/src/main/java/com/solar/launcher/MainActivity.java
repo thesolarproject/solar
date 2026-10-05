@@ -47566,7 +47566,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             // 2026-07-20 — SEGMENTED Recently Added: mtime DESC pages (not path order).
             page = store.loadRangeByMtimeDesc(offset, bs);
         } else {
-            page = store.loadRange(offset, bs);
+            // 2026-10-05 — All Songs honours lib_song_sort (was path order regardless of the cycle).
+            page = store.loadRange(offset, bs, libraryBrowsePrefs.songSort());
         }
         // Keep DB OFFSET indices 1:1 with block slots (null/missing → placeholder, not shrink).
         java.util.ArrayList<SongItem> rows = new java.util.ArrayList<SongItem>(page.size());
@@ -48109,7 +48110,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                 rows = store.loadTracksByYear(value, offset, page);
             } else if ("ALL".equals(type)) {
                 // Avoid whole-library File materialization — callers should not use ALL under SEGMENTED.
-                rows = store.loadRange(offset, page);
+                // 2026-10-05 — Same order as the All Songs pages, or playSegmentedAllSongsAt's
+                // dataIndex lands on a different song. Reversal: loadRange(offset, page).
+                rows = store.loadRange(offset, page, libraryBrowsePrefs.songSort());
             } else {
                 break;
             }

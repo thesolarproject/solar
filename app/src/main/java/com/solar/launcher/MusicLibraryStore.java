@@ -388,6 +388,35 @@ public class MusicLibraryStore extends SolarDbHelper {
      * Reversal: always {@link #loadAll()}.
      */
     public List<Track> loadRange(int offset, int limit) {
+        return loadRange(offset, limit, -1);
+    }
+
+    /**
+     * ORDER BY for SEGMENTED All Songs pages, mirroring MainActivity.sortSongItems modes.
+     * 2026-10-05 — Was: path order only, so the All Songs sort cycle changed the label but not
+     * the list on 300+ track libraries. Layman: the database now sorts the way you picked.
+     * Unknown mode (−1) keeps path order. Reversal: always return "path ASC".
+     */
+    static String orderByForSongSort(int songSort) {
+        switch (songSort) {
+            case LibraryBrowsePrefs.SONG_SORT_TITLE:
+                return "title COLLATE NOCASE ASC, path ASC";
+            case LibraryBrowsePrefs.SONG_SORT_ARTIST:
+                return "artist COLLATE NOCASE ASC, path ASC";
+            case LibraryBrowsePrefs.SONG_SORT_ALBUM:
+                return "album COLLATE NOCASE ASC, track_number ASC, path ASC";
+            case LibraryBrowsePrefs.SONG_SORT_DATE:
+                return "mtime DESC, path ASC";
+            case LibraryBrowsePrefs.SONG_SORT_LENGTH:
+                // Shortest first; unknown ('' / 0) after known — same as compareDurationAscending.
+                return "(CAST(duration_ms AS INTEGER) <= 0) ASC, CAST(duration_ms AS INTEGER) ASC,"
+                        + " title COLLATE NOCASE ASC";
+            default:
+                return "path ASC";
+        }
+    }
+
+    public List<Track> loadRange(int offset, int limit, int songSort) {
         purgeStemLibraryArtifacts();
         List<Track> out = new ArrayList<Track>();
         if (limit <= 0) return out;
@@ -396,7 +425,7 @@ public class MusicLibraryStore extends SolarDbHelper {
         Cursor c = null;
         try {
             c = db.rawQuery(
-                    "SELECT * FROM tracks ORDER BY path ASC LIMIT ? OFFSET ?",
+                    "SELECT * FROM tracks ORDER BY " + orderByForSongSort(songSort) + " LIMIT ? OFFSET ?",
                     new String[] { String.valueOf(limit), String.valueOf(offset) });
             while (c.moveToNext()) {
                 out.add(rowToTrack(c));

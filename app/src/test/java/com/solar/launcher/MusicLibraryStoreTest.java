@@ -100,4 +100,23 @@ public class MusicLibraryStoreTest {
     private static boolean yearCountsAsFresh(int year) {
         return year != 0;
     }
+
+    /** 2026-10-05 — SEGMENTED All Songs ORDER BY follows lib_song_sort (was path only). */
+    @Test
+    public void orderByForSongSortMatchesModes() {
+        String[][] cases = {
+            { String.valueOf(LibraryBrowsePrefs.SONG_SORT_TITLE), "title COLLATE NOCASE ASC" },
+            { String.valueOf(LibraryBrowsePrefs.SONG_SORT_ARTIST), "artist COLLATE NOCASE ASC" },
+            { String.valueOf(LibraryBrowsePrefs.SONG_SORT_ALBUM), "track_number ASC" },
+            { String.valueOf(LibraryBrowsePrefs.SONG_SORT_DATE), "mtime DESC" },
+            { String.valueOf(LibraryBrowsePrefs.SONG_SORT_LENGTH), "CAST(duration_ms AS INTEGER)" },
+            { "-1", "path ASC" },
+        };
+        for (String[] c : cases) {
+            String order = MusicLibraryStore.orderByForSongSort(Integer.parseInt(c[0]));
+            if (!order.contains(c[1])) {
+                throw new AssertionError("sort " + c[0] + " → " + order);
+            }
+        }
+    }
 }
