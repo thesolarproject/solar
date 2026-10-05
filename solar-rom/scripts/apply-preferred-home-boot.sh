@@ -10,6 +10,17 @@ JJ_PKG="com.themoon.y1"
 INNIOASIS_Y1_PKG="com.innioasis.y1"
 INNIOASIS_Y2_PKG="com.innioasis.y2"
 HELPER_PKG="com.solar.launcher.homehelper"
+
+# 2026-10-05 — Is a package installed? Plain-text grep instead of pm (Dalvik VM, ~1 s on MT6572).
+# Layman: don't spend seconds enabling/disabling apps that aren't there (Rockbox/JJ are optional).
+# Unreadable list → pm path (old cost, same answer). Reversal: call pm path directly again.
+pkg_installed() {
+    if [ -r /data/system/packages.list ]; then
+        grep -q "^$1 " /data/system/packages.list
+    else
+        pm path "$1" >/dev/null 2>&1
+    fi
+}
 PROP_HOME_TARGET="persist.solar.home.target"
 PROP_HOME_COMPONENT="persist.solar.home.component"
 # 2026-07-08 — Wheel remap flag read by the JJ/Innioasis Xposed shim (see JjInputHooks).
@@ -98,30 +109,30 @@ sync_jj_handoff_flag() {
 
 apply_home_target() {
     TARGET="$1"
-    pm enable "$SOLAR_PKG" 2>/dev/null
-    pm enable "$HELPER_PKG" 2>/dev/null
+    pkg_installed "$SOLAR_PKG" && pm enable "$SOLAR_PKG" 2>/dev/null
+    pkg_installed "$HELPER_PKG" && pm enable "$HELPER_PKG" 2>/dev/null
     case "$TARGET" in
         rockbox)
-            if pm path "$ROCKBOX_PKG" >/dev/null 2>&1; then
-                pm enable "$ROCKBOX_PKG" 2>/dev/null
-                pm disable "$JJ_PKG" 2>/dev/null
+            if pkg_installed "$ROCKBOX_PKG"; then
+                pkg_installed "$ROCKBOX_PKG" && pm enable "$ROCKBOX_PKG" 2>/dev/null
+                pkg_installed "$JJ_PKG" && pm disable "$JJ_PKG" 2>/dev/null
                 setprop "$PROP_HOME_TARGET" rockbox
             else
                 TARGET=solar
-                pm disable "$ROCKBOX_PKG" 2>/dev/null
-                pm disable "$JJ_PKG" 2>/dev/null
+                pkg_installed "$ROCKBOX_PKG" && pm disable "$ROCKBOX_PKG" 2>/dev/null
+                pkg_installed "$JJ_PKG" && pm disable "$JJ_PKG" 2>/dev/null
                 setprop "$PROP_HOME_TARGET" solar
             fi
             ;;
         jj)
-            if pm path "$JJ_PKG" >/dev/null 2>&1; then
-                pm enable "$JJ_PKG" 2>/dev/null
-                pm disable "$ROCKBOX_PKG" 2>/dev/null
+            if pkg_installed "$JJ_PKG"; then
+                pkg_installed "$JJ_PKG" && pm enable "$JJ_PKG" 2>/dev/null
+                pkg_installed "$ROCKBOX_PKG" && pm disable "$ROCKBOX_PKG" 2>/dev/null
                 setprop "$PROP_HOME_TARGET" jj
             else
                 TARGET=solar
-                pm disable "$ROCKBOX_PKG" 2>/dev/null
-                pm disable "$JJ_PKG" 2>/dev/null
+                pkg_installed "$ROCKBOX_PKG" && pm disable "$ROCKBOX_PKG" 2>/dev/null
+                pkg_installed "$JJ_PKG" && pm disable "$JJ_PKG" 2>/dev/null
                 setprop "$PROP_HOME_TARGET" solar
             fi
             ;;
@@ -129,28 +140,28 @@ apply_home_target() {
         # Reversal: delete this case — stock fell through to solar (launcher pick lost on boot).
         stock)
             _stock="$(stock_pkg)"
-            if pm path "$_stock" >/dev/null 2>&1; then
-                pm enable "$_stock" 2>/dev/null
-                pm disable "$ROCKBOX_PKG" 2>/dev/null
-                pm disable "$JJ_PKG" 2>/dev/null
+            if pkg_installed "$_stock"; then
+                pkg_installed "$_stock" && pm enable "$_stock" 2>/dev/null
+                pkg_installed "$ROCKBOX_PKG" && pm disable "$ROCKBOX_PKG" 2>/dev/null
+                pkg_installed "$JJ_PKG" && pm disable "$JJ_PKG" 2>/dev/null
                 setprop "$PROP_HOME_TARGET" stock
             else
                 TARGET=solar
-                pm disable "$ROCKBOX_PKG" 2>/dev/null
-                pm disable "$JJ_PKG" 2>/dev/null
+                pkg_installed "$ROCKBOX_PKG" && pm disable "$ROCKBOX_PKG" 2>/dev/null
+                pkg_installed "$JJ_PKG" && pm disable "$JJ_PKG" 2>/dev/null
                 setprop "$PROP_HOME_TARGET" solar
             fi
             ;;
         # 2026-07-08 — Custom PM-discovered HOME: trust persisted component; park known alternates.
         custom)
-            pm disable "$ROCKBOX_PKG" 2>/dev/null
-            pm disable "$JJ_PKG" 2>/dev/null
+            pkg_installed "$ROCKBOX_PKG" && pm disable "$ROCKBOX_PKG" 2>/dev/null
+            pkg_installed "$JJ_PKG" && pm disable "$JJ_PKG" 2>/dev/null
             setprop "$PROP_HOME_TARGET" custom
             ;;
         *)
             TARGET=solar
-            pm disable "$ROCKBOX_PKG" 2>/dev/null
-            pm disable "$JJ_PKG" 2>/dev/null
+            pkg_installed "$ROCKBOX_PKG" && pm disable "$ROCKBOX_PKG" 2>/dev/null
+            pkg_installed "$JJ_PKG" && pm disable "$JJ_PKG" 2>/dev/null
             setprop "$PROP_HOME_TARGET" solar
             ;;
     esac
