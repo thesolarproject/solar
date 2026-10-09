@@ -6,6 +6,7 @@
 # Usage: stage-y1-system-prep.sh STAGING_DIR APK_PATH [REPO_ROOT]
 # Creates:
 #   STAGING_DIR/lib/libconscrypt_jni.so
+#   STAGING_DIR/lib/libwolfssl.so, STAGING_DIR/lib/libc++_shared.so (when the APK carries them)
 #   STAGING_DIR/etc/security/cacerts/*.0
 set -euo pipefail
 
@@ -33,6 +34,18 @@ unzip -p "$APK" lib/armeabi-v7a/libconscrypt_jni.so > "$LIB_DIR/libconscrypt_jni
   echo "Missing lib/armeabi-v7a/libconscrypt_jni.so in $APK" >&2
   exit 1
 }
+
+# 2026-10-05 — /system/app APKs get no lib extraction on API 17: libs System.loadLibrary'd by
+# Solar must sit in /system/lib or Solar crashes on first launch after a ROM flash
+# ("Unfortunately, Solar has stopped"). Layman: ship the two missing native pieces with the ROM.
+# Reversal: drop this block (and the matching copies in apply-y1-system-prep.sh).
+echo "== Extract libwolfssl.so + libc++_shared.so from APK =="
+for so in libwolfssl.so libc++_shared.so; do
+  if unzip -l "$APK" "lib/armeabi-v7a/$so" >/dev/null 2>&1; then
+    unzip -p "$APK" "lib/armeabi-v7a/$so" > "$LIB_DIR/$so"
+    echo "  $so"
+  fi
+done
 
 echo "== Build cacerts .0 files (OpenSSL subject_hash_old — API 17) =="
 cert_count=0

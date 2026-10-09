@@ -28,7 +28,7 @@ public final class DebugA3e8ffLog {
             "/home/deck/Documents/Cursor Workspaces/TheSolarProject/solar/.cursor/debug-a3e8ff.log";
 
     /** 2026-07-20 — On while diagnosing podcast show→episode navigation. */
-    public static final boolean ENABLED = true;
+    public static final boolean ENABLED = false;
 
     private DebugA3e8ffLog() {}
 

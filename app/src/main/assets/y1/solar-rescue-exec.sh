@@ -10,6 +10,17 @@ SOLAR_PKG="com.solar.launcher"
 HELPER_PKG="com.solar.launcher.homehelper"
 ROCKBOX_PKG="org.rockbox"
 JJ_PKG="com.themoon.y1"
+
+# 2026-10-05 — Is a package installed? Plain-text grep instead of pm (Dalvik VM, ~1 s on MT6572).
+# Layman: don't spend seconds enabling/disabling apps that aren't there (Rockbox/JJ are optional).
+# Unreadable list → pm path (old cost, same answer). Reversal: call pm path directly again.
+pkg_installed() {
+    if [ -r /data/system/packages.list ]; then
+        grep -q "^$1 " /data/system/packages.list
+    else
+        pm path "$1" >/dev/null 2>&1
+    fi
+}
 LAUNCHER_EXEC="/system/etc/solar/solar-launcher-exec.sh"
 SET_HOME_ACTION="com.solar.launcher.action.SET_PREFERRED_HOME"
 HOME_RECEIVER="com.solar.launcher/.LauncherHomeReceiver"
@@ -60,8 +71,8 @@ disable_extra_home_launchers() {
                 continue ;;
         esac
         if dumpsys package "$_pkg" 2>/dev/null | grep -q "android.intent.category.HOME"; then
-            pm disable "$_pkg" 2>/dev/null
-            am force-stop "$_pkg" 2>/dev/null
+            pkg_installed "$_pkg" && pm disable "$_pkg" 2>/dev/null
+            pkg_installed "$_pkg" && am force-stop "$_pkg" 2>/dev/null
         fi
     done
 }
@@ -83,12 +94,12 @@ fi
 if [ -f "$LAUNCHER_EXEC" ]; then
     sh "$LAUNCHER_EXEC" switch solar 2>/dev/null
 else
-    am force-stop "$ROCKBOX_PKG" 2>/dev/null
-    pm disable "$ROCKBOX_PKG" 2>/dev/null
-    am force-stop "$JJ_PKG" 2>/dev/null
-    pm disable "$JJ_PKG" 2>/dev/null
-    pm enable "$SOLAR_PKG" 2>/dev/null
-    pm enable "$HELPER_PKG" 2>/dev/null
+    pkg_installed "$ROCKBOX_PKG" && am force-stop "$ROCKBOX_PKG" 2>/dev/null
+    pkg_installed "$ROCKBOX_PKG" && pm disable "$ROCKBOX_PKG" 2>/dev/null
+    pkg_installed "$JJ_PKG" && am force-stop "$JJ_PKG" 2>/dev/null
+    pkg_installed "$JJ_PKG" && pm disable "$JJ_PKG" 2>/dev/null
+    pkg_installed "$SOLAR_PKG" && pm enable "$SOLAR_PKG" 2>/dev/null
+    pkg_installed "$HELPER_PKG" && pm enable "$HELPER_PKG" 2>/dev/null
     setprop persist.solar.home.target solar 2>/dev/null
     am broadcast -a "$SET_HOME_ACTION" -n "$HOME_RECEIVER" --es target solar 2>/dev/null
 fi

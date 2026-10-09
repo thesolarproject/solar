@@ -5,7 +5,6 @@ import android.content.ComponentCallbacks2;
 import android.content.Intent;
 import android.content.res.Configuration;
 import android.os.Bundle;
-import com.solar.launcher.service.ProcessManagerService;
 
 import com.solar.launcher.net.TlsHelper;
 
@@ -38,6 +37,11 @@ public class SolarApplication extends Application {
     public void onCreate() {
         super.onCreate();
         sApp = this;
+        // 2026-10-03 — :watchdog only hosts LauncherWatchdogService (PreferredLauncherEnforcer: prefs +
+        // PackageManager + launch intent). It used to rerun the whole app bootstrap — pm enable/disable
+        // batch, install-location, Xposed pm path probes, RockboxForegroundMonitor — duplicating the
+        // main process on every Solar start (~40 pm VM spawns over minutes on Y1).
+        if (isWatchdogProcess()) return;
         // #region agent log
         // 2026-07-20 — Tag wheel samples with family + short serial so 3-device A/B is readable.
         try {
@@ -291,7 +295,8 @@ public class SolarApplication extends Application {
         SolarOverlayHost.ensureStarted(this);
         SolarRescueHoldHost.ensureStarted(this);
         LauncherWatchdogService.ensureStarted(this);
-        startService(new Intent(this, ProcessManagerService.class));
+        // 2026-10-03 — ProcessManagerService no longer started: Solar lacks KILL_BACKGROUND_PROCESSES,
+        // so every 30s sweep threw a SecurityException per process (~30 system_server traces/min on Y1).
         // 2026-07-08 — JJ/Rockbox/Stock HOME: claim MEDIA_BUTTON before bootstrap I/O (H2).
         String earlyHomeTarget = LauncherPreference.getHomeTarget(this);
         if (LauncherDefault.TARGET_JJ.equals(earlyHomeTarget)
@@ -438,6 +443,25 @@ public class SolarApplication extends Application {
                 // #endregion
             }
         }, "SolarAppBootstrap").start();
+    }
+
+    /** 2026-10-03 — True in {@code :watchdog}; reads /proc/self/cmdline (no AMS round-trip). */
+    private static boolean isWatchdogProcess() {
+        java.io.FileInputStream in = null;
+        try {
+            in = new java.io.FileInputStream("/proc/self/cmdline");
+            byte[] buf = new byte[256];
+            int n = in.read(buf);
+            int end = 0;
+            while (end < n && buf[end] != 0) end++;
+            return new String(buf, 0, end, "UTF-8").endsWith(":watchdog");
+        } catch (Exception e) {
+            return false;
+        } finally {
+            if (in != null) {
+                try { in.close(); } catch (Exception ignored) {}
+            }
+        }
     }
 
     /** True when running in {@code :overlay} — separate from main Solar / MainActivity process. */

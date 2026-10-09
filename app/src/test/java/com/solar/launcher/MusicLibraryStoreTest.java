@@ -100,4 +100,43 @@ public class MusicLibraryStoreTest {
     private static boolean yearCountsAsFresh(int year) {
         return year != 0;
     }
+
+    /** 2026-10-05 — SEGMENTED All Songs ORDER BY follows lib_song_sort (was path only). */
+    @Test
+    public void orderByForSongSortMatchesModes() {
+        String[][] cases = {
+            { String.valueOf(LibraryBrowsePrefs.SONG_SORT_TITLE), "title COLLATE NOCASE ASC" },
+            { String.valueOf(LibraryBrowsePrefs.SONG_SORT_ARTIST), "artist COLLATE NOCASE ASC" },
+            { String.valueOf(LibraryBrowsePrefs.SONG_SORT_ALBUM), "track_number ASC" },
+            { String.valueOf(LibraryBrowsePrefs.SONG_SORT_DATE), "mtime DESC" },
+            { String.valueOf(LibraryBrowsePrefs.SONG_SORT_LENGTH), "CAST(duration_ms AS INTEGER)" },
+            { "-1", "path ASC" },
+        };
+        for (String[] c : cases) {
+            String order = MusicLibraryStore.orderByForSongSort(Integer.parseInt(c[0]));
+            if (!order.contains(c[1])) {
+                throw new AssertionError("sort " + c[0] + " → " + order);
+            }
+        }
+    }
+
+    /** 2026-10-05 — Drill SQL keeps WHERE/LIMIT and swaps only ORDER BY; −1 keeps built-in. */
+    @Test
+    public void withSongSortOrderSwapsOnlyOrderBy() {
+        String base = MusicLibraryStore.SQL_LOAD_BY_ARTIST;
+        if (!base.equals(MusicLibraryStore.withSongSortOrder(base, -1))) {
+            throw new AssertionError("−1 must keep SQL");
+        }
+        String t = MusicLibraryStore.withSongSortOrder(base, LibraryBrowsePrefs.SONG_SORT_TITLE);
+        if (!t.contains("WHERE (artist = ? COLLATE NOCASE OR album_artist = ? COLLATE NOCASE)")
+                || !t.contains(" ORDER BY title COLLATE NOCASE ASC, path ASC LIMIT ? OFFSET ?")
+                || t.contains("track_number")) {
+            throw new AssertionError("title swap → " + t);
+        }
+        String y = MusicLibraryStore.withSongSortOrder(
+                MusicLibraryStore.SQL_LOAD_BY_YEAR, LibraryBrowsePrefs.SONG_SORT_DATE);
+        if (!y.startsWith("SELECT * FROM tracks WHERE year = ? ORDER BY mtime DESC")) {
+            throw new AssertionError("year swap → " + y);
+        }
+    }
 }

@@ -4546,13 +4546,7 @@ public class MainActivity extends Activity {
             Debug383b4eLog.log(this, "MainActivity.onCreate", "after home prefs migrate", "A", dbg);
         } catch (Exception ignored) {}
         // #endregion
-        clockHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                try { restorePlaybackQueue(); } catch (Exception ignored) {}
-            }
-        });
-        try { scheduleStartupMountRetry(); } catch (Exception e) {}
+        try { restorePlaybackQueueAtStartup(); } catch (Exception e) {}
         try { scheduleStartupUpdateNudge(); } catch (Exception e) {}
         try { WirelessAdbEnabler.checkAndRandomizeAdbId(this); } catch (Exception e) {}
         try {
@@ -6655,6 +6649,44 @@ public class MainActivity extends Activity {
         }
         states.addState(new int[] {}, norm);
         return states;
+    }
+
+    /** 2026-10-03 — Shared state for {@link #getY1ListRowStateBackground}; rebuilt when size/kind change. */
+    private android.graphics.drawable.Drawable.ConstantState y1ListRowBgState;
+    private int y1ListRowBgKey = Integer.MIN_VALUE;
+
+    /**
+     * 2026-10-03 — Library ListView row background: lights on selected, pressed, or focused.
+     * Layman: Artists/Albums rows show the blue bar on the row the wheel is on.
+     * Technical: {@link Y1RowChromePolicy#listRowChromeStates()}; one ConstantState shared by
+     * every row (newDrawable per view), so binds never rebuild bitmaps.
+     */
+    private android.graphics.drawable.Drawable getY1ListRowStateBackground(int widthPx, int rowKind) {
+        int key = widthPx * 31 + rowKind;
+        if (y1ListRowBgState == null || y1ListRowBgKey != key) {
+            android.graphics.drawable.StateListDrawable states =
+                    new android.graphics.drawable.StateListDrawable();
+            android.graphics.drawable.Drawable sel = getY1RowBackground(true, widthPx, rowKind);
+            int[][] chrome = Y1RowChromePolicy.listRowChromeStates();
+            for (int i = 0; i < chrome.length; i++) {
+                states.addState(chrome[i], sel);
+            }
+            states.addState(new int[] {}, getY1RowBackground(false, widthPx, rowKind));
+            y1ListRowBgState = states.getConstantState();
+            y1ListRowBgKey = key;
+        }
+        return y1ListRowBgState.newDrawable(getResources());
+    }
+
+    /** 2026-10-03 — Apply the library-row background once per recycled view. */
+    private void applyY1ListRowBackground(View row, int widthPx, int rowKind) {
+        android.graphics.drawable.Drawable bg = row.getBackground();
+        int key = widthPx * 31 + rowKind;
+        if (bg != null && y1ListRowBgState != null && y1ListRowBgKey == key
+                && bg.getConstantState() == y1ListRowBgState) {
+            return;
+        }
+        row.setBackground(getY1ListRowStateBackground(widthPx, rowKind));
     }
 
     private void refreshBatteryStatus() {
@@ -23522,9 +23554,10 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         if (minutes <= 0) return;
 
         // Don't shut down if media is playing
-        boolean playing = false;
-        try { playing = mediaPlayer != null && mediaPlayer.isPlaying(); } catch (Exception ignored) {}
-        if (playing) {
+        // 2026-10-05 — Was: mediaPlayer.isPlaying() only — false under SolarTransport (gapless),
+        // podcast/music IJK, FM, internet radio and video, so the Y1 powered off mid-song after
+        // N idle minutes. Reversal: restore the mediaPlayer-only check.
+        if (isAnyPlaybackKeepingAwake()) {
             // Media is playing — reset timer so shutdown won't happen immediately after playback stops
             resetInactivityTimer();
             return;
@@ -23537,6 +23570,36 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         if (idleMs >= InactivityShutdownConfig.shutdownDelayMs(minutes)) {
             performInactivityShutdown();
         }
+    }
+
+    /**
+     * True when any engine is making sound — idle auto power-off must wait.
+     * Layman: if music, radio, a podcast or a video is playing, the player is "in use".
+     * Technical: ownership ladder ({@link #isActiveAudioPlaying}) + engines outside it.
+     * 2026-10-05
+     */
+    private boolean isAnyPlaybackKeepingAwake() {
+        boolean active = false, mp = false, fm = false, netRadio = false, video = false;
+        try { active = isActiveAudioPlaying(); } catch (Exception ignored) {}
+        try { mp = mediaPlayer != null && mediaPlayer.isPlaying(); } catch (Exception ignored) {}
+        if (mediaSuite != null) {
+            try { fm = mediaSuite.fmEngine() != null && mediaSuite.fmEngine().isAudioPlaying(); }
+            catch (Exception ignored) {}
+            try {
+                netRadio = mediaSuite.internetRadioPlayer() != null
+                        && mediaSuite.internetRadioPlayer().isPlaying();
+            } catch (Exception ignored) {}
+            try { video = mediaSuite.isVideoPlaying(); } catch (Exception ignored) {}
+        }
+        return isAnyPlaybackKeepingAwakeForTest(active, mp, fm, netRadio, video);
+    }
+
+    /** Host-testable: any audible engine blocks idle shutdown. 2026-10-05 */
+    static boolean isAnyPlaybackKeepingAwakeForTest(
+            boolean activeAudioPlaying, boolean mediaPlayerPlaying,
+            boolean fmPlaying, boolean internetRadioPlaying, boolean videoPlaying) {
+        return activeAudioPlaying || mediaPlayerPlaying || fmPlaying
+                || internetRadioPlaying || videoPlaying;
     }
 
     private void migrateInactivityShutdownPrefs() {
@@ -25403,7 +25466,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                             }
                         }
                         if (missing > 0) {
-                            scheduleStartupMountRetry();
+                            armStartupMountRetry();
                         }
                         if (connectedA2dpAddress != null && avrcpTrackInfoWriter != null) {
                             avrcpTrackInfoWriter.ensureReady();
@@ -28923,9 +28986,34 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         persistPlaybackQueue();
     }
 
-    private void restorePlaybackQueue() {
-        PlayQueue q = new PlayQueue();
-        if (!PlayQueueStore.restore(getApplicationContext(), q) || q.isEmpty()) return;
+    /**
+     * Cold-start queue restore: parse + missing-file scan off the UI thread, apply on it.
+     * Layman: reading the saved queue no longer freezes startup.
+     * 2026-10-05 — Was: clockHandler.post(restorePlaybackQueue) + scheduleStartupMountRetry(), both
+     * on the UI thread — play_queue.json parsed twice and every queued path stat'ed on SD
+     * (822 tracks ≈ 1.4 s cold on Y1). Skips the apply if a queue was started meanwhile.
+     * Reversal: restore those two calls in onCreate.
+     */
+    private void restorePlaybackQueueAtStartup() {
+        final Context app = getApplicationContext();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final PlayQueue q = new PlayQueue();
+                final boolean hasDisk = PlayQueueStore.restore(app, q) && !q.isEmpty();
+                final int missing = PlayQueueStore.countMissingPaths(app);
+                runOnUiThreadSafe(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (hasDisk && !playback.hasAnyQueue()) applyRestoredPlaybackQueue(q);
+                        if (missing > 0) armStartupMountRetry();
+                    }
+                });
+            }
+        }, "SolarQueueRestore").start();
+    }
+
+    private void applyRestoredPlaybackQueue(PlayQueue q) {
         playback.restoreQueueState(q.items(), q.index());
         syncNowPlayingHomeVisibility();
         refreshRestoredQueuePreview();
@@ -29011,8 +29099,11 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         }
     }
 
-    private void scheduleStartupMountRetry() {
-        if (PlayQueueStore.countMissingPaths(getApplicationContext()) <= 0) return;
+    /**
+     * Start the mount retry loop when the caller already knows paths are missing.
+     * 2026-10-05 — Was scheduleStartupMountRetry(): recounted missing paths on the UI thread first.
+     */
+    private void armStartupMountRetry() {
         startupMountRetryAttempt = 0;
         startupMountHandler.removeCallbacks(startupMountRetryRunnable);
         startupMountHandler.postDelayed(startupMountRetryRunnable, STARTUP_MOUNT_RETRY_INTERVAL_MS);
@@ -43059,6 +43150,26 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         // #endregion
     }
 
+    /**
+     * 2026-10-03 — Re-stamp Tier-0 from SQL DISTINCT when a libraryScanGen bump orphaned it.
+     * Layman: art-cache rebuild / browser teardown / scan cancel bump the generation without
+     * rebuilding artist/album names, so under SEGMENTED (empty customLibrary) Artists/Albums
+     * went blank until Solar restarted.
+     * Technical: only touches libraryRamCache; no customLibrary/segment side effects.
+     */
+    private void restampTier0IfOrphaned() {
+        if (libraryRamCache.generation() == libraryScanGen) return;
+        synchronized (customLibrary) {
+            if (!customLibrary.isEmpty()) return;
+        }
+        MusicLibraryStore store = MusicLibraryStore.getInstance(getApplicationContext());
+        int n = store.countTracks();
+        if (n <= 0) return;
+        libraryRamCache.rebuildFromDistinct(libraryScanGen, n,
+                store.listDistinctArtists(), store.listDistinctAlbums(),
+                store.listDistinctGenres(), store.listDistinctYears());
+    }
+
     /** Pre-scale album art to 240px JPEG on internal storage for fast Flow navigation. */
     private void buildAlbumArtCacheAfterScan(int gen) {
         if (libraryScanGen != gen) return;
@@ -45384,6 +45495,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     /** 2026-07-18 — Actual category list bind (runs after first frame). */
     private void buildVirtualCategoriesNow(final String type) {
+        restampTier0IfOrphaned();
         java.util.HashMap<String, String> albumByKey = new java.util.HashMap<>();
         java.util.HashSet<String> uniqueCategories = new java.util.HashSet<>();
         if (!"ARTIST".equals(type) && !"YEAR".equals(type) && !"GENRE".equals(type)) {
@@ -46228,18 +46340,14 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             final int rowW = y1ActiveRowWidthPx();
             btn.setText(getString(R.string.browser_search_ellipsis));
             // 2026-07-20 — StateListDrawable once (was setBackground every focus — Y1 music lag).
-            if (!(btn.getBackground() instanceof android.graphics.drawable.StateListDrawable)) {
-                btn.setBackground(getY1RowStateBackground(rowW, rowKind));
-            }
+            applyY1ListRowBackground(btn, rowW, rowKind);
             btn.setSelected(btn.hasFocus());
             ThemeManager.applyThemedTextStyle(btn, btn.hasFocus()
                     ? y1RowTextColorSelected(rowKind) : y1RowTextColorNormal(rowKind));
             btn.setOnFocusChangeListener(new View.OnFocusChangeListener() {
                 @Override
                 public void onFocusChange(View v, boolean hasFocus) {
-                    if (!(btn.getBackground() instanceof android.graphics.drawable.StateListDrawable)) {
-                        btn.setBackground(getY1RowStateBackground(rowW, rowKind));
-                    }
+                    applyY1ListRowBackground(btn, rowW, rowKind);
                     btn.setSelected(hasFocus);
                     ThemeManager.applyThemedTextStyle(btn, hasFocus
                             ? y1RowTextColorSelected(rowKind) : y1RowTextColorNormal(rowKind));
@@ -46341,9 +46449,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             final int rowKind = Y1_ROW_ITEM;
             final int rowW = y1ActiveRowWidthPx();
             // 2026-07-20 — StateListDrawable once + setSelected (home/settings parity).
-            if (!(btn.getBackground() instanceof android.graphics.drawable.StateListDrawable)) {
-                btn.setBackground(getY1RowStateBackground(rowW, rowKind));
-            }
+            applyY1ListRowBackground(btn, rowW, rowKind);
             ThemeManager.applyThemedTextStyle(btn, y1RowTextColorNormal(rowKind));
             // 2026-07-21 — selected|focused (mid-spin without requestFocus). Was: hasFocus only.
             boolean catLit = ListWheelChromePolicy.rowHighlighted(
@@ -46357,9 +46463,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             btn.setOnFocusChangeListener(new View.OnFocusChangeListener() {
                 @Override
                 public void onFocusChange(View v, boolean hasFocus) {
-                    if (!(btn.getBackground() instanceof android.graphics.drawable.StateListDrawable)) {
-                        btn.setBackground(getY1RowStateBackground(rowW, rowKind));
-                    }
+                    applyY1ListRowBackground(btn, rowW, rowKind);
                     boolean lit = ListWheelChromePolicy.rowHighlighted(
                             listVirtualSongs != null
                                     && listVirtualSongs.getSelectedItemPosition() == position,
@@ -47126,6 +47230,22 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     }
 
     /**
+     * Song sort for a SEGMENTED song list — same prefs as {@link #sortSongItems} in RAM mode.
+     * Album drills use the album-track sort; RECENT keeps date order (−1 = SQL default).
+     * 2026-10-05
+     */
+    private int segmentedSongSortFor(String qType) {
+        if ("ALBUM".equals(qType) || "ARTIST_ALBUM".equals(qType)) {
+            return libraryBrowsePrefs.albumSongSort();
+        }
+        if ("ALL".equals(qType) || "ARTIST".equals(qType) || "GENRE".equals(qType)
+                || "YEAR".equals(qType)) {
+            return libraryBrowsePrefs.songSort();
+        }
+        return -1;
+    }
+
+    /**
      * 2026-07-20 — SQLite → SongItem page (BG only). File checks stay off the UI thread.
      * Layman: read this chunk of the catalog from the library database.
      */
@@ -47133,22 +47253,25 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             String qType, String qValue, String qArtist, int offset, int bs) {
         MusicLibraryStore store = MusicLibraryStore.getInstance(this);
         java.util.List<MusicLibraryStore.Track> page;
+        // 2026-10-05 — Drills honour the sort prefs (was a fixed album/track ORDER BY).
+        final int sort = segmentedSongSortFor(qType);
         if ("ARTIST".equals(qType)) {
-            page = store.loadTracksByArtist(qValue, offset, bs);
+            page = store.loadTracksByArtist(qValue, offset, bs, sort);
         } else if ("ALBUM".equals(qType)) {
-            page = store.loadTracksByAlbum(qValue, offset, bs);
+            page = store.loadTracksByAlbum(qValue, offset, bs, sort);
         } else if ("ARTIST_ALBUM".equals(qType)) {
-            page = store.loadTracksByArtistAlbum(qArtist, qValue, offset, bs);
+            page = store.loadTracksByArtistAlbum(qArtist, qValue, offset, bs, sort);
         } else if ("GENRE".equals(qType)) {
             // 2026-07-20 — SEGMENTED Genre drill pages.
-            page = store.loadTracksByGenre(qValue, offset, bs);
+            page = store.loadTracksByGenre(qValue, offset, bs, sort);
         } else if ("YEAR".equals(qType)) {
-            page = store.loadTracksByYear(qValue, offset, bs);
+            page = store.loadTracksByYear(qValue, offset, bs, sort);
         } else if ("RECENT".equals(qType)) {
             // 2026-07-20 — SEGMENTED Recently Added: mtime DESC pages (not path order).
             page = store.loadRangeByMtimeDesc(offset, bs);
         } else {
-            page = store.loadRange(offset, bs);
+            // 2026-10-05 — All Songs honours lib_song_sort (was path order regardless of the cycle).
+            page = store.loadRange(offset, bs, sort);
         }
         // Keep DB OFFSET indices 1:1 with block slots (null/missing → placeholder, not shrink).
         java.util.ArrayList<SongItem> rows = new java.util.ArrayList<SongItem>(page.size());
@@ -47324,7 +47447,10 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         final String qValue = songListSegmentedQueryValue != null ? songListSegmentedQueryValue : "";
         final String qArtist = songListSegmentedQueryArtist != null ? songListSegmentedQueryArtist : "";
 
-        java.util.List<File> files = collectTracksForQuerySegmented(qType, qValue, qArtist);
+        // 2026-10-05 — Same order as the visible pages, or dataIndex lands on a different song.
+        // Reversal: 3-arg collect (SQL default order).
+        java.util.List<File> files = collectTracksForQuerySegmented(qType, qValue, qArtist,
+                segmentedSongSortFor(qType));
         if (files == null || files.isEmpty()) {
             SongItem s = songBrowseSegments.get(dataIndex);
             if (s != null && s.file != null) {
@@ -47672,6 +47798,12 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
      */
     private java.util.List<File> collectTracksForQuerySegmented(
             String type, String value, String artistForAlbum) {
+        return collectTracksForQuerySegmented(type, value, artistForAlbum, -1);
+    }
+
+    /** songSort ≥ 0: same order as the visible list (play queue); −1: SQL default. 2026-10-05 */
+    private java.util.List<File> collectTracksForQuerySegmented(
+            String type, String value, String artistForAlbum, int songSort) {
         java.util.ArrayList<File> out = new java.util.ArrayList<File>();
         MusicLibraryStore store = MusicLibraryStore.getInstance(this);
         final int page = MusicLibraryStore.DEFAULT_PAGE_SIZE;
@@ -47679,19 +47811,19 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         while (true) {
             java.util.List<MusicLibraryStore.Track> rows;
             if ("ARTIST".equals(type)) {
-                rows = store.loadTracksByArtist(value, offset, page);
+                rows = store.loadTracksByArtist(value, offset, page, songSort);
             } else if ("ALBUM".equals(type)) {
-                rows = store.loadTracksByAlbum(value, offset, page);
+                rows = store.loadTracksByAlbum(value, offset, page, songSort);
             } else if ("ARTIST_ALBUM".equals(type)) {
-                rows = store.loadTracksByArtistAlbum(artistForAlbum, value, offset, page);
+                rows = store.loadTracksByArtistAlbum(artistForAlbum, value, offset, page, songSort);
             } else if ("GENRE".equals(type)) {
                 // 2026-07-20 — SEGMENTED Genre collect pages (was empty break).
-                rows = store.loadTracksByGenre(value, offset, page);
+                rows = store.loadTracksByGenre(value, offset, page, songSort);
             } else if ("YEAR".equals(type)) {
-                rows = store.loadTracksByYear(value, offset, page);
+                rows = store.loadTracksByYear(value, offset, page, songSort);
             } else if ("ALL".equals(type)) {
                 // Avoid whole-library File materialization — callers should not use ALL under SEGMENTED.
-                rows = store.loadRange(offset, page);
+                rows = store.loadRange(offset, page, songSort);
             } else {
                 break;
             }
@@ -48810,6 +48942,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             startHasStemsBrowseAsync();
             return;
         }
+        // 2026-10-03 — invalidateSongPathIndex (art-cache clear) resets the cache to FULL_RESIDENT;
+        // with an empty customLibrary the walk below then bound zero songs. Re-stamp first.
+        restampTier0IfOrphaned();
         // 2026-07-20 — SEGMENTED All / Artist / Album / Recent drills: page from SQLite.
         // Was: RECENT fell through to empty customLibrary walk. Reversal: exclude RECENT here.
         boolean drillSegmented = ("ALL".equals(virtualQueryType)
@@ -55749,7 +55884,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         if (!keepReachStreamHandoffForScreen(to)) {
             progressHandler.removeCallbacks(reachGrowingEdgePoll);
         }
-        fastScrollHandler.removeCallbacks(hideFastScrollTask);
+        // 2026-10-03 — Hide, not just cancel the hide: a letter shown <800ms before a screen switch
+        // (e.g. pick a song → Now Playing) stayed stuck over the new screen. Was removeCallbacks only.
+        hideFastScrollLetter();
         if (to == STATE_BROWSER) {
             cancelReachDownloadIfAny(false);
         }
@@ -60520,7 +60657,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                     if (event != null && !WheelNavPolicy.acceptNotch(
                             event.getAction(), event.getRepeatCount(), wheelKeyHeld)) {
                         // #region agent log
-                        try {
+                        // 2026-10-05 — Gate on ENABLED (compile-time false → block removed). Was: JSON built
+                        // every dropped wheel event even with the logger off. Reversal: drop the if.
+                        if (Debug9cd8d5Log.ENABLED) try {
                             org.json.JSONObject d = new org.json.JSONObject();
                             d.put("repeat", event.getRepeatCount());
                             d.put("key", keyCode);
@@ -60547,7 +60686,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                     if (isPreReverseWheelCatchup(event, direction)) {
                         // Leftover old-direction ticks behind a reverse we already honored.
                         // #region agent log
-                        try {
+                        if (Debug9cd8d5Log.ENABLED) try {
                             org.json.JSONObject d = new org.json.JSONObject();
                             d.put("dir", direction);
                             Debug9cd8d5Log.log(this, "MainActivity.listWheel",
@@ -60578,7 +60717,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                     if (faStale) {
                         hardStopListWheel();
                         // #region agent log
-                        try {
+                        if (Debug9cd8d5Log.ENABLED || DebugFa8512Log.ENABLED) try {
                             org.json.JSONObject d = new org.json.JSONObject();
                             d.put("ageMs", faAge);
                             d.put("dir", direction);
@@ -60607,9 +60746,11 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                     }
                     // #region agent log
                     // Sparse: only interesting coast signals (age/vel/ghost/multi-step).
-                    if (faAge > 60L || wheelResult.rowSteps > 1
+                    // 2026-10-05 — listCount >= 500 made this fire on every tick in big libraries
+                    // with both loggers off; gate on ENABLED. Reversal: drop the ENABLED clause.
+                    if ((Debug9cd8d5Log.ENABLED || DebugFa8512Log.ENABLED) && (faAge > 60L || wheelResult.rowSteps > 1
                             || wheelResult.velocity > 2f || listWheelCoalescer.pendingDepth() > 0
-                            || listCount >= 500) {
+                            || listCount >= 500)) {
                         try {
                             org.json.JSONObject d = new org.json.JSONObject();
                             d.put("ageMs", faAge);

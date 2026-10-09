@@ -31,6 +31,10 @@ public final class RockboxForegroundMonitor implements Runnable {
     public static void ensureStarted(Context context) {
         if (context == null) return;
         if (started) return;
+        // 2026-10-03 — SolarApplication bootstrap also runs in :watchdog, where MainActivity.instance
+        // is always null: the solar-focus idle never applied and it hit getRunningTasks every 500ms
+        // (~2 AMS probes/s on Y1 with Solar on screen). The main-process monitor covers handoff.
+        if (!isMainProcess()) return;
         synchronized (RockboxForegroundMonitor.class) {
             if (started) return;
             started = true;
@@ -150,6 +154,27 @@ public final class RockboxForegroundMonitor implements Runnable {
         return LauncherDefault.TARGET_JJ.equals(target)
                 || LauncherDefault.TARGET_ROCKBOX.equals(target)
                 || LauncherDefault.TARGET_STOCK.equals(target);
+    }
+
+    /** 2026-10-03 — Main app process has no ':' suffix; /proc read avoids an AMS round-trip. */
+    private static boolean isMainProcess() {
+        java.io.FileInputStream in = null;
+        try {
+            in = new java.io.FileInputStream("/proc/self/cmdline");
+            byte[] buf = new byte[256];
+            int n = in.read(buf);
+            if (n <= 0) return true;
+            for (int i = 0; i < n && buf[i] != 0; i++) {
+                if (buf[i] == ':') return false;
+            }
+            return true;
+        } catch (Exception e) {
+            return true;
+        } finally {
+            if (in != null) {
+                try { in.close(); } catch (Exception ignored) {}
+            }
+        }
     }
 
     /** Test hook — reset poll state between cases. */

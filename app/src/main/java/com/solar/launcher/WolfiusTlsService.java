@@ -10,11 +10,9 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.net.ConnectivityManager;
-import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
-import android.os.PowerManager;
 import android.util.Log;
 
 import com.solar.launcher.tlsproxy.DnsForwarder;
@@ -52,8 +50,6 @@ public final class WolfiusTlsService extends Service {
 
     private TlsProxy proxy;
     private DnsForwarder dnsForwarder;
-    private PowerManager.WakeLock wakeLock;
-    private WifiManager.WifiLock wifiLock;
     private volatile boolean caTrusted;
     private volatile boolean iptablesApplied;
     private volatile boolean iptablesApplying;
@@ -81,16 +77,10 @@ public final class WolfiusTlsService extends Service {
         super.onCreate();
         final Context app = getApplicationContext();
 
-        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
-        if (pm != null) {
-            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "SolarTlsProxyWakeLock");
-            wakeLock.acquire();
-        }
-        WifiManager wm = (WifiManager) app.getSystemService(Context.WIFI_SERVICE);
-        if (wm != null) {
-            wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL, "SolarTlsProxyWifiLock");
-            wifiLock.acquire();
-        }
+        // No service-lifetime wake/WiFi locks: they kept the CPU out of deep sleep (and the WiFi
+        // radio at full power) for as long as the service ran, even with WiFi off. The proxy only
+        // relays traffic for apps that are already awake; anything long-running (playback,
+        // Soulseek transfers) holds its own locks.
 
         try {
             // Fast, non-blocking: loads the CA keys into wolfSSL natively.
@@ -135,8 +125,6 @@ public final class WolfiusTlsService extends Service {
             }, "WolfiusIptablesTeardown").start();
         }
         stopForegroundCompat();
-        if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
-        if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
     }
 
     @Override

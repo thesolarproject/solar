@@ -92,17 +92,123 @@ public final class ThemeSkinBridge {
   public static void publish(Context ctx) {
     if (ctx == null) return;
     if (!isEnabled(ctx)) {
+      writeStamp(ctx, null);
       clearSidecars(ctx);
       publishDisabledJson(ctx);
       return;
     }
     try {
       JSONObject json = buildSkinJson();
+      // 2026-10-03 — Same inputs → same PNGs. Was: re-encode wallpaper + selection PNG on every
+      // Application.onCreate (main + :overlay), most of Solar's cold-start main-thread time on Y1.
+      String key = publishKey(ctx, json);
+      if (key != null && key.equals(readStamp(ctx)) && sidecarsPresent(ctx, json)) return;
       SidecarPublishHelper.publishBytes(ctx, SIDECAR_JSON, json.toString().getBytes("UTF-8"));
       publishWallpaperPng(ctx, json.optBoolean("hasWallpaper", false));
       publishSelectionPng(ctx, json.optBoolean("hasSelectionBitmap", false));
+      writeStamp(ctx, key);
     } catch (Throwable ignored) {
+      writeStamp(ctx, null);
       clearSidecars(ctx);
+    }
+  }
+
+  private static final String STAMP_FILE = "theme-skin.stamp";
+
+  /**
+   * 2026-10-03 — Fingerprint of everything the sidecars are rendered from.
+   * Layman: theme colours + the active theme's files (name/size) + Solar version.
+   * Technical: skin JSON minus savedAt; theme dir walked two levels; null = always publish.
+   * 2026-10-05 — Keyed by folderName, not folderPath, and no mtimes: boot publishes once from
+   * the SD copy and again from the internal mirror (different paths and copy mtimes), so the
+   * two keys alternated and the stamp never matched. Reversal: folderPath + lastModified.
+   */
+  static String publishKey(Context ctx, JSONObject json) {
+    try {
+      JSONObject j = new JSONObject(json.toString());
+      j.remove("savedAt");
+      StringBuilder sb = new StringBuilder(j.toString());
+      sb.append('|').append(SIDECAR_VERSION);
+      sb.append('|').append(ctx.getPackageManager()
+          .getPackageInfo(ctx.getPackageName(), 0).versionCode);
+      ThemeManager.ThemeEntry cur = ThemeManager.getCurrentTheme();
+      sb.append('|').append(cur != null ? cur.folderName : "none");
+      if (cur != null && cur.folderPath != null && !cur.folderPath.startsWith("asset://")) {
+        appendTreeFingerprint(sb, new java.io.File(cur.folderPath), 2);
+      }
+      return sb.toString();
+    } catch (Throwable t) {
+      return null;
+    }
+  }
+
+  private static void appendTreeFingerprint(StringBuilder sb, java.io.File dir, int depth) {
+    String[] names = dir.list();
+    if (names == null) return;
+    java.util.Arrays.sort(names);
+    for (String n : names) {
+      java.io.File f = new java.io.File(dir, n);
+      if (f.isDirectory()) {
+        if (depth > 0) appendTreeFingerprint(sb, f, depth - 1);
+      } else {
+        sb.append('|').append(n).append(':').append(f.length());
+      }
+    }
+  }
+
+  /** Every existing sidecar dir still holds the files the JSON promises. */
+  private static boolean sidecarsPresent(Context ctx, JSONObject json) {
+    boolean wall = json.optBoolean("hasWallpaper", false);
+    boolean sel = json.optBoolean("hasSelectionBitmap", false);
+    for (java.io.File dir : SidecarPublishHelper.sidecarDirs(ctx)) {
+      if (!dir.isDirectory()) continue;
+      if (!new java.io.File(dir, SIDECAR_JSON).isFile()) return false;
+      if (wall && !new java.io.File(dir, SIDECAR_WALLPAPER).isFile()) return false;
+      if (sel && !new java.io.File(dir, SIDECAR_SELECTION).isFile()) return false;
+    }
+    return true;
+  }
+
+  private static String readStamp(Context ctx) {
+    java.io.File f = new java.io.File(ctx.getFilesDir(), STAMP_FILE);
+    if (!f.isFile()) return null;
+    java.io.FileInputStream in = null;
+    try {
+      in = new java.io.FileInputStream(f);
+      byte[] buf = new byte[(int) Math.min(f.length(), 1 << 20)];
+      int off = 0;
+      while (off < buf.length) {
+        int r = in.read(buf, off, buf.length - off);
+        if (r < 0) break;
+        off += r;
+      }
+      return new String(buf, 0, off, "UTF-8");
+    } catch (Exception e) {
+      return null;
+    } finally {
+      if (in != null) {
+        try { in.close(); } catch (Exception ignored) {}
+      }
+    }
+  }
+
+  /** null deletes the stamp so the next publish always renders. */
+  private static void writeStamp(Context ctx, String key) {
+    java.io.File f = new java.io.File(ctx.getFilesDir(), STAMP_FILE);
+    if (key == null) {
+      f.delete();
+      return;
+    }
+    java.io.FileOutputStream out = null;
+    try {
+      out = new java.io.FileOutputStream(f);
+      out.write(key.getBytes("UTF-8"));
+    } catch (Exception e) {
+      f.delete();
+    } finally {
+      if (out != null) {
+        try { out.close(); } catch (Exception ignored) {}
+      }
     }
   }
 

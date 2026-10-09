@@ -17,7 +17,7 @@ public final class DebugSession083511 {
     private static final String TAG = "Debug083511";
     private static final Object LOCK = new Object();
     /** Keep on for adb pull during this overlay input debug session. */
-    public static final boolean ENABLED = true;
+    public static final boolean ENABLED = false;
 
     private DebugSession083511() {}
 

@@ -76,10 +76,22 @@ clear_pending_kill() {
     setprop "$PROP_PENDING_KILL_UNTIL" 0
 }
 
+# 2026-10-05 — Is a package installed? Plain-text grep instead of pm (Dalvik VM, ~1 s on MT6572).
+# Layman: don't spend seconds enabling/disabling apps that aren't there (Rockbox/JJ are optional).
+# Unreadable list → pm path (old cost, same answer). Reversal: call pm path directly again.
+pkg_installed() {
+    if [ -r /data/system/packages.list ]; then
+        grep -q "^$1 " /data/system/packages.list
+    else
+        pm path "$1" >/dev/null 2>&1
+    fi
+}
+
 force_stop_pkg() {
     _p="$1"
     _reason="$2"
     [ -n "$_p" ] || return
+    pkg_installed "$_p" || return
     [ -n "$_reason" ] && announce_pending_kill "$_p" "$_reason"
     am force-stop "$_p" 2>/dev/null
 }
@@ -93,12 +105,12 @@ ensure_overlay_host() {
 
 pm_disable_pkg() {
     _p="$1"
-    [ -n "$_p" ] && pm disable "$_p" 2>/dev/null
+    [ -n "$_p" ] && pkg_installed "$_p" && pm disable "$_p" 2>/dev/null
 }
 
 pm_enable_pkg() {
     _p="$1"
-    [ -n "$_p" ] && pm enable "$_p" 2>/dev/null
+    [ -n "$_p" ] && pkg_installed "$_p" && pm enable "$_p" 2>/dev/null
 }
 
 read_target() {

@@ -854,6 +854,14 @@ audit_rom_contents() {
         errors=$((errors + 1))
     fi
 
+    # 2026-10-05 — Solar crashes on first launch without these (system APK → no lib extraction).
+    for so in libwolfssl.so libc++_shared.so; do
+        if [ ! -f "$sys_mount/lib/$so" ]; then
+            echo "audit fail: $so missing from /system/lib (Solar native load)" >&2
+            errors=$((errors + 1))
+        fi
+    done
+
     if [ ! -f "$sys_mount/etc/security/cacerts/6187b673.0" ]; then
         echo "audit fail: ISRG Root X1 cacert missing (MediaPlayer/podcast HTTPS)" >&2
         errors=$((errors + 1))
@@ -1506,6 +1514,7 @@ chmod +x "$REPO_ROOT/scripts/stage-y1-system-prep.sh" "$REPO_ROOT/scripts/apply-
 "$REPO_ROOT/scripts/stage-y1-system-prep.sh" "$TLS_STAGE" "$STAGING_APK" "$REPO_ROOT"
 sudo "$REPO_ROOT/scripts/apply-y1-system-prep.sh" "$TLS_STAGE" "$MOUNT_SYS"
 sudo chown root:root "$MOUNT_SYS/lib/libconscrypt_jni.so"
+sudo chown root:root "$MOUNT_SYS/lib/libwolfssl.so" "$MOUNT_SYS/lib/libc++_shared.so" 2>/dev/null || true
 sudo chown root:root "$MOUNT_SYS/etc/security/cacerts"/*.0 2>/dev/null || true
 
 echo "==> Install Solar boot init (SD library folders + TLS sanity)"

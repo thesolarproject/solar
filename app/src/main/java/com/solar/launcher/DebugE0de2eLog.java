@@ -28,7 +28,7 @@ public final class DebugE0de2eLog {
             "/home/deck/Documents/Cursor Workspaces/TheSolarProject/solar/.cursor/debug-e0de2e.log";
 
     /** Flip false after Back-dismiss fix is verified. */
-    public static final boolean ENABLED = true;
+    public static final boolean ENABLED = false;
 
     private DebugE0de2eLog() {}
 
