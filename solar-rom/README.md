@@ -73,8 +73,6 @@ Y1 type A/B also replace zip-root **`boot.img`** / **`logo.bin`** from `solar-ro
 
 **Y1 A/B + A5 output zips** keep the full ATA tree including **SP Flash Tool** so users can download and flash without a separate tool pack.
 
-Fork by xdijd — xdijd-solar-fork
-
 ### A5 intentional divergences (`rom_a5.zip`)
 
 | Concern | A5 | vs Y1 |

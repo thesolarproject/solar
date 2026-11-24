@@ -494,7 +494,6 @@
     <string name="about_brought_by_suffix"> Project</string>
     <string name="about_report_issues">Report Issues: github.com/thesolarproject/issues</string>
     <string name="about_donation">Donations: https://ko-fi.com/thesolarproject</string>
-    <string name="about_fork_credit">Fork by xdijd — xdijd-solar-fork</string>
     <string name="about_update_button">Update / Change App Version</string>
     <string name="about_update_unavailable">Updates unavailable. Check Wi‑Fi connection</string>
     <string name="settings_bluetooth_setup">Bluetooth</string>
