@@ -294,6 +294,20 @@ xposed_install_to_mount() {
     echo "==> Xposed: install Solar theme font module (API $api_level)"
     sudo install -m 644 -o root -g root "$theme_apk" "$mount/app/SolarThemeFont.apk"
 
+    local rockbox_ime_apk
+    rockbox_ime_apk="$(xposed_rockbox_ime_apk "$script_dir")" || return 1
+    echo "==> Xposed: install Solar Rockbox IME module (API $api_level)"
+    sudo install -m 644 -o root -g root "$rockbox_ime_apk" "$mount/app/SolarRockboxIme.apk"
+
+    if [ "$api_level" != "17" ] && [ "$api_level" != "18" ]; then
+        local rockbox_compat_apk
+        rockbox_compat_apk="$(xposed_rockbox_compat_apk "$script_dir")" || return 1
+        echo "==> Xposed: install Solar Rockbox compat module (API $api_level)"
+        sudo install -m 644 -o root -g root "$rockbox_compat_apk" "$mount/app/SolarRockboxCompat.apk"
+    else
+        sudo rm -f "$mount/app/SolarRockboxCompat.apk"
+    fi
+
     local notpipe_bridge_apk
     notpipe_bridge_apk="$(xposed_notpipe_bridge_apk "$script_dir")" || return 1
     echo "==> Xposed: install Solar NotPipe bridge module (API $api_level)"

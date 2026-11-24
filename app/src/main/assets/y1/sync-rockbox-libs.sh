@@ -53,7 +53,7 @@ if [ ! -d "$STAGED" ] || [ ! -f "$STAGED/librockbox.so" ]; then
             chmod 755 "$LIBDIR"/*.so 2>/dev/null
             echo "$APK_TAG" > "$MARKER"
             rm -rf "$_tmp"
-            log -p i -t xdijd-solar-fork "synced native libs from APK unzip $APK"
+            log -p i -t SolarRockbox "synced native libs from APK unzip $APK"
             exit 0
         fi
         rm -rf "$_tmp" 2>/dev/null

@@ -190,6 +190,8 @@ for p in \
     /app/XposedInstaller.apk \
     /app/SolarContextBridgeY2.apk \
     /app/SolarThemeFont.apk \
+    /app/SolarRockboxIme.apk \
+    /app/SolarRockboxCompat.apk \
     /app/SolarNotPipeBridge.apk \
     /app/io.github.gohoski.notpipe.apk \
     /etc/init.d/99XposedInit.sh; do
@@ -200,6 +202,12 @@ if ! debugfs_cat /etc/init.d/99XposedInit.sh | grep -q 'com.solar.launcher.xpose
 fi
 if ! debugfs_cat /etc/init.d/99XposedInit.sh | grep -q 'com.solar.launcher.xposed.bridge.y2'; then
     fail "99XposedInit.sh must enable com.solar.launcher.xposed.bridge.y2"
+fi
+if ! debugfs_cat /etc/init.d/99XposedInit.sh | grep -q 'com.solar.launcher.xposed.rockbox.ime'; then
+    fail "99XposedInit.sh must enable com.solar.launcher.xposed.rockbox.ime"
+fi
+if ! debugfs_cat /etc/init.d/99XposedInit.sh | grep -q 'com.solar.launcher.xposed.rockbox.compat'; then
+    fail "99XposedInit.sh must enable com.solar.launcher.xposed.rockbox.compat"
 fi
 if ! debugfs_cat /etc/init.d/99XposedInit.sh | grep -q 'com.solar.launcher.xposed.notpipe'; then
     fail "99XposedInit.sh must enable com.solar.launcher.xposed.notpipe"
