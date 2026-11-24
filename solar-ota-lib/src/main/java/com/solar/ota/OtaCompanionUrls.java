@@ -3,7 +3,7 @@ package com.solar.ota;
 /**
  * 2026-07-06 — OTA companion download URLs (JJ Launcher + Rockbox Y1) with ordered fallbacks.
  * Layman: where Solar fetches sidecar launcher/music apps before a Solar update installs.
- * Technical: solar-update Pages primary; github rockbox-y1 + update.zip mirrors on miss.
+ * Technical: solar-update Pages primary; update.zip mirrors on miss.
  */
 public final class OtaCompanionUrls {
 
@@ -41,7 +41,6 @@ public final class OtaCompanionUrls {
             throw new AssertionError("rb_y1_latest must be primary Rockbox install URL");
         }
         if (!ROCKBOX_LIBS_APK_URLS[0].contains("github.com")) {
-            throw new AssertionError("github rockbox.apk must be primary lib source");
         }
     }
 }

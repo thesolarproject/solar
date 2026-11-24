@@ -35,9 +35,6 @@ public final class RescueExecutor {
 
         // APK fallback — best-effort without root.
         if (ctx != null) {
-            if (rockbox.equals(foregroundPkg)) {
-                runShell("pm disable " + rockbox);
-            }
             runShell("am force-stop " + solar);
             Intent launch = ctx.getPackageManager().getLaunchIntentForPackage(solar);
             if (launch != null) {
