@@ -52,7 +52,7 @@ public class LauncherPreferenceTest {
             throw new AssertionError("unknown target should normalize to solar");
         }
         if (!"solar".equals(
-                LauncherPreference.normalizeHomeTarget("rockbox")) {
+                LauncherPreference.normalizeHomeTarget("rockbox"))) {
             throw new AssertionError("rockbox target should normalize to solar");
         }
         if (!LauncherDefault.TARGET_JJ.equals(
