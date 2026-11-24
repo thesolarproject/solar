@@ -255,8 +255,18 @@ public final class SolarHttp {
 
     /** True if a single URL answers HEAD/ranged GET (YouTube CDN stream preflight). */
     public static boolean isUrlReachable(String url) {
+        return isUrlReachable(url, 5, 8);
+    }
+
+    /** 2026-07-24 — Short-timeout reachability for YtApiLegacy direct_url failover. */
+    public static boolean isUrlReachable(String url, int connectSec, int readSec) {
         if (url == null || url.isEmpty()) return false;
-        return probeAnyReachable(new String[]{url});
+        OkHttpClient probe = TlsHelper.client().newBuilder()
+                .connectTimeout(connectSec, TimeUnit.SECONDS)
+                .readTimeout(readSec, TimeUnit.SECONDS)
+                .followRedirects(true)
+                .build();
+        return probeReachable(probe, url);
     }
 
     private static boolean probeReachable(OkHttpClient client, String urlStr) {

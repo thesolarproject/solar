@@ -113,11 +113,17 @@ public final class YtApiLegacyBackend implements YoutubeBackend {
     }
 
     @Override
-    public String getVideoUrl(String videoId, String quality) {
+    public String getVideoUrl(String videoId, String quality) throws IOException {
         String q = (quality != null && quality.length() > 0) ? quality : "360";
         // 2026-07-15 — Server redirects to progressive file; SolarHttp/IJK follow later.
-        return baseUrl + "/direct_url?video_id=" + YoutubeApiUtil.urlEncode(videoId)
+        String url = baseUrl + "/direct_url?video_id=" + YoutubeApiUtil.urlEncode(videoId)
                 + "&quality=" + YoutubeApiUtil.urlEncode(q);
+        // 2026-07-24 — Constructed URL is not proof host is alive; dead ytapilegacy seeds
+        // caused resolve to "succeed" then download fail. Probe before returning.
+        if (!SolarHttp.isUrlReachable(url, 4, 6)) {
+            throw new IOException("YtApiLegacy direct_url unreachable: " + baseUrl);
+        }
+        return url;
     }
 
     @Override

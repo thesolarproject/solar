@@ -156,36 +156,43 @@ public final class InstancePool {
     /**
      * notPipe: 360 → videoInstances (all); HQ → hqInstances only.
      * Always put YtApiLegacy first (deterministic progressive MP4 that works on Y1).
+     * 2026-07-24 — Cooling hosts go last so dead ytapilegacy seeds don't burn resolve budget.
      */
     private List<YoutubeBackend> streamOrder(boolean lowTier) {
-        List<YoutubeBackend> ytapi = new ArrayList<YoutubeBackend>();
-        List<YoutubeBackend> others = new ArrayList<YoutubeBackend>();
+        List<YoutubeBackend> ytapiWarm = new ArrayList<YoutubeBackend>();
+        List<YoutubeBackend> ytapiCool = new ArrayList<YoutubeBackend>();
+        List<YoutubeBackend> warm = new ArrayList<YoutubeBackend>();
+        List<YoutubeBackend> cool = new ArrayList<YoutubeBackend>();
         synchronized (lock) {
             for (int i = 0; i < all.size(); i++) {
                 YoutubeBackend b = all.get(i);
                 if (b == null) continue;
+                boolean cooling = isHostCooling(b);
                 if ("YtApiLegacy".equals(b.getName())) {
-                    ytapi.add(b);
+                    (cooling ? ytapiCool : ytapiWarm).add(b);
                 } else if (lowTier) {
                     // 360 pool: any that supports progressive 360
-                    if (b.supportsVideo360() || b.supportsHqVideo()) others.add(b);
+                    if (b.supportsVideo360() || b.supportsHqVideo()) {
+                        (cooling ? cool : warm).add(b);
+                    }
                 } else {
-                    // HQ pool: only progressive-quality backends (YtApi / rich hosts)
+                    // HQ pool: only progressive-quality backends (YtApi / rich hosts); Invidious 360-muxed only.
                     if (b.supportsHqVideo() && !"Invidious".equals(b.getName())) {
-                        // Invidious is 360-muxed only in notPipe (Manager never puts it in hqInstances).
-                        others.add(b);
-                    } else if (b.supportsHqVideo() && "Invidious".equals(b.getName())) {
-                        // skip Invidious for 480/720
-                    } else if (b.supportsHqVideo()) {
-                        others.add(b);
+                        (cooling ? cool : warm).add(b);
                     }
                 }
             }
         }
-        Collections.shuffle(ytapi, RANDOM);
-        Collections.shuffle(others, RANDOM);
-        List<YoutubeBackend> order = new ArrayList<YoutubeBackend>(ytapi);
-        order.addAll(others);
+        Collections.shuffle(ytapiWarm, RANDOM);
+        Collections.shuffle(ytapiCool, RANDOM);
+        Collections.shuffle(warm, RANDOM);
+        Collections.shuffle(cool, RANDOM);
+        List<YoutubeBackend> order = new ArrayList<YoutubeBackend>(
+                ytapiWarm.size() + warm.size() + ytapiCool.size() + cool.size());
+        order.addAll(ytapiWarm);
+        order.addAll(warm);
+        order.addAll(ytapiCool);
+        order.addAll(cool);
         return order;
     }
 
