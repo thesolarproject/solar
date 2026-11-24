@@ -167,7 +167,6 @@ public final class LauncherSwitch {
     /** Re-apply stored HOME target on boot — respects Switch to Rockbox / switch-to-stock script. */
     public static void ensurePreferredHome(final Context context) {
         if (context == null) return;
-        if (!RockboxDisable.isSolarEnabled(context)) return;
         final String target = LauncherPreference.getHomeTarget(context);
         new Thread(new Runnable() {
             @Override
@@ -184,11 +183,10 @@ public final class LauncherSwitch {
 
     /**
      * While Solar MainActivity is active, prefer Solar HOME and pm-disable Rockbox.
-     * 2026-07-05 — skip via {@link RockboxRestartGrace} when Rockbox HOME and crash fallback.
+     * 2026-07-05 — keep Solar HOME while MainActivity is active.
      */
     public static void ensureSolarPreferredHome(final Context context) {
         if (context == null) return;
-        if (!RockboxDisable.isSolarEnabled(context)) return;
         new Thread(new Runnable() {
             @Override
             public void run() {
