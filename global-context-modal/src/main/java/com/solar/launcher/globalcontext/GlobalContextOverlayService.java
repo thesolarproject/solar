@@ -640,12 +640,6 @@ public final class GlobalContextOverlayService extends Service {
         ArrayList<String> targets = new ArrayList<String>();
         labels.add("Solar");
         targets.add(HomeTargetPolicy.TARGET_SOLAR);
-        // 2026-07-11 — Rockbox only when Solar Debug experiment sysprop is on.
-        if (isPackageInstalled(HomeTargetPolicy.ROCKBOX_PKG)
-                && "1".equals(SysPropHelper.get("sys.solar.rockbox.experiment", "0"))) {
-            labels.add("Rockbox");
-            targets.add(HomeTargetPolicy.TARGET_ROCKBOX);
-        }
         if (isPackageInstalled(HomeTargetPolicy.JJ_PKG)) {
             labels.add("JJ Launcher");
             targets.add(HomeTargetPolicy.TARGET_JJ);

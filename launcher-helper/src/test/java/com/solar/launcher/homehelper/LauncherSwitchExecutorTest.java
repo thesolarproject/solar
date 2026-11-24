@@ -17,7 +17,7 @@ public class LauncherSwitchExecutorTest {
     @Test
     public void normalizeSwitchArgMapsKnownTargets() {
         assertEquals("rockbox",
-                LauncherSwitchExecutor.normalizeSwitchArg(HomeTargetPolicy.TARGET_ROCKBOX));
+                LauncherSwitchExecutor.normalizeSwitchArg("rockbox"));
         assertEquals("jj",
                 LauncherSwitchExecutor.normalizeSwitchArg(HomeTargetPolicy.TARGET_JJ));
         assertEquals("stock",

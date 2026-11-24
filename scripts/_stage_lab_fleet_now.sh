@@ -109,7 +109,6 @@ clean_deprecated() {
   # One su script — avoids N× hung pm uninstall timeouts on missing packages.
   local wrong_rm="" wrong_pm=""
   if [[ "$fam" == "y1" ]]; then
-    wrong_rm="/system/app/SolarContextBridgeY2.apk /system/app/SolarRockboxCompat.apk"
     wrong_pm="com.solar.launcher.xposed.bridge.y2 com.solar.launcher.xposed.rockbox.compat"
   else
     wrong_rm="/system/app/SolarContextBridgeY1.apk"
@@ -134,7 +133,6 @@ enable_production_modules() {
     bridge_apk="/system/app/SolarContextBridgeY1.apk"
   fi
   theme_apk="/system/app/SolarThemeFont.apk"
-  ime_apk="/system/app/SolarRockboxIme.apk"
 
   echo "  seed Xposed production modules ($bridge_pkg)"
   # Build enabled prefs + modules.list from scratch for consistency.
@@ -146,7 +144,6 @@ enable_production_modules() {
   list_body="$bridge_apk\n$theme_apk\n$ime_apk\n"
   if [[ "$fam" == "y2" ]]; then
     xml+="    <int name=\"com.solar.launcher.xposed.rockbox.compat\" value=\"1\" />\n"
-    list_body+="/system/app/SolarRockboxCompat.apk\n"
   fi
   xml+="</map>\n"
 
@@ -205,16 +202,12 @@ stage_one() {
   if [[ "$fam" == "y2" ]]; then
     install_system_apk "$tid" "$ASSETS/xposed/SolarContextBridgeY2.apk" \
       /system/app/SolarContextBridgeY2.apk com.solar.launcher.xposed.bridge.y2
-    install_system_apk "$tid" "$ASSETS/xposed/SolarRockboxCompat.apk" \
-      /system/app/SolarRockboxCompat.apk com.solar.launcher.xposed.rockbox.compat
   else
     install_system_apk "$tid" "$ASSETS/xposed/SolarContextBridgeY1.apk" \
       /system/app/SolarContextBridgeY1.apk com.solar.launcher.xposed.bridge.y1
   fi
   install_system_apk "$tid" "$ASSETS/xposed/SolarThemeFont.apk" \
     /system/app/SolarThemeFont.apk com.solar.launcher.xposed.themefont
-  install_system_apk "$tid" "$ASSETS/xposed/SolarRockboxIme.apk" \
-    /system/app/SolarRockboxIme.apk com.solar.launcher.xposed.rockbox.ime
   install_system_apk "$tid" "$ASSETS/companion/SolarHomeHelper.apk" \
     /system/app/SolarHomeHelper.apk com.solar.launcher.homehelper
   install_system_apk "$tid" "$ASSETS/companion/SolarGlobalContextModal.apk" \

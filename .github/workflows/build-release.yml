@@ -111,8 +111,6 @@ jobs:
           fi
           # Y2 base required — jj_auto y2-test (override via SOLAR_Y2_BASE_ZIP / vars)
           curl -fsSIL -o /dev/null "https://github.com/ryan-specter/jj_auto/releases/download/y2-test/rom_y2.zip"
-          # Rockbox asset cache still pulled from rockbox-y1 type-a-base (org.rockbox for Y1 heal / Y2 prep)
-          curl -fsSIL -o /dev/null "https://github.com/rockbox-y1/rockbox/releases/download/type-a-base/rom.zip"
           if curl -fsSIL -o /dev/null "https://github.com/y1-community/a5-ata-rom/releases/download/0.1/rom_a5.zip"; then
             echo "A5 ATA base URL OK"
           else
@@ -129,7 +127,7 @@ jobs:
           test -f solar-rom/vendor/xposed/solar-context-bridge/SolarContextBridgeY1.apk || ./solar-rom/scripts/build-context-bridge-apk.sh
           test -f solar-rom/vendor/xposed/solar-context-bridge/SolarContextBridgeY2.apk || ./solar-rom/scripts/build-context-bridge-apk.sh
           test -f solar-rom/vendor/xposed/solar-theme-font/SolarThemeFont.apk || ./solar-rom/scripts/build-theme-font-apk.sh
-          echo "ROM base sources OK (Y1 A/B + Y2 + A5 wired; soft-skip ATA bases until public; rockbox-y1 for Rockbox assets)"
+          echo "ROM base sources OK (Y1 A/B + Y2 + A5 wired; soft-skip ATA bases until public)"
 
       - name: Decode platform signing keys
         env:
@@ -146,8 +144,8 @@ jobs:
           echo "SOLAR_PLATFORM_KEY_PK8=$GITHUB_WORKSPACE/.ci-keys/platform.pk8" >> "$GITHUB_ENV"
           echo "SOLAR_PLATFORM_KEY_PEM=$GITHUB_WORKSPACE/.ci-keys/platform.x509.pem" >> "$GITHUB_ENV"
 
-      # 2026-07-16 — Rockbox Y2 patch + release APK need .gradle/platform.keystore before asset sync.
-      - name: Build platform.keystore for APK / Rockbox signing
+      # 2026-07-16 — release APK needs .gradle/platform.keystore before asset sync.
+      - name: Build platform.keystore for APK signing
         run: |
           chmod +x scripts/ensure-platform-keystore.sh scripts/env.sh
           ./scripts/ensure-platform-keystore.sh

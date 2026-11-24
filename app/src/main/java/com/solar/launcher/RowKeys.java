@@ -50,16 +50,13 @@ public final class RowKeys {
     public static final String USB_AUTO_CONNECT = "settings.usb_auto_connect";
     public static final String USB_SUPPRESS_PROMPT = "settings.usb_suppress_prompt";
     public static final String USB_TURN_ON = "settings.usb_turn_on";
-    public static final String SWITCH_ROCKBOX = "settings.switch_rockbox";
     public static final String HOME_LAUNCHER = "settings.home_launcher";
     public static final String HOME_LAUNCHER_STATUS = "settings.home_launcher.status";
     public static final String HOME_LAUNCHER_TO_SOLAR = "settings.home_launcher.to_solar";
-    public static final String HOME_LAUNCHER_TO_ROCKBOX = "settings.home_launcher.to_rockbox";
     public static final String HOME_LAUNCHER_TO_JJ = "settings.home_launcher.to_jj";
     /** 2026-07-08 — Settings row for Stock (Innioasis) HOME. */
     public static final String HOME_LAUNCHER_TO_STOCK = "settings.home_launcher.to_stock";
     public static final String RESET = "settings.reset";
-    public static final String RESET_ROCKBOX = "settings.reset.rockbox";
     public static final String RESET_SOLAR = "settings.reset.solar";
     public static final String RESET_THEMES = "settings.reset.themes";
     public static final String RESET_MICROSD = "settings.reset.microsd";
@@ -137,7 +134,6 @@ public final class RowKeys {
     /** 2026-07-14 — YouTube hub kill switch (default on); Debug can hide Videos → YouTube. */
     public static final String DEBUG_YOUTUBE_EXPERIMENT = "settings.debug.youtube_experiment";
     /** 2026-07-11 — Rockbox-Y1 install + HOME switch; off by default (Y2 uses Y1 APK + compat module). */
-    public static final String DEBUG_ROCKBOX_EXPERIMENT = "settings.debug.rockbox_experiment";
     public static final String DEBUG_PLEX_EXPERIMENT = "settings.debug.plex_experiment";
     /** 2026-07-14 — Jellyfin music client; off by default until enabled in Debug. */
     public static final String DEBUG_JELLYFIN_EXPERIMENT = "settings.debug.jellyfin_experiment";
@@ -322,14 +318,11 @@ public final class RowKeys {
         if (USB_AUTO_CONNECT.equals(rowKey)) return R.string.settings_usb_auto_connect;
         if (USB_SUPPRESS_PROMPT.equals(rowKey)) return R.string.settings_usb_suppress_prompt;
         if (USB_TURN_ON.equals(rowKey)) return R.string.settings_usb_turn_on;
-        if (SWITCH_ROCKBOX.equals(rowKey)) return R.string.settings_switch_rockbox;
         if (HOME_LAUNCHER.equals(rowKey)) return R.string.settings_home_launcher;
         if (HOME_LAUNCHER_TO_SOLAR.equals(rowKey)) return R.string.settings_home_launcher_switch_solar;
-        if (HOME_LAUNCHER_TO_ROCKBOX.equals(rowKey)) return R.string.settings_home_launcher_switch_rockbox;
         if (HOME_LAUNCHER_TO_JJ.equals(rowKey)) return R.string.settings_home_launcher_switch_jj;
         if (HOME_LAUNCHER_TO_STOCK.equals(rowKey)) return R.string.settings_home_launcher_switch_stock;
         if (RESET.equals(rowKey)) return R.string.settings_reset;
-        if (RESET_ROCKBOX.equals(rowKey)) return R.string.settings_reset_rockbox;
         if (RESET_SOLAR.equals(rowKey)) return R.string.settings_reset_solar;
         if (RESET_THEMES.equals(rowKey)) return R.string.settings_reset_themes;
         if (RESET_MICROSD.equals(rowKey)) return R.string.settings_reset_microsd;
@@ -384,7 +377,6 @@ public final class RowKeys {
         if (DEBUG_BLUETOOTH_EXPERIMENT.equals(rowKey)) return R.string.settings_debug_bluetooth_experiment;
         if (DEBUG_RADIO_EXPERIMENT.equals(rowKey)) return R.string.settings_debug_radio_experiment;
         if (DEBUG_YOUTUBE_EXPERIMENT.equals(rowKey)) return R.string.settings_debug_youtube_experiment;
-        if (DEBUG_ROCKBOX_EXPERIMENT.equals(rowKey)) return R.string.settings_debug_rockbox_experiment;
         if (DEBUG_PLEX_EXPERIMENT.equals(rowKey)) return R.string.settings_debug_plex_experiment;
         if (DEBUG_JELLYFIN_EXPERIMENT.equals(rowKey)) return R.string.settings_debug_jellyfin_experiment;
         if (DEBUG_A5_LANDSCAPE_EXPERIMENT.equals(rowKey)) {

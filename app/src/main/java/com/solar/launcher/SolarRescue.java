@@ -14,7 +14,6 @@ public final class SolarRescue {
 
     private static final String PROP_HOME_TARGET = "persist.solar.home.target";
     private static final String SOLAR_PKG = "com.solar.launcher";
-    private static final String ROCKBOX_PKG = LauncherSwitch.ROCKBOX_PACKAGE;
 
     private SolarRescue() {}
 
@@ -41,12 +40,9 @@ public final class SolarRescue {
         sb.append("setprop ").append(ExternalInputHandoff.HANDOFF_ACTIVE_PROPERTY).append(" 0; ");
         if (foregroundPkg != null && foregroundPkg.length() > 0
                 && !isRescueAllowlisted(foregroundPkg)
-                && !ROCKBOX_PKG.equals(foregroundPkg)
                 && !LauncherDefault.JJ_PACKAGE.equals(foregroundPkg)) {
             sb.append("am force-stop ").append(shellQuote(foregroundPkg)).append("; ");
         }
-        sb.append("am force-stop ").append(ROCKBOX_PKG).append("; ");
-        sb.append("pm disable ").append(ROCKBOX_PKG).append("; ");
         sb.append("am force-stop ").append(LauncherDefault.JJ_PACKAGE).append("; ");
         sb.append("pm disable ").append(LauncherDefault.JJ_PACKAGE).append("; ");
         sb.append("setprop ").append(PROP_HOME_TARGET).append(" solar; ");

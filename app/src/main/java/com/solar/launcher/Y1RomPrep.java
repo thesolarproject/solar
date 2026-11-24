@@ -45,18 +45,10 @@ public final class Y1RomPrep {
                     int patched = 0;
                     patched += patchSwitchScript(context, "y1/switch-to-stock.sh",
                             "/data/data/switch-to-stock.sh") ? 1 : 0;
-                    patched += patchSwitchScript(context, "y1/switch-to-rockbox.sh",
-                            "/data/data/switch-to-rockbox.sh") ? 1 : 0;
                     patched += patchSwitchScript(context, "y1/switch-to-stock.sh",
                             "/system/etc/solar/switch-to-stock.sh") ? 1 : 0;
-                    patched += patchSwitchScript(context, "y1/switch-to-rockbox.sh",
-                            "/system/etc/solar/switch-to-rockbox.sh") ? 1 : 0;
-                    patched += patchSwitchScript(context, "y1/sync-rockbox-libs.sh",
-                            "/system/etc/solar/sync-rockbox-libs.sh") ? 1 : 0;
                     patched += patchSwitchScript(context, "y1/sync-y1-keymap.sh",
                             "/system/etc/solar/sync-y1-keymap.sh") ? 1 : 0;
-                    patched += patchSwitchScript(context, "y1/disable-rockbox-for-solar.sh",
-                            "/system/etc/solar/disable-rockbox-for-solar.sh") ? 1 : 0;
                     patched += patchSwitchScript(context, "y1/apply-preferred-home-boot.sh",
                             "/system/etc/solar/apply-preferred-home-boot.sh") ? 1 : 0;
                     patched += patchSwitchScript(context, "y1/solar-launcher-exec.sh",
@@ -82,15 +74,10 @@ public final class Y1RomPrep {
                         patched += patchSwitchScript(context, "y1/Y2-Rockbox.kl",
                                 "/system/etc/solar/Y2-Rockbox.kl") ? 1 : 0;
                     }
-                    RockboxCoexistence.ensureOnSolarStart(context);
-                    RockboxDisable.ensureOnce(context);
-                    LauncherSwitch.assertRockboxDisabledWhileSolarHome(context);
-                    // 2026-07-08 — Also chmod /data/data/solar-launcher-exec.sh (Rockbox delegates here).
-                    runSu("chmod 755 /data/data/switch-to-stock.sh /data/data/switch-to-rockbox.sh "
+                    runSu("chmod 755 /data/data/switch-to-stock.sh "
                             + "/data/data/solar-launcher-exec.sh "
-                            + "/system/etc/solar/switch-to-stock.sh /system/etc/solar/switch-to-rockbox.sh "
-                            + "/system/etc/solar/sync-rockbox-libs.sh /system/etc/solar/sync-y1-keymap.sh "
-                            + "/system/etc/solar/disable-rockbox-for-solar.sh "
+                            + "/system/etc/solar/switch-to-stock.sh "
+                            + "/system/etc/solar/sync-y1-keymap.sh "
                             + "/system/etc/solar/apply-preferred-home-boot.sh "
                             + "/system/etc/solar/solar-launcher-exec.sh "
                             + "/system/etc/solar/solar-platform-daemon.sh "
@@ -100,7 +87,7 @@ public final class Y1RomPrep {
                             + "2>/dev/null; chmod 644 /system/etc/solar/Y1-Rockbox.kl /system/etc/solar/Y2-Rockbox.kl "
                             + "/system/etc/solar/mtk-kpd.y1.stock.kl 2>/dev/null");
                     Log.i(TAG, "patched " + patched + "/4 switch script paths"
-                            + (legacy ? " (replaced legacy rockbox-y1 script)" : ""));
+                            + (legacy ? "" : ""));
                     // #region agent log
                     try {
                         JSONObject d = new JSONObject();
@@ -115,8 +102,6 @@ public final class Y1RomPrep {
                     Log.w(TAG, "switch script patch failed: " + e.getMessage());
                 }
     }
-
-    /** True when rockbox-y1 base script (reboot / keylayout swap) is still present. */
     static boolean isLegacyRockboxSwitchScript(String path) {
         File f = new File(path);
         if (!f.isFile()) return false;

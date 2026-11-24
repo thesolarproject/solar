@@ -198,38 +198,7 @@ public final class PowerActions {
      */
     public static void switchToRockbox(final Context ctx) {
         if (ctx == null) return;
-        // 2026-07-11 — Rockbox HOME switch is Debug experiment only.
-        if (!RockboxExperiment.isEnabled(ctx) && !RockboxExperiment.isEnabledFromSysprop()) {
-            Toast.makeText(ctx, R.string.dialog_rockbox_unavailable, Toast.LENGTH_SHORT).show();
-            return;
-        }
-        if (!LauncherSwitch.isRockboxAvailable(ctx)) {
-            Toast.makeText(ctx, R.string.dialog_rockbox_unavailable, Toast.LENGTH_SHORT).show();
-            return;
-        }
-        if (!LauncherSwitch.isRockboxInstalled(ctx) && !LauncherSwitch.ensureRockboxRegistered(ctx)) {
-            Toast.makeText(ctx, R.string.dialog_rockbox_not_registered, Toast.LENGTH_LONG).show();
-            return;
-        }
-        final boolean helperOk = isHelperInstalled(ctx);
-        LauncherHelperClient.applyHomeTarget(ctx, LauncherDefault.TARGET_ROCKBOX, "overlay");
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                LauncherPreference.applyHomeTarget(ctx, LauncherDefault.TARGET_ROCKBOX);
-                if (ctx.getApplicationContext() != null) {
-                    RockboxCoexistence.prepareForRockboxSwitch(ctx.getApplicationContext());
-                }
-                if (helperOk) {
-                    // Helper broadcast already queued solar-launcher-exec.sh switch rockbox.
-                    return;
-                }
-                final boolean ok = LauncherSwitch.switchToRockbox(ctx.getApplicationContext());
-                if (!ok) {
-                    toastOnMain(ctx, R.string.dialog_rockbox_failed);
-                }
-            }
-        }, "RockboxSwitch").start();
+        Toast.makeText(ctx, R.string.dialog_rockbox_unavailable, Toast.LENGTH_SHORT).show();
     }
 
     /**

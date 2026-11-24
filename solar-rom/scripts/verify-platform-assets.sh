@@ -12,8 +12,6 @@ die() { echo "verify-platform-assets: $*" >&2; exit 1; }
 [ -f "$DST/xposed/SolarContextBridgeY1.apk" ] || die "missing SolarContextBridgeY1.apk asset"
 [ -f "$DST/xposed/SolarContextBridgeY2.apk" ] || die "missing SolarContextBridgeY2.apk asset"
 [ -f "$DST/xposed/SolarThemeFont.apk" ] || die "missing SolarThemeFont.apk asset"
-[ -f "$DST/xposed/SolarRockboxIme.apk" ] || die "missing SolarRockboxIme.apk asset"
-[ -f "$DST/xposed/SolarRockboxCompat.apk" ] || die "missing SolarRockboxCompat.apk asset"
 # 2026-07-15 — Native Solar YouTube; NotPipe + bridge no longer in APK self-heal kit.
 # Was: require SolarNotPipeBridge.apk + notPipe-0.3.0-release.apk (sync now deletes them).
 # A5 ROM may still bake upstream notPipe separately — not an APK platform asset.

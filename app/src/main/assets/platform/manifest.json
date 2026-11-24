@@ -52,24 +52,6 @@
       "sha256": "3272b63acedc8869377de868e8916e2c5a268f11b7d0496856329539f25e16c8"
     },
     {
-      "pkg": "com.solar.launcher.xposed.rockbox.ime",
-      "asset": "xposed/SolarRockboxIme.apk",
-      "systemApk": "/system/app/SolarRockboxIme.apk",
-      "required": true,
-      "device": "both",
-      "versionCode": 1,
-      "sha256": "1c1d745881efa3964ca0117b407919aa2ac0613d66f2c0e70abc72f2f481ac68"
-    },
-    {
-      "pkg": "com.solar.launcher.xposed.rockbox.compat",
-      "asset": "xposed/SolarRockboxCompat.apk",
-      "systemApk": "/system/app/SolarRockboxCompat.apk",
-      "required": true,
-      "device": "y2",
-      "versionCode": 1,
-      "sha256": "f43d3022efdeb88e4429d9e483a8b10516c0795b901ec0bff6e251ae9c2b19a1"
-    },
-    {
       "pkg": "com.solar.launcher.globalcontext",
       "asset": "companion/SolarGlobalContextModal.apk",
       "systemApk": "/system/app/SolarGlobalContextModal.apk",

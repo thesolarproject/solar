@@ -39,15 +39,12 @@ timeout 8 "${ADB[@]}" get-state >/dev/null 2>&1 || { echo "error: no adb device"
 MODEL=$(timeout 8 "${ADB[@]}" shell getprop ro.product.model 2>/dev/null | tr -d '\r')
 LANG=$(timeout 8 "${ADB[@]}" shell getprop persist.sys.language 2>/dev/null | tr -d '\r')
 SOLAR_VER=$(timeout 12 "${ADB[@]}" shell dumpsys package com.solar.launcher 2>/dev/null | grep versionName | head -1 | tr -d '\r' || true)
-RB_PM=$(timeout 8 "${ADB[@]}" shell pm path org.rockbox 2>/dev/null | tr -d '\r' || true)
-RB_DISABLED=$(timeout 8 "${ADB[@]}" shell pm list packages -d 2>/dev/null | grep org.rockbox || true)
 
 debug_rom_log "D" "audit-device-parity.sh:boot" "device snapshot" \
-    "model=$MODEL" "language=$LANG" "solar=$SOLAR_VER" "rockbox_pm=$RB_PM" "rockbox_disabled=${RB_DISABLED:+yes}"
+    "model=$MODEL" "language=$LANG" "solar=$SOLAR_VER"
 
 errors=0
 check_file /system/app/com.solar.launcher.apk solar_apk || errors=$((errors + 1))
-check_file /system/app/org.rockbox.apk rockbox_apk || errors=$((errors + 1))
 check_file /system/xbin/su su_xbin || errors=$((errors + 1))
 check_file /system/etc/init.d/99SuperSUDaemon su_daemon || errors=$((errors + 1))
 check_file /system/etc/install-recovery.sh install_recovery || errors=$((errors + 1))
@@ -66,12 +63,8 @@ else
     BRIDGE_PKG="$XPOSED_CONTEXT_BRIDGE_Y1_PKG"
 fi
 check_file /system/app/SolarThemeFont.apk theme_font || errors=$((errors + 1))
-check_file /system/app/SolarRockboxIme.apk rockbox_ime || errors=$((errors + 1))
 check_file /system/app/SolarNotPipeBridge.apk notpipe_bridge || errors=$((errors + 1))
 check_file /system/app/io.github.gohoski.notpipe.apk notpipe_apk || errors=$((errors + 1))
-if [ "$MODEL" = "Y2" ]; then
-    check_file /system/app/SolarRockboxCompat.apk rockbox_compat || errors=$((errors + 1))
-fi
 
 xposed_app_process_ok=0
 if xposed_app_process_active_via_adb 2>/dev/null; then
@@ -104,28 +97,12 @@ if [ "$xposed_app_process_ok" -eq 1 ]; then
         echo "  FAIL Xposed theme font module not enabled — run 99XposedInit.sh or XposedModuleEnsurer" >&2
         errors=$((errors + 1))
     fi
-    if adb_sh "su -c 'grep -q \"$XPOSED_ROCKBOX_IME_PKG\" /data/data/de.robv.android.xposed.installer/shared_prefs/enabled_modules.xml 2>/dev/null && echo yes'" \
-            2>/dev/null | tr -d '\r' | grep -q yes; then
-        echo "  OK Xposed Rockbox IME module enabled ($XPOSED_ROCKBOX_IME_PKG)"
-    else
-        echo "  FAIL Xposed Rockbox IME module not enabled — run 99XposedInit.sh or XposedModuleEnsurer" >&2
-        errors=$((errors + 1))
-    fi
     if adb_sh "su -c 'grep -q \"$XPOSED_NOTPIPE_BRIDGE_PKG\" /data/data/de.robv.android.xposed.installer/shared_prefs/enabled_modules.xml 2>/dev/null && echo yes'" \
             2>/dev/null | tr -d '\r' | grep -q yes; then
         echo "  OK Xposed NotPipe bridge module enabled ($XPOSED_NOTPIPE_BRIDGE_PKG)"
     else
         echo "  FAIL Xposed NotPipe bridge module not enabled — run 99XposedInit.sh or XposedModuleEnsurer" >&2
         errors=$((errors + 1))
-    fi
-    if [ "$MODEL" = "Y2" ]; then
-        if adb_sh "su -c 'grep -q \"$XPOSED_ROCKBOX_COMPAT_PKG\" /data/data/de.robv.android.xposed.installer/shared_prefs/enabled_modules.xml 2>/dev/null && echo yes'" \
-                2>/dev/null | tr -d '\r' | grep -q yes; then
-            echo "  OK Xposed Rockbox compat module enabled ($XPOSED_ROCKBOX_COMPAT_PKG)"
-        else
-            echo "  FAIL Xposed Rockbox compat module not enabled — run 99XposedInit.sh or XposedModuleEnsurer" >&2
-            errors=$((errors + 1))
-        fi
     fi
     if adb_sh "su -c 'grep -q \"SolarContextBridge\" /data/data/de.robv.android.xposed.installer/conf/modules.list 2>/dev/null && echo yes'" \
             2>/dev/null | tr -d '\r' | grep -q yes; then
@@ -160,21 +137,6 @@ elif check_file /system/etc/solar/Y1-Rockbox.kl y1_kl; then
     :
 else
     errors=$((errors + 1))
-fi
-
-if [ -z "$RB_PM" ]; then
-    if adb_sh "[ -f /system/app/org.rockbox.apk ] && echo yes || echo no" 2>/dev/null | tr -d '\r' | grep -q yes; then
-        debug_rom_log "B" "audit-device-parity.sh:rockbox" "apk on system but not in PM (sharedUserId/patch issue?)"
-        echo "  WARN /system/app/org.rockbox.apk exists but pm path empty — Y2 patch may be missing"
-        errors=$((errors + 1))
-    else
-        debug_rom_log "B" "audit-device-parity.sh:rockbox" "org.rockbox absent on device"
-        errors=$((errors + 1))
-    fi
-elif [ -n "$RB_DISABLED" ]; then
-    debug_rom_log "B" "audit-device-parity.sh:rockbox" "org.rockbox pm-disabled (expected for Solar default)" \
-        "note=Switch to Rockbox re-enables"
-    echo "  NOTE org.rockbox disabled by Solar first-boot (file may still be on /system/app)"
 fi
 
 if [ "$LANG" != "en" ]; then

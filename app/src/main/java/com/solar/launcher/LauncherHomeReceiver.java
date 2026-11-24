@@ -30,8 +30,8 @@ public final class LauncherHomeReceiver extends BroadcastReceiver {
             applyShellMirroredPrefs(context, target, intent);
             return;
         }
-        if (LauncherDefault.TARGET_ROCKBOX.equals(target)) {
-            LauncherPreference.applyHomeTarget(context, LauncherDefault.TARGET_ROCKBOX);
+        if ("rockbox".equals(target)) {
+            LauncherPreference.applyHomeTarget(context, "rockbox");
         } else if (LauncherDefault.TARGET_JJ.equals(target)) {
             LauncherPreference.applyHomeTarget(context, LauncherDefault.TARGET_JJ);
         } else if (LauncherDefault.TARGET_STOCK.equals(target)) {

@@ -33,19 +33,18 @@ public final class ExternalInputHandoff {
 
     static final String FM_RADIO_PACKAGE = "com.mediatek.FMRadio";
     private static final String SOLAR_PACKAGE = "com.solar.launcher";
-    private static final String ROCKBOX_PACKAGE = "org.rockbox";
     /** Read by solar-context-bridge — skip center swallow+re-inject while wheel handoff injects. */
     public static final String HANDOFF_ACTIVE_PROPERTY = "sys.solar.handoff.active";
     /** 2026-07-06 — JJ in-process Xposed shim gate (persist.solar.jj.xposed_shim=1). */
     public static final String JJ_HANDOFF_PROPERTY = "sys.solar.handoff.jj";
 
-    /** Rockbox INJECT_INPUT_EVENT_MODE_ASYNC — reference MediaButtonReceiver line 141. */
+    /** INJECT_INPUT_EVENT_MODE_ASYNC — reference MediaButtonReceiver line 141. */
     private static final int INJECT_INPUT_EVENT_MODE_ASYNC = 0;
 
     private ExternalInputHandoff() {}
 
     /**
-     * Rockbox dpad_mode equivalent. Static so the manifest MediaBtnReceiver keeps remapping even
+     * Wheel handoff equivalent. Static so the manifest MediaBtnReceiver keeps remapping even
      * when MainActivity was destroyed (LMK while a stock app is foreground).
      */
     private static volatile int dpadMode = MODE_OFF;
@@ -271,7 +270,7 @@ public final class ExternalInputHandoff {
 
     /**
      * Full receiver-side remap: MEDIA key → synthetic DPAD tap while a stock app is focused.
-     * Activity-independent (Rockbox MediaButtonReceiver parity). Returns true when the event was
+     * Activity-independent (MediaButtonReceiver parity). Returns true when the event was
      * consumed by the handoff and the ordered broadcast should be aborted.
      */
     public static boolean handleMediaButton(Context context, KeyEvent event, boolean activityAlive) {
@@ -392,7 +391,7 @@ public final class ExternalInputHandoff {
             // #endregion
             return false;
         }
-        // Rockbox-Y1 verbatim: inject synthetic DOWN+UP only when the hardware key is released.
+        // Verbatim: inject synthetic DOWN+UP only when the hardware key is released.
         if (event.getAction() == KeyEvent.ACTION_UP) {
             if (event.getRepeatCount() > 0) {
                 return true;
@@ -576,8 +575,8 @@ public final class ExternalInputHandoff {
 
     public static int resolveModeForForegroundPackage(String packageName) {
         if (packageName == null || packageName.isEmpty()) return MODE_OFF;
-        if (SOLAR_PACKAGE.equals(packageName) || ROCKBOX_PACKAGE.equals(packageName)) return MODE_OFF;
-        // 2026-07-08 — JJ + stock Innioasis HOME share Y1-Rockbox.kl → MODE_JJ wheel inject.
+        if (SOLAR_PACKAGE.equals(packageName)) return MODE_OFF;
+        // 2026-07-08 — JJ + stock Innioasis HOME share Y1 wheel keylayout → MODE_JJ wheel inject.
         // Reversal: blanket com.innioasis.* → MODE_OFF; MODE_JJ for com.themoon.y1 only.
         if (com.solar.input.policy.GlobalInputPolicy.isJjKeylayoutLauncher(packageName)) {
             return MODE_JJ;
@@ -625,7 +624,6 @@ public final class ExternalInputHandoff {
         MediaButtonRegistrar.ensureRegistered(context);
         armFastInjector(context);
         syncJjHandoffProperty(true);
-        RockboxForegroundMonitor.ensureStarted(context);
     }
 
     private static void syncJjHandoffProperty(boolean jj) {
@@ -699,7 +697,7 @@ public final class ExternalInputHandoff {
     /**
      * 2026-07-08 — JJ + stock Innioasis HOME expect DPAD 21/22 for wheel.
      * Layman: turn Play/Pause wheel ticks into left/right for factory and JJ menus.
-     * Technical: Y1-Rockbox.kl maps wheel 105/106→MEDIA_PLAY/PAUSE; stock mtk-kpd often used
+     * Technical: Y1 wheel keylayout maps wheel 105/106→MEDIA_PLAY/PAUSE; stock mtk-kpd often used
      * DPAD_UP/DOWN — legacyHardwareToDpad covers that. Do not edit .kl scancode lines.
      * Note (hardware): stock Y2 wheel axis (LEFT/RIGHT vs UP/DOWN) still needs a device check
      * before splitting MODE_JJ by family — until then Y1+Y2 share this table.
@@ -760,7 +758,7 @@ public final class ExternalInputHandoff {
 
     /**
      * Synthetic DPAD tap to the focused (stock) window. Three tiers, fastest first:
-     *   1. Direct InputManager inject — Rockbox path, microseconds, but only when INJECT_EVENTS is
+     *   1. Direct InputManager inject — direct inject path, microseconds, but only when INJECT_EVENTS is
      *      actually granted (platform-signed Y1 ROM). ASYNC reports success even when denied, so we
      *      must gate on canInjectEvents up front rather than trusting the return.
      *   2. Session-scoped root injector daemon — Y2 fast path (VM already booted, ~ms per key).
@@ -785,8 +783,8 @@ public final class ExternalInputHandoff {
         // Tier 1: privileged direct inject (Y1 platform-signed builds).
         if (canInjectEvents(context)) {
             long now = SystemClock.uptimeMillis();
-            injectKeyEvent(context, rockboxStyleKeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode));
-            injectKeyEvent(context, rockboxStyleKeyEvent(now + 20, now + 20, KeyEvent.ACTION_UP, keyCode));
+            injectKeyEvent(context, syntheticDpadKeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode));
+            injectKeyEvent(context, syntheticDpadKeyEvent(now + 20, now + 20, KeyEvent.ACTION_UP, keyCode));
             Log.d(TAG, "simulating dpad: " + keyCode);
             // #region agent log
             try {
@@ -884,15 +882,15 @@ public final class ExternalInputHandoff {
         // intentional no-op — RootKeyInjector is prewarmed at boot, not per handoff session
     }
 
-    /** Match org.rockbox.Helper.MediaButtonReceiver synthetic DPAD taps. */
-    private static KeyEvent rockboxStyleKeyEvent(long downTime, long eventTime, int action, int keyCode) {
+    /** Match legacy synthetic DPAD tap shape. */
+    private static KeyEvent syntheticDpadKeyEvent(long downTime, long eventTime, int action, int keyCode) {
         return new KeyEvent(downTime, eventTime, action, keyCode, 0);
     }
 
     /** Reflection Method cached after first lookup — no per-event getMethod cost. */
     private static volatile Method injectInputEventMethod;
 
-    /** Rockbox injectKeyEvent — getSystemService(INPUT_SERVICE), ASYNC mode, try/catch only. */
+    /** injectKeyEvent — getSystemService(INPUT_SERVICE), ASYNC mode, try/catch only. */
     private static void injectKeyEvent(Context context, KeyEvent event) {
         try {
             InputManager im = (InputManager) context.getSystemService(Context.INPUT_SERVICE);

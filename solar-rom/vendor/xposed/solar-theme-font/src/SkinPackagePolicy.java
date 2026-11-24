@@ -9,12 +9,11 @@ final class SkinPackagePolicy {
 
     private SkinPackagePolicy() {}
 
-    /** Paint third-party and stock apps; never Solar, Rockbox, or Xposed Installer. */
+    /** Paint third-party and stock apps; never Solar or Xposed Installer. */
     static boolean shouldSkin(String packageName) {
         if (packageName == null || packageName.isEmpty()) return false;
         if (INSTALLER.equals(packageName)) return false;
         if (packageName.startsWith("com.solar.launcher")) return false;
-        if ("org.rockbox".equals(packageName)) return false;
         return ThemeSkinSidecar.isEnabled();
     }
 }

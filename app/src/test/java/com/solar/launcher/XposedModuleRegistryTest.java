@@ -12,14 +12,12 @@ public class XposedModuleRegistryTest {
     @Test
     public void requiredModulesIncludeBridgeAndThemeFont() {
         List<String> pkgs = XposedModuleRegistry.requiredModulePackages();
-        if (pkgs.size() < 4) throw new AssertionError("expected bridge + theme font + rockbox ime + notpipe");
+        if (pkgs.size() < 2) throw new AssertionError("expected bridge + theme font");
         Set<String> set = new HashSet<String>(pkgs);
         if (!set.contains("com.solar.launcher.xposed.themefont")) {
             throw new AssertionError("missing theme font");
         }
-        if (!set.contains("com.solar.launcher.xposed.rockbox.ime")) {
-            throw new AssertionError("missing rockbox ime");
-        }
+        
         if (!set.contains("com.solar.launcher.xposed.notpipe")) {
             throw new AssertionError("missing notpipe bridge");
         }

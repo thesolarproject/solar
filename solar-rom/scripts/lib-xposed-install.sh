@@ -31,12 +31,6 @@ XPOSED_SYSTEM_CONTEXT_BRIDGE_APK="$XPOSED_SYSTEM_CONTEXT_BRIDGE_Y2_APK"
 XPOSED_THEME_FONT_PKG="com.solar.launcher.xposed.themefont"
 XPOSED_SYSTEM_THEME_FONT_APK="/system/app/SolarThemeFont.apk"
 
-# Rockbox hook modules — split from context bridge for Debug menu toggles.
-XPOSED_ROCKBOX_IME_PKG="com.solar.launcher.xposed.rockbox.ime"
-XPOSED_ROCKBOX_COMPAT_PKG="com.solar.launcher.xposed.rockbox.compat"
-XPOSED_SYSTEM_ROCKBOX_IME_APK="/system/app/SolarRockboxIme.apk"
-XPOSED_SYSTEM_ROCKBOX_COMPAT_APK="/system/app/SolarRockboxCompat.apk"
-
 # Solar notPipe bridge — YouTube IPC + wheel player hooks (Y1 + Y2).
 XPOSED_NOTPIPE_BRIDGE_PKG="com.solar.launcher.xposed.notpipe"
 XPOSED_SYSTEM_NOTPIPE_BRIDGE_APK="/system/app/SolarNotPipeBridge.apk"
@@ -192,38 +186,6 @@ xposed_theme_font_apk() {
     return 1
 }
 
-# Resolve or build SolarRockboxIme.apk (Y1 + Y2).
-xposed_rockbox_ime_apk() {
-    local script_dir="${1:?script dir}"
-    local out="$script_dir/../vendor/xposed/solar-rockbox-ime/SolarRockboxIme.apk"
-    if [ -f "$out" ]; then
-        echo "$out"
-        return 0
-    fi
-    if [ -x "$script_dir/build-rockbox-xposed-apks.sh" ]; then
-        "$script_dir/build-rockbox-xposed-apks.sh" >&2
-        [ -f "$out" ] && echo "$out" && return 0
-    fi
-    echo "missing $out (run solar-rom/scripts/build-rockbox-xposed-apks.sh)" >&2
-    return 1
-}
-
-# Resolve or build SolarRockboxCompat.apk (Y2 only).
-xposed_rockbox_compat_apk() {
-    local script_dir="${1:?script dir}"
-    local out="$script_dir/../vendor/xposed/solar-rockbox-compat/SolarRockboxCompat.apk"
-    if [ -f "$out" ]; then
-        echo "$out"
-        return 0
-    fi
-    if [ -x "$script_dir/build-rockbox-xposed-apks.sh" ]; then
-        "$script_dir/build-rockbox-xposed-apks.sh" >&2
-        [ -f "$out" ] && echo "$out" && return 0
-    fi
-    echo "missing $out (run solar-rom/scripts/build-rockbox-xposed-apks.sh)" >&2
-    return 1
-}
-
 # Resolve or build SolarNotPipeBridge.apk (Y1 + Y2).
 # Note: NotPipe bridge is ROM-bake only (not in app self-heal assets); CI always builds on demand.
 xposed_notpipe_bridge_apk() {
@@ -293,20 +255,6 @@ xposed_install_to_mount() {
     theme_apk="$(xposed_theme_font_apk "$script_dir")" || return 1
     echo "==> Xposed: install Solar theme font module (API $api_level)"
     sudo install -m 644 -o root -g root "$theme_apk" "$mount/app/SolarThemeFont.apk"
-
-    local rockbox_ime_apk
-    rockbox_ime_apk="$(xposed_rockbox_ime_apk "$script_dir")" || return 1
-    echo "==> Xposed: install Solar Rockbox IME module (API $api_level)"
-    sudo install -m 644 -o root -g root "$rockbox_ime_apk" "$mount/app/SolarRockboxIme.apk"
-
-    if [ "$api_level" != "17" ] && [ "$api_level" != "18" ]; then
-        local rockbox_compat_apk
-        rockbox_compat_apk="$(xposed_rockbox_compat_apk "$script_dir")" || return 1
-        echo "==> Xposed: install Solar Rockbox compat module (API $api_level)"
-        sudo install -m 644 -o root -g root "$rockbox_compat_apk" "$mount/app/SolarRockboxCompat.apk"
-    else
-        sudo rm -f "$mount/app/SolarRockboxCompat.apk"
-    fi
 
     local notpipe_bridge_apk
     notpipe_bridge_apk="$(xposed_notpipe_bridge_apk "$script_dir")" || return 1
@@ -563,32 +511,6 @@ xposed_install_full_via_adb() {
         xposed_ensure_module_enabled_via_adb "$XPOSED_THEME_FONT_PKG" 2>/dev/null || true
     else
         echo "WARN: theme font APK push failed — retry: enable-xposed-module-adb.sh $XPOSED_THEME_FONT_PKG on" >&2
-    fi
-
-    local rockbox_ime_apk
-    rockbox_ime_apk="$(xposed_rockbox_ime_apk "$script_dir")" || return 1
-    echo "==> push + pm install SolarRockboxIme ($XPOSED_ROCKBOX_IME_PKG)"
-    if adb_push_to_system "$rockbox_ime_apk" "$XPOSED_SYSTEM_ROCKBOX_IME_APK" 644; then
-        adb_su_sh "rm -rf /data/app/${XPOSED_ROCKBOX_IME_PKG}* /data/app-lib/${XPOSED_ROCKBOX_IME_PKG}*" 2>/dev/null || true
-        adb_pm_install_internal "$XPOSED_SYSTEM_ROCKBOX_IME_APK" "$XPOSED_ROCKBOX_IME_PKG" 2>/dev/null || true
-        sleep 1
-        xposed_ensure_module_enabled_via_adb "$XPOSED_ROCKBOX_IME_PKG" 2>/dev/null || true
-    else
-        echo "WARN: Rockbox IME APK push failed — retry: enable-xposed-module-adb.sh $XPOSED_ROCKBOX_IME_PKG on" >&2
-    fi
-
-    if [ "$api_level" != "17" ] && [ "$api_level" != "18" ]; then
-        local rockbox_compat_apk
-        rockbox_compat_apk="$(xposed_rockbox_compat_apk "$script_dir")" || return 1
-        echo "==> push + pm install SolarRockboxCompat ($XPOSED_ROCKBOX_COMPAT_PKG)"
-        if adb_push_to_system "$rockbox_compat_apk" "$XPOSED_SYSTEM_ROCKBOX_COMPAT_APK" 644; then
-            adb_su_sh "rm -rf /data/app/${XPOSED_ROCKBOX_COMPAT_PKG}* /data/app-lib/${XPOSED_ROCKBOX_COMPAT_PKG}*" 2>/dev/null || true
-            adb_pm_install_internal "$XPOSED_SYSTEM_ROCKBOX_COMPAT_APK" "$XPOSED_ROCKBOX_COMPAT_PKG" 2>/dev/null || true
-            sleep 1
-            xposed_ensure_module_enabled_via_adb "$XPOSED_ROCKBOX_COMPAT_PKG" 2>/dev/null || true
-        else
-            echo "WARN: Rockbox compat APK push failed — retry: enable-xposed-module-adb.sh $XPOSED_ROCKBOX_COMPAT_PKG on" >&2
-        fi
     fi
 
     local notpipe_bridge_apk

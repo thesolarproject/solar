@@ -2,9 +2,9 @@ package com.solar.home.policy;
 
 /**
  * 2026-07-08 — Shared HOME target constants for helper, Solar client, and Xposed bridge.
- * Layman: one spelling for which app is home (Solar, Rockbox, JJ, Stock Innioasis, or custom).
+ * Layman: one spelling for which app is home (Solar, JJ, Stock Innioasis, or custom).
  * Technical: pure Java policy JAR; no android imports — compiled into helper, Solar, bridge.
- * Reversal: remove TARGET_STOCK + Innioasis constants; restore solar/rockbox/jj/custom only.
+ * Reversal: restore rockbox target if alternate Rockbox HOME returns.
  */
 public final class HomeTargetPolicy {
 
@@ -23,7 +23,6 @@ public final class HomeTargetPolicy {
     public static final String EXTRA_HOME_SOURCE = "source";
 
     public static final String TARGET_SOLAR = "solar";
-    public static final String TARGET_ROCKBOX = "rockbox";
     public static final String TARGET_JJ = "jj";
     /** 2026-07-08 — Factory Innioasis HOME (y1 on Y1 hardware, y2 on Y2). */
     public static final String TARGET_STOCK = "stock";
@@ -40,8 +39,6 @@ public final class HomeTargetPolicy {
 
     public static final String SOLAR_PKG = "com.solar.launcher";
     public static final String SOLAR_ACTIVITY = "com.solar.launcher.MainActivity";
-    public static final String ROCKBOX_PKG = "org.rockbox";
-    public static final String ROCKBOX_ACTIVITY = "org.rockbox.RockboxActivity";
     public static final String JJ_PKG = "com.themoon.y1";
     public static final String JJ_ACTIVITY = "com.themoon.y1.MainActivity";
     /** 2026-07-08 — Stock firmware HOME packages — same MODE_JJ wheel inject as JJ. */
@@ -59,11 +56,10 @@ public final class HomeTargetPolicy {
     private HomeTargetPolicy() {}
 
     /**
-     * 2026-07-08 — Coerce unknown target strings to solar/rockbox/jj/stock/custom.
-     * Reversal: drop TARGET_STOCK branch.
+     * 2026-07-08 — Coerce unknown target strings to solar/jj/stock/custom.
+     * Rockbox is no longer a supported HOME target.
      */
     public static String normalizeTarget(String target) {
-        if (TARGET_ROCKBOX.equals(target)) return TARGET_ROCKBOX;
         if (TARGET_JJ.equals(target)) return TARGET_JJ;
         if (TARGET_STOCK.equals(target)) return TARGET_STOCK;
         if (TARGET_CUSTOM.equals(target)) return TARGET_CUSTOM;
@@ -94,8 +90,7 @@ public final class HomeTargetPolicy {
      */
     public static boolean isAlternateHomeTarget(String target) {
         String t = normalizeTarget(target);
-        return TARGET_ROCKBOX.equals(t) || TARGET_JJ.equals(t) || TARGET_STOCK.equals(t)
-                || TARGET_CUSTOM.equals(t);
+        return TARGET_JJ.equals(t) || TARGET_STOCK.equals(t) || TARGET_CUSTOM.equals(t);
     }
 
     /**
@@ -128,9 +123,6 @@ public final class HomeTargetPolicy {
                 return new String[] { pkg, stockActivityForPackage(pkg) };
             }
             return new String[] { SOLAR_PKG, SOLAR_ACTIVITY };
-        }
-        if (TARGET_ROCKBOX.equals(normalized)) {
-            return new String[] { ROCKBOX_PKG, ROCKBOX_ACTIVITY };
         }
         if (TARGET_JJ.equals(normalized)) {
             return new String[] { JJ_PKG, JJ_ACTIVITY };

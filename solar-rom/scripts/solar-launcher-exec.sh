@@ -5,11 +5,9 @@
 # Reversal: restore inline switch-to-stock.sh pm logic only.
 
 SOLAR_PKG="com.solar.launcher"
-ROCKBOX_PKG="org.rockbox"
 JJ_PKG="com.themoon.y1"
 HELPER_PKG="com.solar.launcher.homehelper"
 SOLAR_ACTIVITY="com.solar.launcher/.MainActivity"
-ROCKBOX_ACTIVITY="org.rockbox/.RockboxActivity"
 JJ_ACTIVITY="com.themoon.y1/.MainActivity"
 SET_HOME_ACTION="com.solar.launcher.action.SET_PREFERRED_HOME"
 HOME_RECEIVER="com.solar.launcher/.LauncherHomeReceiver"
@@ -107,7 +105,6 @@ read_target() {
 
 activity_for_target() {
     case "$1" in
-        rockbox) echo "$ROCKBOX_ACTIVITY" ;;
         jj) echo "$JJ_ACTIVITY" ;;
         custom)
             _c=$(getprop "$PROP_HOME_COMPONENT")
@@ -119,7 +116,6 @@ activity_for_target() {
 
 pkg_for_target() {
     case "$1" in
-        rockbox) echo "$ROCKBOX_PKG" ;;
         jj) echo "$JJ_PKG" ;;
         custom)
             _c=$(getprop "$PROP_HOME_COMPONENT")
@@ -139,7 +135,6 @@ disable_competitors_for() {
     pm_enable_pkg "$_active"
     
     # Always explicitly disable inactive alternate launchers
-    [ "$_active" != "$ROCKBOX_PKG" ] && pm_disable_pkg "$ROCKBOX_PKG" && force_stop_pkg "$ROCKBOX_PKG" "switch"
     [ "$_active" != "$JJ_PKG" ] && pm_disable_pkg "$JJ_PKG" && force_stop_pkg "$JJ_PKG" "switch"
 
     _list=$(getprop "$PROP_HOME_LAUNCHER_PKGS")
@@ -156,29 +151,18 @@ disable_competitors_for() {
         done
         IFS="$OLDIFS"
     fi
-    # Legacy fallback when prop empty — Rockbox/JJ matrix.
+    # Legacy fallback when prop empty — alternate launcher matrix.
     if [ -z "$_list" ]; then
         case "$_t" in
-            rockbox)
-                pm_enable_pkg "$ROCKBOX_PKG"
-                pm_disable_pkg "$JJ_PKG"
-                force_stop_pkg "$JJ_PKG" "switch"
-                ;;
             jj)
                 pm_enable_pkg "$JJ_PKG"
-                pm_disable_pkg "$ROCKBOX_PKG"
-                force_stop_pkg "$ROCKBOX_PKG" "switch"
                 ;;
             custom)
-                pm_disable_pkg "$ROCKBOX_PKG"
                 pm_disable_pkg "$JJ_PKG"
-                force_stop_pkg "$ROCKBOX_PKG" "switch"
                 force_stop_pkg "$JJ_PKG" "switch"
                 ;;
             *)
-                pm_disable_pkg "$ROCKBOX_PKG"
                 pm_disable_pkg "$JJ_PKG"
-                force_stop_pkg "$ROCKBOX_PKG" "switch"
                 force_stop_pkg "$JJ_PKG" "switch"
                 ;;
         esac
@@ -194,7 +178,6 @@ broadcast_home_target() {
 cmd_switch() {
     _raw="$1"
     case "$_raw" in
-        rockbox|--rockbox|-rockbox) _t=rockbox ;;
         jj|--jj|-jj) _t=jj ;;
         custom|--custom|-custom) _t=custom ;;
         stock|solar|--solar|-solar) _t=solar ;;
@@ -204,11 +187,6 @@ cmd_switch() {
     disable_competitors_for "$_t"
     broadcast_home_target "$_t"
     ensure_overlay_host
-    if [ "$_t" = "rockbox" ]; then
-        if [ -f /system/etc/solar/sync-rockbox-libs.sh ]; then
-            sh /system/etc/solar/sync-rockbox-libs.sh 2>/dev/null
-        fi
-    fi
     _act=$(activity_for_target "$_t")
     if [ "$_t" = "solar" ]; then
         # 2026-07-06 — HOME via helper middle-man; MainActivity is not a HOME handler.
@@ -224,7 +202,7 @@ cmd_switch() {
 cmd_restart_active() {
     _t=$(read_target)
     case "$_t" in
-        rockbox|jj|solar|custom) ;;
+        jj|solar|custom) ;;
         *) _t=solar ;;
     esac
     _pkg=$(pkg_for_target "$_t")
@@ -242,7 +220,7 @@ cmd_restart_active() {
 cmd_disable_competitors() {
     _t=$(read_target)
     case "$_t" in
-        rockbox|jj|solar|custom) ;;
+        jj|solar|custom) ;;
         *) _t=solar ;;
     esac
     disable_competitors_for "$_t"
@@ -251,10 +229,10 @@ cmd_disable_competitors() {
 cmd_enforce_foreground() {
     _t=$(read_target)
     case "$_t" in
-        rockbox|jj|custom) ;;
+        jj|custom) ;;
         *) return 0 ;;
     esac
-    # 2026-07-06 — overlay hold owns fg; do not force-stop Rockbox/JJ while modal is up.
+    # 2026-07-06 — overlay hold owns fg; do not force-stop JJ while modal is up.
     _overlay=$(getprop sys.solar.overlay.active 2>/dev/null)
     _opening=$(getprop sys.solar.overlay.opening 2>/dev/null)
     if [ "$_overlay" = "1" ] || [ "$_opening" = "1" ]; then
@@ -277,7 +255,6 @@ cmd_enforce_foreground() {
     debug_log "A" "cmd_enforce_foreground" "force-stop relaunch" "target=$_t pkg=$_pkg fg=$_fg"
     # #endregion
     force_stop_pkg "$SOLAR_PKG" "recover"
-    force_stop_pkg "$ROCKBOX_PKG" "recover"
     force_stop_pkg "$JJ_PKG" "recover"
     pm_enable_pkg "$_pkg"
     am start -n "$(activity_for_target "$_t")" 2>/dev/null
@@ -300,7 +277,7 @@ case "$1" in
         cmd_enforce_foreground
         ;;
     *)
-        echo "usage: $0 switch solar|rockbox|jj|custom | restart-active | disable-competitors | enforce-foreground" >&2
+        echo "usage: $0 switch solar|jj|custom | restart-active | disable-competitors | enforce-foreground" >&2
         exit 1
         ;;
 esac

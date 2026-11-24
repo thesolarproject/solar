@@ -22,19 +22,15 @@ public final class OtaCompanionInstaller {
     /** Outcome flags — Solar install must proceed regardless. */
     public static final class Result {
         public final boolean jjOk;
-        public final boolean rockboxApkOk;
-        public final boolean rockboxLibsOk;
 
-        public Result(boolean jjOk, boolean rockboxApkOk, boolean rockboxLibsOk) {
+        public Result(boolean jjOk, ) {
             this.jjOk = jjOk;
-            this.rockboxApkOk = rockboxApkOk;
-            this.rockboxLibsOk = rockboxLibsOk;
-        }
+                                }
     }
 
     /** 2026-07-19 — No-op: companions are not installed with Solar OTA. */
     public static Result prepareAndInstall(Context context, File workDir, Progress progress) {
-        return new Result(false, false, false);
+        return new Result(false);
     }
 
     /** 2026-07-19 — No-op download. */
@@ -44,7 +40,7 @@ public final class OtaCompanionInstaller {
 
     /** 2026-07-19 — No-op install. */
     public static Result installDownloaded(Context context, File workDir, Progress progress) {
-        return new Result(false, false, false);
+        return new Result(false);
     }
 
     /** 2026-07-19 — JJ install retired; returns false. */
@@ -54,7 +50,7 @@ public final class OtaCompanionInstaller {
 
     /** 2026-07-19 — Rockbox install retired; returns empty Result. */
     public static Result installRockboxLatest(Context context, File workDir, Progress progress) {
-        return new Result(false, false, false);
+        return new Result(false);
     }
 
     /** 2026-07-19 — Presence-only: true if JJ already installed, never downloads. */

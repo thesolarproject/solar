@@ -46,15 +46,7 @@ public final class PreferredLauncherEnforcer implements Runnable {
         if (isHomeApplyInProgress()) return;
         if (com.solar.home.policy.LauncherTransitionGuard.shouldPauseHomeEnforcement()) return;
         if (isPreferredForeground(appContext, target)) return;
-        MainActivity activity = MainActivity.instance;
-        if (activity != null && RockboxRestartGrace.isIntentionalSolarEntry(activity)) {
-            return;
-        }
-        if (LauncherDefault.TARGET_ROCKBOX.equals(target)) {
-            if (LauncherSwitch.isRockboxDisabled(appContext)) {
-                return;
-            }
-        } else if (LauncherDefault.TARGET_JJ.equals(target)) {
+        if (LauncherDefault.TARGET_JJ.equals(target)) {
             if (LauncherSwitch.isJjDisabled(appContext)) {
                 return;
             }
@@ -63,12 +55,10 @@ public final class PreferredLauncherEnforcer implements Runnable {
                 return;
             }
         }
-        RockboxRestartGrace.arm(appContext);
         // #region agent log
         try {
             org.json.JSONObject d = new org.json.JSONObject();
             d.put("target", target);
-            d.put("rockboxFg", LauncherSwitch.isRockboxForeground(appContext));
             d.put("homeProp", LauncherPreference.readHomeTargetProperty());
             DebugD68c5cLog.log("PreferredLauncherEnforcer.maybeEnforcePreferredHome",
                     "relaunch", "B", d);
@@ -78,9 +68,6 @@ public final class PreferredLauncherEnforcer implements Runnable {
     }
 
     private static boolean isPreferredForeground(Context context, String target) {
-        if (LauncherDefault.TARGET_ROCKBOX.equals(target)) {
-            return LauncherSwitch.isRockboxForeground(context);
-        }
         if (LauncherDefault.TARGET_JJ.equals(target)) {
             return LauncherSwitch.isJjForeground(context);
         }

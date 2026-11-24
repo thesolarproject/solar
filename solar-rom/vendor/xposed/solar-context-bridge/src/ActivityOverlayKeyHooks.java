@@ -117,12 +117,6 @@ final class ActivityOverlayKeyHooks {
             return;
         }
         if (OverlayKeyForwarder.tryForwardFromAppContext(ctx, event)) {
-            // #region agent log
-            if (ctx != null && "org.rockbox".equals(ctx.getPackageName())) {
-                SolarContextBridge.log("edc27b RB-APP-CONSUME key=" + event.getKeyCode()
-                        + " action=" + event.getAction());
-            }
-            // #endregion
             param.setResult(true);
             return;
         }

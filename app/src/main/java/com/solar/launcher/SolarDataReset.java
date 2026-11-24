@@ -24,10 +24,8 @@ public final class SolarDataReset {
     /** Primary user volume — MicroSD on both Y1 and Y2. */
     public static final File STORAGE_ROOT = com.solar.launcher.DeviceFeatures.getMicroSdWipeRoot();
     /** Rockbox config — internal (sdcard0) on Y2, user SD on Y1. */
-    public static final File ROCKBOX_DIR = new File(com.solar.launcher.DeviceFeatures.getRockboxRoot(), ".rockbox");
 
     public static final class Selection {
-        public boolean rockboxConfig;
         public boolean solarPrefs;
         public boolean storedThemes;
         public boolean microSdContents;
@@ -57,9 +55,6 @@ public final class SolarDataReset {
         }
         Context app = ctx.getApplicationContext();
         try {
-            if (sel.rockboxConfig) {
-                deleteTree(ROCKBOX_DIR, false);
-            }
             if (sel.storedThemes) {
                 clearStoredThemes(app);
             }
@@ -252,7 +247,6 @@ public final class SolarDataReset {
     public static List<String> selectedLabels(Context ctx, Selection sel) {
         ArrayList<String> lines = new ArrayList<String>();
         if (ctx == null || sel == null) return lines;
-        if (sel.rockboxConfig) lines.add(ctx.getString(R.string.settings_reset_rockbox));
         if (sel.solarPrefs) lines.add(ctx.getString(R.string.settings_reset_solar));
         if (sel.storedThemes) lines.add(ctx.getString(R.string.settings_reset_themes));
         if (sel.microSdContents) lines.add(ctx.getString(R.string.settings_reset_microsd));

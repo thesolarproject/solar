@@ -51,7 +51,6 @@ public final class LauncherHomeApply {
             if (info == null || info.activityInfo == null) continue;
             String pkg = info.activityInfo.packageName;
             if (HomeTargetPolicy.SOLAR_PKG.equals(pkg)) continue;
-            if (HomeTargetPolicy.ROCKBOX_PKG.equals(pkg)) continue;
             if (HomeTargetPolicy.JJ_PKG.equals(pkg)) continue;
             // 2026-07-08 — Stock Innioasis has a dedicated Settings/Power row — skip Custom dup.
             if (HomeTargetPolicy.isInnioasisStockPackage(pkg)) continue;

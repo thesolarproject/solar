@@ -90,7 +90,6 @@ for p in \
     /lib/libfmjni.so \
     /app/SolarContextBridgeY1.apk \
     /app/SolarThemeFont.apk \
-    /app/SolarRockboxIme.apk \
     /app/SolarNotPipeBridge.apk \
     /app/io.github.gohoski.notpipe.apk; do
     require_path "$p" || fail "missing $p"

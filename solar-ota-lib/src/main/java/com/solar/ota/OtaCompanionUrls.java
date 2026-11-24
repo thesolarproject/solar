@@ -17,32 +17,14 @@ public final class OtaCompanionUrls {
     public static final String ROCKBOX_GITHUB_URL =
             "https://github.com/rockbox-y1/rockbox/releases/latest/download/rockbox.apk";
 
-    public static final String ROCKBOX_MIRROR_URL = SOLAR_UPDATE_BASE + "rockbox.apk";
-
-    public static final String ROCKBOX_UPDATE_ZIP_URL = SOLAR_UPDATE_BASE + "update.zip";
-
-    /** Rockbox APK install ladder — rb_y1_latest then github then solar-update mirror. */
-    public static final String[] ROCKBOX_INSTALL_URLS = {
-            RB_Y1_LATEST_URL,
-            ROCKBOX_GITHUB_URL,
-            ROCKBOX_MIRROR_URL
-    };
-
     /** Native libs: prefer APK unzip (github → mirror) then update.zip. */
-    public static final String[] ROCKBOX_LIBS_APK_URLS = {
-            ROCKBOX_GITHUB_URL,
-            ROCKBOX_MIRROR_URL
-    };
 
     public static final String JJ_PACKAGE = "com.themoon.y1";
-    public static final String ROCKBOX_PACKAGE = "org.rockbox";
 
     public static final String JJ_SYSTEM_APK = "/system/app/com.themoon.y1.apk";
-    public static final String ROCKBOX_SYSTEM_APK = "/system/app/org.rockbox.apk";
 
     public static final String FILE_JJ = "jj_latest.apk";
-    public static final String FILE_ROCKBOX_INSTALL = "rockbox_install.apk";
-    public static final String FILE_ROCKBOX_LIBS = "rockbox_libs.apk";
+
     public static final String FILE_UPDATE_ZIP = "update.zip";
 
     private OtaCompanionUrls() {}

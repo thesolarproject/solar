@@ -2,7 +2,7 @@ package com.solar.input.policy;
 
 /**
  * 2026-07-06 — Authoritative power/BACK hold eligibility for Solar + companion + Xposed.
- * Layman: one rulebook so sleep button, context menu, and Rockbox BACK never fight each other.
+ * Layman: one rulebook so sleep button, context menu, and alternate-HOME BACK never fight each other.
  * Technical: pure Java policy (~150 lines); compiled into bridge, companion, and Solar delegate.
  * Reversal: delete JAR; restore duplicated shouldOffer* in SystemServerHooks + GlobalOverlayPolicy.
  */
@@ -54,10 +54,10 @@ public final class GlobalInputPolicy {    public static final String POLICY_REV_
     /** @deprecated use {@link #GLOBAL_MODAL_HOLD_MS}. */
     public static final long THIRD_PARTY_MODAL_HOLD_MS = GLOBAL_MODAL_HOLD_MS;
     /**
-     * 2026-07-08 — Nav-owned HOME (Rockbox/JJ) BACK/POWER passthrough + JJ modal tier (~300 ms).
-     * Layman: short Back/Power still reaches Rockbox/JJ; ~0.3 s opens quick menu on JJ (Rockbox BACK never).
+     * 2026-07-08 — Nav-owned HOME (JJ) BACK/POWER passthrough + JJ modal tier (~300 ms).
+     * Layman: short Back/Power still reaches JJ; ~0.3 s opens quick menu on JJ.
      * Was 200L under the 130ms fast-open experiment; restore documented accidental-hold guard.
-     * Reversal: 200L if JJ/Rockbox need snappier POWER path again.
+     * Reversal: 200L if JJ needs snappier POWER path again.
      */
     public static final long THIRD_PARTY_LAUNCHER_MODAL_HOLD_MS = 300L;
     /** @deprecated use {@link #THIRD_PARTY_LAUNCHER_MODAL_HOLD_MS}. */
@@ -94,15 +94,11 @@ public final class GlobalInputPolicy {    public static final String POLICY_REV_
     public static final long RESCUE_EXECUTE_MS = 10000L;
     /** Alias — total BACK/POWER hold before solar-rescue-exec / Solar soft-restart. */
     public static final long RESCUE_HOLD_MS = RESCUE_EXECUTE_MS;
-    public static final long EMERGENCY_ROCKBOX_MODAL_MS = 1400L;
-    /** Rockbox/JJ pass BACK through until this ms — Rockbox never opens BACK modal below. */
-    public static final long ROCKBOX_BACK_PASSTHROUGH_MS = THIRD_PARTY_LAUNCHER_MODAL_HOLD_MS;
 
     public static final String SOLAR_PKG = "com.solar.launcher";
-    public static final String ROCKBOX_PKG = "org.rockbox";
     /** JJ Launcher (MO-ON) — third-party HOME; longer hold tier, BACK-long modal allowed. */
     public static final String JJ_PKG = "com.themoon.y1";
-    /** Stock Innioasis HOME — same Y1-Rockbox.kl scancodes as JJ (2026-07-08). */
+    /** Stock Innioasis HOME — same wheel keylayout scancodes as JJ (2026-07-08). */
     public static final String INNIOASIS_Y1_PKG = "com.innioasis.y1";
     public static final String INNIOASIS_Y2_PKG = "com.innioasis.y2";
     public static final String INNIOASIS_PREFIX = "com.innioasis.";
@@ -113,7 +109,7 @@ public final class GlobalInputPolicy {    public static final String POLICY_REV_
     public static final int KEYCODE_POWER = 26;
 
     /**
-     * 2026-07-08 — JJ + Innioasis stock HOME — same hold tier / MODE_JJ inject (not Rockbox).
+     * 2026-07-08 — JJ + Innioasis stock HOME — same hold tier / MODE_JJ inject.
      * Reversal: SPECIAL list = { JJ_PKG } only; blanket INNIOASIS_PREFIX block restores prior denylist.
      */
     private static final String[] SPECIAL_INPUT_HOLD_LAUNCHER_PKGS = {
@@ -140,7 +136,7 @@ public final class GlobalInputPolicy {    public static final String POLICY_REV_
     }
 
     /**
-     * 2026-07-08 — BACK-long modal delay: ~420 ms apps + SystemUI; ~300 ms Rockbox/JJ passthrough ceiling.
+     * 2026-07-08 — BACK-long modal delay: ~420 ms apps + SystemUI; ~300 ms JJ passthrough ceiling.
      * Reversal: shorten GLOBAL_MODAL_HOLD_MS / THIRD_PARTY_LAUNCHER_MODAL_HOLD_MS for faster open labs.
      */
     public static long backModalHoldMsForPackage(String pkg) {
@@ -150,7 +146,7 @@ public final class GlobalInputPolicy {    public static final String POLICY_REV_
     }
 
     /**
-     * 2026-07-08 — Y2 POWER long-hold — ~300 ms passthrough on Rockbox/JJ; ~420 ms elsewhere.
+     * 2026-07-08 — Y2 POWER long-hold — ~300 ms passthrough on JJ; ~420 ms elsewhere.
      */
     public static long powerModalHoldMsForPackage(String pkg) {
         if (isNavOwnedHomeLauncher(pkg)) return THIRD_PARTY_LAUNCHER_MODAL_HOLD_MS;
@@ -173,8 +169,8 @@ public final class GlobalInputPolicy {    public static final String POLICY_REV_
     /**
      * 2026-07-14 — Y2 POWER-hold quick menu only while Solar is foreground (in-app sheet).
      * Layman: hold sleep in Solar for Solar's menu; any other app keeps the stock Android power menu.
-     * Was: WM/companion modal over Rockbox/JJ/stock/SystemUI (heavy PWM + startService per hold).
-     * Reversal: restore 3P/Rockbox/JJ/fail-open offer branches from POLICY_REV 21.
+     * Was: WM/companion modal over JJ/stock/SystemUI (heavy PWM + startService per hold).
+     * Reversal: restore 3P/JJ/fail-open offer branches from POLICY_REV 21.
      */
     public static boolean shouldOfferPowerLongModal(String pkg, boolean y2Device) {
         if (!y2Device) return false;
@@ -184,16 +180,12 @@ public final class GlobalInputPolicy {    public static final String POLICY_REV_
     /**
      * 2026-07-14 — HOLD BACK outside Solar jumps straight to Solar Home (no global quick menu).
      * Layman: holding Back in Settings or another app brings you home to Solar.
-     * Technical: Rockbox still owns BACK; Solar Home uses in-app menu; IME-over-Rockbox may escape home.
+     * Technical: Solar Home uses in-app menu; IME over nav-owned launchers may escape home.
      * Reversal: delete callers; restore showPowerOverlay for third-party BACK-long.
      */
     public static boolean shouldLaunchSolarOnBackLong(String pkg, boolean imeActive,
             boolean emergencyMode) {
         if (SOLAR_PKG.equals(pkg)) return false;
-        if (ROCKBOX_PKG.equals(pkg)) {
-            // Escape IME over Rockbox; otherwise Rockbox keeps BACK navigation.
-            return imeActive;
-        }
         if (imeActive) {
             if (pkg == null || pkg.length() == 0) return false;
             if (isInnioasisNonLauncherPackage(pkg)) return false;
@@ -231,7 +223,7 @@ public final class GlobalInputPolicy {    public static final String POLICY_REV_
         return shouldOfferBackLongModal(pkg, y2Device, imeActive, emergencyMode);
     }
 
-    /** 2026-07-06 — Y2 POWER hold opens global quick menu (includes Solar, Rockbox, JJ fg). */
+    /** 2026-07-06 — Y2 POWER hold opens global quick menu (includes Solar/JJ fg). */
     public static boolean shouldOfferLauncherPickerOnPowerHold(String pkg, boolean y2Device) {
         return shouldOfferPowerLongModal(pkg, y2Device);
     }
@@ -247,21 +239,14 @@ public final class GlobalInputPolicy {    public static final String POLICY_REV_
         return shouldLaunchSolarOnBackLong(pkg, imeActive, emergencyMode);
     }
 
-    /** Rockbox/JJ BACK passthrough under normal mode — Y1 under 7s; Y2 always for BACK. */
-    public static boolean shouldPassthroughRockboxBack(long holdMs, boolean y2Device,
-            boolean emergencyMode, boolean imeActive) {
-        return shouldPassthroughNavOwnedLauncherBack(holdMs, y2Device, emergencyMode, imeActive);
-    }
-
-    /** 2026-07-06 — JJ/Rockbox BACK pass through until modal tier; overlay owns keys after. */
+    /** 2026-07-06 — JJ BACK pass through until modal tier; overlay owns keys after. */
     public static boolean shouldPassthroughNavOwnedLauncherBack(long holdMs, boolean y2Device,
             boolean emergencyMode, boolean imeActive) {
         if (imeActive) return false;
-        if (emergencyMode && holdMs < EMERGENCY_ROCKBOX_MODAL_MS) return true;
         return holdMs < THIRD_PARTY_LAUNCHER_MODAL_HOLD_MS;
     }
 
-    /** Y2 POWER on nav-owned HOME — Rockbox/JJ passthrough until 300 ms tier. */
+    /** Y2 POWER on nav-owned HOME — JJ passthrough until 300 ms tier. */
     public static boolean shouldPassthroughNavOwnedLauncherPower(long holdMs, String pkg,
             boolean imeActive) {
         if (imeActive) return false;
@@ -276,15 +261,15 @@ public final class GlobalInputPolicy {    public static final String POLICY_REV_
         return holdMs < THIRD_PARTY_LAUNCHER_MODAL_HOLD_MS;
     }
 
-    /** True for Rockbox or JJ-style HOME — overlay key capture + BACK passthrough ceiling. */
+    /** True for JJ-style HOME — overlay key capture + BACK passthrough ceiling. */
     public static boolean isNavOwnedHomeLauncher(String pkg) {
-        return ROCKBOX_PKG.equals(pkg) || isJjKeylayoutLauncher(pkg);
+        return isJjKeylayoutLauncher(pkg);
     }
 
     /**
-     * 2026-07-07 — Nav-owned hold tier — JJ/Innioasis BACK-long modal; Rockbox/JJ passthrough ceiling.
+     * 2026-07-07 — Nav-owned hold tier — JJ/Innioasis BACK-long modal; JJ passthrough ceiling.
      * Generic Android CATEGORY_HOME launchers use {@link #GLOBAL_MODAL_HOLD_MS} like stock apps.
-     * Rockbox uses separate {@link #isNavOwnedHomeLauncher} BACK rules — never BACK-long modal.
+     * Nav-owned launchers use BACK passthrough tier rules.
      */
     public static boolean isThirdPartyHomeLauncher(String pkg) {
         return isSpecialInputHoldLauncher(pkg);
@@ -350,7 +335,7 @@ public final class GlobalInputPolicy {    public static final String POLICY_REV_
 
     /**
      * 2026-07-07 — True when package appears in PM-synced HOME list — uses 420 ms modal tier.
-     * Layman: generic alternate launchers behave like Settings, not like JJ/Rockbox.
+     * Layman: generic alternate launchers behave like Settings, not like JJ.
      */
     public static boolean isPersistedHomeLauncher(String pkg) {
         if (pkg == null || pkg.length() == 0) return false;

@@ -29,8 +29,6 @@ build_if_missing "$VENDOR/XposedInstaller.apk" "build-xposed-installer-apk.sh"
 build_if_missing "$VENDOR/solar-context-bridge/SolarContextBridgeY1.apk" "build-context-bridge-apk.sh"
 build_if_missing "$VENDOR/solar-context-bridge/SolarContextBridgeY2.apk" "build-context-bridge-apk.sh"
 build_if_missing "$VENDOR/solar-theme-font/SolarThemeFont.apk" "build-theme-font-apk.sh"
-build_if_missing "$VENDOR/solar-rockbox-ime/SolarRockboxIme.apk" "build-rockbox-xposed-apks.sh"
-build_if_missing "$VENDOR/solar-rockbox-compat/SolarRockboxCompat.apk" "build-rockbox-xposed-apks.sh"
 # 2026-07-15 — YouTube is native in Solar APK; notPipe + SolarNotPipeBridge no longer bundled.
 # A5 ROM still bakes upstream notPipe via build-rom.sh install_notpipe_system (touch UI).
 
@@ -85,8 +83,6 @@ cp "$VENDOR/XposedInstaller.apk" "$DST/xposed/XposedInstaller.apk"
 cp "$VENDOR/solar-context-bridge/SolarContextBridgeY1.apk" "$DST/xposed/SolarContextBridgeY1.apk"
 cp "$VENDOR/solar-context-bridge/SolarContextBridgeY2.apk" "$DST/xposed/SolarContextBridgeY2.apk"
 cp "$VENDOR/solar-theme-font/SolarThemeFont.apk" "$DST/xposed/SolarThemeFont.apk"
-cp "$VENDOR/solar-rockbox-ime/SolarRockboxIme.apk" "$DST/xposed/SolarRockboxIme.apk"
-cp "$VENDOR/solar-rockbox-compat/SolarRockboxCompat.apk" "$DST/xposed/SolarRockboxCompat.apk"
 # 2026-07-15 — Drop legacy NotPipe self-heal assets if a previous sync left them.
 rm -f "$DST/xposed/SolarNotPipeBridge.apk" "$DST/thirdparty/notPipe-0.3.0-release.apk"
 cp "$COMPANION_APK" "$DST/companion/SolarGlobalContextModal.apk"
@@ -139,8 +135,6 @@ apk_version_code() {
 Y1_VC="$(apk_version_code "$DST/xposed/SolarContextBridgeY1.apk")"
 Y2_VC="$(apk_version_code "$DST/xposed/SolarContextBridgeY2.apk")"
 TF_VC="$(apk_version_code "$DST/xposed/SolarThemeFont.apk")"
-RB_IME_VC="$(apk_version_code "$DST/xposed/SolarRockboxIme.apk")"
-RB_COMPAT_VC="$(apk_version_code "$DST/xposed/SolarRockboxCompat.apk")"
 GC_VC="$(apk_version_code "$DST/companion/SolarGlobalContextModal.apk")"
 HELPER_VC="$(apk_version_code "$DST/companion/SolarHomeHelper.apk")"
 
@@ -200,24 +194,6 @@ cat > "$DST/manifest.json" <<EOF
       "device": "both",
       "versionCode": ${TF_VC:-1},
       "sha256": "$(sha256_file "$DST/xposed/SolarThemeFont.apk")"
-    },
-    {
-      "pkg": "com.solar.launcher.xposed.rockbox.ime",
-      "asset": "xposed/SolarRockboxIme.apk",
-      "systemApk": "/system/app/SolarRockboxIme.apk",
-      "required": true,
-      "device": "both",
-      "versionCode": ${RB_IME_VC:-1},
-      "sha256": "$(sha256_file "$DST/xposed/SolarRockboxIme.apk")"
-    },
-    {
-      "pkg": "com.solar.launcher.xposed.rockbox.compat",
-      "asset": "xposed/SolarRockboxCompat.apk",
-      "systemApk": "/system/app/SolarRockboxCompat.apk",
-      "required": true,
-      "device": "y2",
-      "versionCode": ${RB_COMPAT_VC:-1},
-      "sha256": "$(sha256_file "$DST/xposed/SolarRockboxCompat.apk")"
     },
     {
       "pkg": "com.solar.launcher.globalcontext",

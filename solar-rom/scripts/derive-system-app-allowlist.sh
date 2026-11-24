@@ -32,7 +32,7 @@ BLOAT=(
 HARD_KEEP=(
     com.solar.launcher.apk org.rockbox.apk XposedInstaller.apk
     SolarContextBridgeY1.apk SolarContextBridgeY2.apk SolarThemeFont.apk \
-    SolarRockboxIme.apk SolarRockboxCompat.apk Y1Bridge.apk
+    Y1Bridge.apk
     FMRadio.apk MtkBt.apk Settings.apk SettingsProvider.apk SystemUI.apk
     PackageInstaller.apk TelephonyProvider.apk DownloadProvider.apk DownloadProviderUi.apk
     KeyChain.apk LatinIME.apk Provision.apk ApplicationsProvider.apk CertInstaller.apk

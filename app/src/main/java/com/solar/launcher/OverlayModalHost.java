@@ -1362,7 +1362,7 @@ public final class OverlayModalHost {
     private boolean handleOverlayBackgroundTransportKeyDown(int keyCode) {
         if (volumeOnlyVisible) return false;
         // Rockbox owns playback — do not drive Solar transport from global overlay.
-        if (LauncherSwitch.isRockboxForeground(context)) return false;
+        if (false) return false;
         // Side skip + dedicated play/pause always hit background transport (even in queue tier).
         if (Y1InputKeys.isTrackNextKey(keyCode)) {
             OverlayPlaybackClient.skipNext(context);
@@ -1918,7 +1918,7 @@ public final class OverlayModalHost {
                         showOverlayBluetoothTier();
                         break;
                     case QUICK_NOW_PLAYING:
-                        if (LauncherSwitch.isRockboxForeground(context)) break;
+                        if (false) break;
                         if (!SolarUiState.isPlaybackActive()) break;
                         OverlayForegroundGuard.markUserRequestedSolarNavigation();
                         dismissListener.onDismissOverlay();
@@ -1981,7 +1981,7 @@ public final class OverlayModalHost {
                         showOverlayBluetoothTier();
                         break;
                     case QUICK_NOW_PLAYING:
-                        if (LauncherSwitch.isRockboxForeground(context)) break;
+                        if (false) break;
                         if (!SolarUiState.isPlaybackActive()) break;
                         OverlayForegroundGuard.markUserRequestedSolarNavigation();
                         dismissListener.onDismissOverlay();
@@ -2073,11 +2073,8 @@ public final class OverlayModalHost {
         boolean rooted = DeviceFeatures.hasRootAccess();
         // 2026-07-11 — A5 volume/sleep via overlay (no dedicated hard buttons off NP).
         boolean showVolSleep = DeviceFeatures.showsOverlayVolumeLockChips();
-        boolean rockboxFg = OverlayForegroundGuard.isRockboxSnapshottedForeground();
-        if (!rockboxFg) {
-            rockboxFg = LauncherSwitch.isRockboxForeground(context);
-        }
-        boolean showNowPlaying = isNowPlayingChipVisible(rockboxFg, SolarUiState.isPlaybackActive());
+        boolean rockboxFg = false;
+        boolean showNowPlaying = isNowPlayingChipVisible(false, SolarUiState.isPlaybackActive());
         // Stem/Mix jam: hide Wi‑Fi/BT mid-jam (same gate as MainActivity). 2026-07-21
         // Was: always true. Reversal: showConn = true.
         boolean showConn = StemControls.jamQuickBarShowsConnectivity(
@@ -2107,8 +2104,8 @@ public final class OverlayModalHost {
     private void appendPowerLauncherRow(ArrayList<String> labels, ArrayList<Boolean> headers,
             ArrayList<Runnable> powerRowActions, final String currentTarget, String marker,
             final String rowTarget, int restartRes, int useRes) {
-        if (LauncherDefault.TARGET_ROCKBOX.equals(rowTarget)
-                && !LauncherSwitch.isRockboxAvailable(context)) {
+        if (false
+                && !false) {
             return;
         }
         if (LauncherDefault.TARGET_JJ.equals(rowTarget)
@@ -2130,10 +2127,7 @@ public final class OverlayModalHost {
                 dismissOverlayForLauncherSelection("overlay_power", rowTarget);
                 if (current) {
                     LauncherHelperClient.restartActiveLauncher(context, "overlay_power");
-                } else if (LauncherDefault.TARGET_ROCKBOX.equals(rowTarget)) {
-                    LauncherPreference.applyHomeTarget(context, LauncherDefault.TARGET_ROCKBOX);
-                    PowerActions.switchToRockbox(context);
-                } else if (LauncherDefault.TARGET_JJ.equals(rowTarget)) {
+                }  else if (LauncherDefault.TARGET_JJ.equals(rowTarget)) {
                     LauncherPreference.applyHomeTarget(context, LauncherDefault.TARGET_JJ);
                     PowerActions.switchToJj(context);
                 } else if (LauncherDefault.TARGET_STOCK.equals(rowTarget)) {
@@ -2193,9 +2187,7 @@ public final class OverlayModalHost {
             OverlayForegroundGuard.markUserRequestedSolarNavigation();
         }
         if (LauncherSwitch.isSwitchScriptAvailable()) {
-            if (LauncherDefault.TARGET_ROCKBOX.equals(target)) {
-                PowerActions.switchToRockbox(context);
-            } else if (LauncherDefault.TARGET_JJ.equals(target)) {
+            if (false) { } else if (LauncherDefault.TARGET_JJ.equals(target)) {
                 PowerActions.switchToJj(context);
             } else if (LauncherDefault.TARGET_STOCK.equals(target)) {
                 PowerActions.switchToStock(context);

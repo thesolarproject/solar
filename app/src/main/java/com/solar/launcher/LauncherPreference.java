@@ -124,9 +124,6 @@ public final class LauncherPreference {
                 syncHomeTargetProperty(normalized);
                 if (flat != null && flat.length() > 0) {
                     RootShell.run("setprop " + HomeTargetPolicy.PROP_HOME_COMPONENT + " " + flat);
-                }
-                if (LauncherDefault.TARGET_ROCKBOX.equals(normalized)) {
-                    LauncherDefault.setPreferredRockboxHome(app);
                 } else if (LauncherDefault.TARGET_JJ.equals(normalized)) {
                     LauncherDefault.setPreferredJjHome(app);
                 } else if (LauncherDefault.TARGET_STOCK.equals(normalized)) {
@@ -171,10 +168,6 @@ public final class LauncherPreference {
     public static void launchHomeForTarget(Context context, String target) {
         if (context == null || target == null) return;
         String normalized = normalizeHomeTarget(target);
-        if (LauncherDefault.TARGET_ROCKBOX.equals(normalized)
-                && LauncherSwitch.isRockboxDisabled(context)) {
-            normalized = LauncherDefault.TARGET_SOLAR;
-        }
         if (LauncherDefault.TARGET_JJ.equals(normalized)
                 && LauncherSwitch.isJjDisabled(context)) {
             normalized = LauncherDefault.TARGET_SOLAR;
@@ -207,10 +200,6 @@ public final class LauncherPreference {
         String normalized = normalizeHomeTarget(target);
         String flat = resolveComponentFlatForTarget(context, normalized, readHomeComponentProperty());
         String[] parts = HomeTargetPolicy.resolveLaunchComponent(normalized, flat);
-        if (LauncherDefault.TARGET_ROCKBOX.equals(normalized)
-                && !LauncherSwitch.isRockboxInstalled(context)) {
-            return null;
-        }
         if (LauncherDefault.TARGET_JJ.equals(normalized)
                 && !LauncherSwitch.isJjInstalled(context)) {
             return null;
@@ -251,13 +240,10 @@ public final class LauncherPreference {
     }
 
     /**
-     * 2026-07-08 — Coerce unknown values — solar, rockbox, jj, stock, or custom.
+     * 2026-07-08 — Coerce unknown values — solar, jj, stock, or custom.
      * Reversal: drop TARGET_STOCK branch.
      */
     static String normalizeHomeTarget(String target) {
-        if (LauncherDefault.TARGET_ROCKBOX.equals(target)) {
-            return LauncherDefault.TARGET_ROCKBOX;
-        }
         if (LauncherDefault.TARGET_JJ.equals(target)) {
             return LauncherDefault.TARGET_JJ;
         }

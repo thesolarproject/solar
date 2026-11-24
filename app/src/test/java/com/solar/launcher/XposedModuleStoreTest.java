@@ -43,8 +43,6 @@ public class XposedModuleStoreTest {
         if (!Boolean.FALSE.equals(flags.get("com.solar.launcher.xposed.themefont"))) {
             throw new AssertionError("theme font should be disabled");
         }
-        if (!Boolean.TRUE.equals(flags.get("com.solar.launcher.xposed.rockbox.ime"))) {
-            throw new AssertionError("rockbox ime should be enabled");
-        }
+        
     }
 }

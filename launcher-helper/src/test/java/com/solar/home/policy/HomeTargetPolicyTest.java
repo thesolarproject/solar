@@ -14,8 +14,8 @@ public class HomeTargetPolicyTest {
     public void normalizeTargetDefaultsUnknownToSolar() {
         assertEquals(HomeTargetPolicy.TARGET_SOLAR, HomeTargetPolicy.normalizeTarget(null));
         assertEquals(HomeTargetPolicy.TARGET_SOLAR, HomeTargetPolicy.normalizeTarget("bogus"));
-        assertEquals(HomeTargetPolicy.TARGET_ROCKBOX,
-                HomeTargetPolicy.normalizeTarget(HomeTargetPolicy.TARGET_ROCKBOX));
+        assertEquals(HomeTargetPolicy.TARGET_SOLAR,
+                HomeTargetPolicy.normalizeTarget("rockbox"));
         assertEquals(HomeTargetPolicy.TARGET_JJ,
                 HomeTargetPolicy.normalizeTarget(HomeTargetPolicy.TARGET_JJ));
         assertEquals(HomeTargetPolicy.TARGET_STOCK,
@@ -34,7 +34,7 @@ public class HomeTargetPolicyTest {
 
     @Test
     public void isAlternateHomeTargetIncludesStock() {
-        assertTrue(HomeTargetPolicy.isAlternateHomeTarget(HomeTargetPolicy.TARGET_ROCKBOX));
+        assertFalse(HomeTargetPolicy.isAlternateHomeTarget("rockbox"));
         assertTrue(HomeTargetPolicy.isAlternateHomeTarget(HomeTargetPolicy.TARGET_JJ));
         assertTrue(HomeTargetPolicy.isAlternateHomeTarget(HomeTargetPolicy.TARGET_STOCK));
         assertFalse(HomeTargetPolicy.isAlternateHomeTarget(HomeTargetPolicy.TARGET_SOLAR));
@@ -47,7 +47,7 @@ public class HomeTargetPolicyTest {
                 HomeTargetPolicy.SOLAR_PKG, HomeTargetPolicy.SOLAR_ACTIVITY }, solar);
         String[] rockbox = HomeTargetPolicy.resolveLaunchComponent("rockbox", "");
         assertArrayEquals(new String[] {
-                HomeTargetPolicy.ROCKBOX_PKG, HomeTargetPolicy.ROCKBOX_ACTIVITY }, rockbox);
+                HomeTargetPolicy.SOLAR_PKG, HomeTargetPolicy.SOLAR_ACTIVITY }, rockbox);
         String[] jj = HomeTargetPolicy.resolveLaunchComponent("jj", "");
         assertArrayEquals(new String[] {
                 HomeTargetPolicy.JJ_PKG, HomeTargetPolicy.JJ_ACTIVITY }, jj);
@@ -91,7 +91,7 @@ public class HomeTargetPolicyTest {
     @Test
     public void flattenLaunchComponentMatchesResolve() {
         String flat = HomeTargetPolicy.flattenLaunchComponent("rockbox", "");
-        assertEquals("org.rockbox/org.rockbox.RockboxActivity", flat);
+        assertEquals(HomeTargetPolicy.SOLAR_PKG + "/" + HomeTargetPolicy.SOLAR_ACTIVITY, flat);
     }
 
     @Test

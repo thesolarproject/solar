@@ -11,8 +11,6 @@ XposedInstaller.apk
 SolarContextBridgeY1.apk
 SolarContextBridgeY2.apk
 SolarThemeFont.apk
-SolarRockboxIme.apk
-SolarRockboxCompat.apk
 SolarNotPipeBridge.apk
 io.github.gohoski.notpipe.apk
 Y1Bridge.apk

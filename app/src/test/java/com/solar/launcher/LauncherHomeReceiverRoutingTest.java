@@ -24,7 +24,7 @@ public class LauncherHomeReceiverRoutingTest {
         assertEquals(HomeTargetPolicy.TARGET_STOCK, route("stock"));
         assertEquals(HomeTargetPolicy.TARGET_CUSTOM, route("custom"));
         assertEquals(HomeTargetPolicy.TARGET_JJ, route("jj"));
-        assertEquals(HomeTargetPolicy.TARGET_ROCKBOX, route("rockbox"));
+        assertEquals("solar", LauncherPreference.normalizeHomeTarget("rockbox"));
     }
 
     @Test

@@ -3,12 +3,11 @@ package com.solar.launcher.xposed.bridge;
 import android.content.Context;
 
 /**
- * 2026-07-05 — Ultra-long BACK/power rescue from system_server (kill apps + disable Rockbox + restart Solar).
+ * 2026-07-05 — Ultra-long BACK/power rescue from system_server (kill apps + restart Solar).
  */
 public final class SolarRescueClient {
 
     private static final String SOLAR_PKG = "com.solar.launcher";
-    private static final String ROCKBOX_PKG = "org.rockbox";
     private static final String JJ_PKG = "com.themoon.y1";
     private static final String PROP_HOME = "persist.solar.home.target";
     private static final String SET_HOME_ACTION = "com.solar.launcher.action.SET_PREFERRED_HOME";
@@ -51,12 +50,10 @@ public final class SolarRescueClient {
         sb.append("setprop ").append(OVERLAY_ACTIVE).append(" 0; ");
         sb.append("setprop ").append(HANDOFF_ACTIVE).append(" 0; ");
         if (foregroundPkg != null && foregroundPkg.length() > 0
-                && !isAllowlisted(foregroundPkg) && !ROCKBOX_PKG.equals(foregroundPkg)
+                && !isAllowlisted(foregroundPkg)
                 && !JJ_PKG.equals(foregroundPkg)) {
             sb.append("am force-stop ").append(quote(foregroundPkg)).append("; ");
         }
-        sb.append("am force-stop ").append(ROCKBOX_PKG).append("; ");
-        sb.append("pm disable ").append(ROCKBOX_PKG).append("; ");
         sb.append("am force-stop ").append(JJ_PKG).append("; ");
         sb.append("pm disable ").append(JJ_PKG).append("; ");
         sb.append("setprop ").append(PROP_HOME).append(" solar; ");

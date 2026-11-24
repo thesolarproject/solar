@@ -40,7 +40,5 @@ public class OtaCompanionInstallerTest {
     public void installRockboxLatest_nullContext() {
         OtaCompanionInstaller.Result r = OtaCompanionInstaller.installRockboxLatest(null, null, null);
         assertFalse(r.jjOk);
-        assertFalse(r.rockboxApkOk);
-        assertFalse(r.rockboxLibsOk);
-    }
+                    }
 }

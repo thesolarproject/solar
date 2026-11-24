@@ -17,7 +17,6 @@ public final class LauncherCompetitionPolicy {
 
     /** Input-policy exceptions — longer BACK hold / nav-owned rules; not generic Android launchers. */
     private static final String[] SPECIAL_INPUT_LAUNCHERS = {
-            HomeTargetPolicy.ROCKBOX_PKG,
             HomeTargetPolicy.JJ_PKG,
             HomeTargetPolicy.INNIOASIS_Y1_PKG,
             HomeTargetPolicy.INNIOASIS_Y2_PKG
@@ -25,11 +24,10 @@ public final class LauncherCompetitionPolicy {
 
     private LauncherCompetitionPolicy() {}
 
-    /** solar / rockbox / jj / stock / custom — canonical HOME target ids. */
+    /** solar / jj / stock / custom — canonical HOME target ids. */
     public static String[] knownHomeTargets() {
         return new String[] {
                 HomeTargetPolicy.TARGET_SOLAR,
-                HomeTargetPolicy.TARGET_ROCKBOX,
                 HomeTargetPolicy.TARGET_JJ,
                 HomeTargetPolicy.TARGET_STOCK,
                 HomeTargetPolicy.TARGET_CUSTOM
@@ -39,9 +37,6 @@ public final class LauncherCompetitionPolicy {
     /** Package name for a normalized HOME target — custom/stock resolve via component prop. */
     public static String packageForTarget(String target) {
         String t = HomeTargetPolicy.normalizeTarget(target);
-        if (HomeTargetPolicy.TARGET_ROCKBOX.equals(t)) {
-            return HomeTargetPolicy.ROCKBOX_PKG;
-        }
         if (HomeTargetPolicy.TARGET_JJ.equals(t)) {
             return HomeTargetPolicy.JJ_PKG;
         }
@@ -60,9 +55,6 @@ public final class LauncherCompetitionPolicy {
     public static String targetForPackage(String pkg) {
         if (pkg == null || pkg.length() == 0) return null;
         String base = basePackageName(pkg);
-        if (HomeTargetPolicy.ROCKBOX_PKG.equals(base)) {
-            return HomeTargetPolicy.TARGET_ROCKBOX;
-        }
         if (HomeTargetPolicy.JJ_PKG.equals(base)) {
             return HomeTargetPolicy.TARGET_JJ;
         }
@@ -87,7 +79,7 @@ public final class LauncherCompetitionPolicy {
         if (HomeTargetPolicy.TARGET_CUSTOM.equals(t) || HomeTargetPolicy.TARGET_STOCK.equals(t)) {
             return packagesToDisableForActiveHome(packageForTarget(t), null);
         }
-        if (HomeTargetPolicy.TARGET_ROCKBOX.equals(t)) {
+        if ("rockbox".equals(t)) {
             return new String[] {
                     HomeTargetPolicy.JJ_PKG,
                     HomeTargetPolicy.INNIOASIS_Y1_PKG,
@@ -96,14 +88,12 @@ public final class LauncherCompetitionPolicy {
         }
         if (HomeTargetPolicy.TARGET_JJ.equals(t)) {
             return new String[] {
-                    HomeTargetPolicy.ROCKBOX_PKG,
-                    HomeTargetPolicy.INNIOASIS_Y1_PKG,
+                            HomeTargetPolicy.INNIOASIS_Y1_PKG,
                     HomeTargetPolicy.INNIOASIS_Y2_PKG
             };
         }
         return new String[] {
-                HomeTargetPolicy.ROCKBOX_PKG,
-                HomeTargetPolicy.JJ_PKG,
+                    HomeTargetPolicy.JJ_PKG,
                 HomeTargetPolicy.INNIOASIS_Y1_PKG,
                 HomeTargetPolicy.INNIOASIS_Y2_PKG
         };
@@ -125,8 +115,7 @@ public final class LauncherCompetitionPolicy {
                 out.add(pkg);
             }
         }
-        // Always consider Rockbox/JJ/Stock when installed — even if PM scan misses them.
-        addIfNotActive(out, HomeTargetPolicy.ROCKBOX_PKG, active);
+        // Always consider JJ/Stock when installed — even if PM scan misses them.
         addIfNotActive(out, HomeTargetPolicy.JJ_PKG, active);
         addIfNotActive(out, HomeTargetPolicy.INNIOASIS_Y1_PKG, active);
         addIfNotActive(out, HomeTargetPolicy.INNIOASIS_Y2_PKG, active);
@@ -152,7 +141,6 @@ public final class LauncherCompetitionPolicy {
         if (procOrPkg == null || procOrPkg.length() == 0) return false;
         String base = basePackageName(procOrPkg);
         return HomeTargetPolicy.SOLAR_PKG.equals(base)
-                || HomeTargetPolicy.ROCKBOX_PKG.equals(base)
                 || HomeTargetPolicy.JJ_PKG.equals(base)
                 || HomeTargetPolicy.isInnioasisStockPackage(base)
                 || HomeTargetPolicy.HELPER_PKG.equals(base);
@@ -168,7 +156,7 @@ public final class LauncherCompetitionPolicy {
         return false;
     }
 
-    /** 2026-07-08 — Rockbox/JJ/Stock — input hooks use nav-owned / 300 ms passthrough tier. */
+    /** 2026-07-08 — JJ/Stock — input hooks use nav-owned / 300 ms passthrough tier. */
     public static boolean isSpecialInputLauncher(String pkg) {
         if (pkg == null || pkg.length() == 0) return false;
         String base = basePackageName(pkg);

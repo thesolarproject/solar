@@ -24,7 +24,7 @@ public class GlobalInputPolicyTest {
     @Test
     public void rockboxAndJjUseShorterModalTier() {
         assertEquals(300L, GlobalInputPolicy.powerModalHoldMsForPackage(
-                GlobalInputPolicy.ROCKBOX_PKG));
+                "com.example.app"));
         assertEquals(300L, GlobalInputPolicy.powerModalHoldMsForPackage(
                 GlobalInputPolicy.JJ_PKG));
         assertEquals(280L, GlobalInputPolicy.powerModalHoldMsForPackage(
@@ -44,7 +44,7 @@ public class GlobalInputPolicyTest {
     @Test
     public void rockboxBackLongBlockedSettingsReturnsToSolar() {
         assertFalse(GlobalInputPolicy.shouldLaunchSolarOnBackLong(
-                GlobalInputPolicy.ROCKBOX_PKG, false, false));
+                "com.example.app", false, false));
         assertTrue(GlobalInputPolicy.shouldLaunchSolarOnBackLong(
                 "com.android.settings", false, false));
         assertTrue(GlobalInputPolicy.shouldOfferBackLongModal(

@@ -138,16 +138,6 @@ if [ -f /system/app/SolarThemeFont.apk ]; then
     _xposed_enable_baked_module "com.solar.launcher.xposed.themefont" "/system/app/SolarThemeFont.apk"
 fi
 
-# Rockbox IME — Y1+Y2 wheel OK confirms Rockbox search/rename dialogs (standalone module).
-if [ -f /system/app/SolarRockboxIme.apk ]; then
-    _xposed_enable_baked_module "com.solar.launcher.xposed.rockbox.ime" "/system/app/SolarRockboxIme.apk"
-fi
-
-# Rockbox Y2 compat — shell/exec bridge for staged lib; absent on Y1 ROMs.
-if [ -f /system/app/SolarRockboxCompat.apk ]; then
-    _xposed_enable_baked_module "com.solar.launcher.xposed.rockbox.compat" "/system/app/SolarRockboxCompat.apk"
-fi
-
 # Solar YouTube — notPipe IPC + wheel player hooks (Y1 + Y2).
 if [ -f /system/app/SolarNotPipeBridge.apk ]; then
     _xposed_enable_baked_module "com.solar.launcher.xposed.notpipe" "/system/app/SolarNotPipeBridge.apk"

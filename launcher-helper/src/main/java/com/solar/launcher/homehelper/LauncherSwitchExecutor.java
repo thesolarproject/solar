@@ -50,7 +50,6 @@ public final class LauncherSwitchExecutor {
      * Reversal: drop TARGET_STOCK branch (stock fell through to solar).
      */
     static String normalizeSwitchArg(String target) {
-        if (HomeTargetPolicy.TARGET_ROCKBOX.equals(target)) return "rockbox";
         if (HomeTargetPolicy.TARGET_JJ.equals(target)) return "jj";
         // 2026-07-08 — Factory Innioasis HOME; without this, helper ran "switch solar" and undid Stock.
         if (HomeTargetPolicy.TARGET_STOCK.equals(target)) return "stock";

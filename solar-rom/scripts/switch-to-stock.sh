@@ -2,17 +2,12 @@
 # 2026-07-08 — Disable job control so background pm/am children do not hold the script open.
 # Reversal: remove set +m (script then waits for force-stop/disable children on exit).
 set +m 2>/dev/null || true
-# 2026-07-08 — Rockbox/Solar launcher switch that cooperates with helper HOME enforcement.
-# Rockbox System menu calls bare script (no args) → return to Solar.
-# Solar / Back+Play / Settings pass --rockbox / --jj / --stock|--innioasis for those HOMEs.
+# 2026-07-08 — Solar launcher switch that cooperates with helper HOME enforcement.
+# Bare script (no args) returns to Solar. Settings pass --jj / --stock|--innioasis.
 # Prefer solar-launcher-exec.sh (transition gates, competition disable, helper start).
-# Reversal: restore rockbox-y1 base handoff (keylayout swap + full device restart to Innioasis).
 
-# 2026-07-08 — Same flag matrix Rockbox and Solar already know; keep aliases stable.
+# 2026-07-08 — Flag matrix for alternate HOME targets.
 case "$1" in
-    --rockbox|-rockbox)
-        TARGET="rockbox"
-        ;;
     --jj|-jj)
         TARGET="jj"
         ;;
@@ -27,12 +22,12 @@ case "$1" in
         TARGET="solar"
         ;;
     *)
-        # 2026-07-08 — Unknown flag → Solar so a typo never arms Rockbox by accident.
+        # 2026-07-08 — Unknown flag → Solar so a typo never arms an alternate HOME by accident.
         TARGET="solar"
         ;;
 esac
 
-# 2026-07-08 — Prefer /data/data executor (Y1RomPrep / Rockbox seed); system copy may lag after adb stage.
+# 2026-07-08 — Prefer /data/data executor (Y1RomPrep seed); system copy may lag after adb stage.
 # Reversal: /system/etc/solar first (ROM bake is then always authoritative).
 EXEC=""
 for _cand in \
@@ -54,17 +49,15 @@ fi
 # --- Legacy inline fallback (exec not staged yet) — must still honour enforcer contract ---
 # 2026-07-08 — Was: enable/disable two pkgs + start MainActivity; fought helper HOME + watchdog.
 # Now: arm applying/trans gates, keep Solar+helper enabled, disable competitors, start via helper.
-# Reversal: restore pre-helper set_preferred_home that only toggled Rockbox/JJ + am start MainActivity.
+# Reversal: restore pre-helper set_preferred_home that only toggled alt launchers + am start MainActivity.
 
 SOLAR_PKG="com.solar.launcher"
-ROCKBOX_PKG="org.rockbox"
 JJ_PKG="com.themoon.y1"
 INNIOASIS_Y1_PKG="com.innioasis.y1"
 INNIOASIS_Y2_PKG="com.innioasis.y2"
 HELPER_PKG="com.solar.launcher.homehelper"
 SOLAR_ACTIVITY="com.solar.launcher/.MainActivity"
 HELPER_HOME="com.solar.launcher.homehelper/.LauncherHomeActivity"
-ROCKBOX_ACTIVITY="org.rockbox/.RockboxActivity"
 JJ_ACTIVITY="com.themoon.y1/.MainActivity"
 SET_HOME_ACTION="com.solar.launcher.action.SET_PREFERRED_HOME"
 HOME_RECEIVER="com.solar.launcher/.LauncherHomeReceiver"
@@ -120,21 +113,10 @@ apply_competition() {
     pm enable "$SOLAR_PKG" 2>/dev/null
     pm enable "$HELPER_PKG" 2>/dev/null
     case "$_mode" in
-        rockbox)
-            pm enable "$ROCKBOX_PKG" 2>/dev/null
-            pm disable "$JJ_PKG" 2>/dev/null
-            pm disable "$INNIOASIS_Y1_PKG" 2>/dev/null
-            pm disable "$INNIOASIS_Y2_PKG" 2>/dev/null
-            am force-stop "$JJ_PKG" >/dev/null 2>&1 &
-            am force-stop "$INNIOASIS_Y1_PKG" >/dev/null 2>&1 &
-            am force-stop "$INNIOASIS_Y2_PKG" >/dev/null 2>&1 &
-            ;;
         jj)
             pm enable "$JJ_PKG" 2>/dev/null
-            pm disable "$ROCKBOX_PKG" 2>/dev/null
             pm disable "$INNIOASIS_Y1_PKG" 2>/dev/null
             pm disable "$INNIOASIS_Y2_PKG" 2>/dev/null
-            am force-stop "$ROCKBOX_PKG" >/dev/null 2>&1 &
             am force-stop "$INNIOASIS_Y1_PKG" >/dev/null 2>&1 &
             am force-stop "$INNIOASIS_Y2_PKG" >/dev/null 2>&1 &
             ;;
@@ -145,26 +127,20 @@ apply_competition() {
             pm enable "$_stock_pkg" 2>/dev/null
             [ "$_stock_pkg" != "$INNIOASIS_Y1_PKG" ] && pm disable "$INNIOASIS_Y1_PKG" 2>/dev/null
             [ "$_stock_pkg" != "$INNIOASIS_Y2_PKG" ] && pm disable "$INNIOASIS_Y2_PKG" 2>/dev/null
-            pm disable "$ROCKBOX_PKG" 2>/dev/null
             pm disable "$JJ_PKG" 2>/dev/null
-            am force-stop "$ROCKBOX_PKG" >/dev/null 2>&1 &
             am force-stop "$JJ_PKG" >/dev/null 2>&1 &
             ;;
         custom)
-            pm disable "$ROCKBOX_PKG" 2>/dev/null
             pm disable "$JJ_PKG" 2>/dev/null
             pm disable "$INNIOASIS_Y1_PKG" 2>/dev/null
             pm disable "$INNIOASIS_Y2_PKG" 2>/dev/null
-            am force-stop "$ROCKBOX_PKG" >/dev/null 2>&1 &
             am force-stop "$JJ_PKG" >/dev/null 2>&1 &
             ;;
         *)
             _mode=solar
-            pm disable "$ROCKBOX_PKG" 2>/dev/null
             pm disable "$JJ_PKG" 2>/dev/null
             pm disable "$INNIOASIS_Y1_PKG" 2>/dev/null
             pm disable "$INNIOASIS_Y2_PKG" 2>/dev/null
-            am force-stop "$ROCKBOX_PKG" >/dev/null 2>&1 &
             am force-stop "$JJ_PKG" >/dev/null 2>&1 &
             am force-stop "$INNIOASIS_Y1_PKG" >/dev/null 2>&1 &
             am force-stop "$INNIOASIS_Y2_PKG" >/dev/null 2>&1 &
@@ -190,13 +166,6 @@ apply_competition "$TARGET"
 ensure_overlay_host
 
 case "$TARGET" in
-    rockbox)
-        # 2026-07-08 — codec sync in background so switch stays snappy.
-        if [ -f /system/etc/solar/sync-rockbox-libs.sh ]; then
-            sh /system/etc/solar/sync-rockbox-libs.sh >/dev/null 2>&1 &
-        fi
-        am start -n "$ROCKBOX_ACTIVITY" 2>/dev/null
-        ;;
     jj)
         am start -n "$JJ_ACTIVITY" 2>/dev/null
         ;;

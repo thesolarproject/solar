@@ -72,6 +72,11 @@ public final class XposedModuleEnsurer {
         if (!RootShell.canRun()) return;
         // 2026-07-20 — Same lab gate as onResume (boot bootstrap path).
         if (isLabNoXposed()) return;
+        // Graceful degradation: if Xposed framework jar not present yet, delay repair.
+        if (!isXposedPresent()) {
+            SolarLog.w("XposedModuleEnsurer", "framework jar missing — delaying repair until framework ready");
+            return;
+        }
         repairScheduled = true;
         new Thread(new Runnable() {
             @Override

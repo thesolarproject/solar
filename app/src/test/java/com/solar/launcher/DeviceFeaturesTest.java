@@ -163,18 +163,6 @@ public class DeviceFeaturesTest {
         DeviceFeatures.resetCacheForTest();
     }
 
-    @Test
-    public void rockboxRootFollowsDevicePolicy() {
-        DeviceFeatures.setCachedFamilyForTest("y1");
-        if (!DeviceFeatures.getRockboxRoot().getAbsolutePath().equals("/storage/sdcard0")) {
-            throw new AssertionError("y1 rockbox on user sd");
-        }
-        DeviceFeatures.setCachedFamilyForTest("y2");
-        if (!DeviceFeatures.getRockboxRoot().getAbsolutePath().startsWith("/storage/sdcard")) {
-            throw new AssertionError("y2 rockbox path");
-        }
-        DeviceFeatures.resetCacheForTest();
-    }
 
     @Test
     public void y2PrimaryMediaDefaultMicrosdWhenCardPresent() {

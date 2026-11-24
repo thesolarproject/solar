@@ -43,7 +43,6 @@ public class BootReceiver extends BroadcastReceiver {
         dismissStaleOverlays(context);
         SolarImeDismiss.recoverOnBoot(context);
         SolarImeBootstrap.ensureDefaultIme(context);
-        RockboxDisable.ensureOnce(context);
         // #region agent log
         try {
             org.json.JSONObject d = new org.json.JSONObject();

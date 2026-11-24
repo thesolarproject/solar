@@ -89,61 +89,8 @@ public final class PlatformPrepManifest {
         }
     }
 
-    /** Rockbox APK row — pristine Y1 or manifest-patched Y2. */
-    public static final class RockboxApkEntry {
-        public final String asset;
-        public final String systemApk;
-        public final String device;
-        public final int versionCode;
-        public final String sha256;
 
-        RockboxApkEntry(String asset, String systemApk, String device,
-                int versionCode, String sha256) {
-            this.asset = asset;
-            this.systemApk = systemApk;
-            this.device = device;
-            this.versionCode = versionCode;
-            this.sha256 = sha256;
-        }
-    }
 
-    /** /system/lib/librockbox.so copy for Y2. */
-    public static final class RockboxSystemLib {
-        public final String asset;
-        public final String dest;
-        public final String device;
-        public final String sha256;
-
-        RockboxSystemLib(String asset, String dest, String device, String sha256) {
-            this.asset = asset;
-            this.dest = dest;
-            this.device = device;
-            this.sha256 = sha256;
-        }
-    }
-
-    /** Bundled Rockbox install + staged native assets (platform prep). */
-    public static final class RockboxConfig {
-        public final String pkg;
-        public final String stageIndex;
-        public final RockboxApkEntry y1Apk;
-        public final RockboxApkEntry y2Apk;
-        public final RockboxSystemLib systemLib;
-
-        RockboxConfig(String pkg, String stageIndex, RockboxApkEntry y1Apk,
-                RockboxApkEntry y2Apk, RockboxSystemLib systemLib) {
-            this.pkg = pkg;
-            this.stageIndex = stageIndex;
-            this.y1Apk = y1Apk;
-            this.y2Apk = y2Apk;
-            this.systemLib = systemLib;
-        }
-
-        /** APK entry for this device family. */
-        public RockboxApkEntry apkForDevice(boolean y2) {
-            return y2 ? y2Apk : y1Apk;
-        }
-    }
 
     public final int prepVersion;
     public final FrameworkVendor api17;
@@ -154,13 +101,11 @@ public final class PlatformPrepManifest {
     public final List<ModuleEntry> modules;
     public final List<FileEntry> files;
     public final List<PlatformDeprecationCleaner.DeprecatedEntry> deprecated;
-    public final RockboxConfig rockbox;
 
     private PlatformPrepManifest(int prepVersion, FrameworkVendor api17, FrameworkVendor api19,
             String installerAsset, String initHookAsset, FrameworkSystemPaths systemPaths,
             List<ModuleEntry> modules, List<FileEntry> files,
-            List<PlatformDeprecationCleaner.DeprecatedEntry> deprecated,
-            RockboxConfig rockbox) {
+            List<PlatformDeprecationCleaner.DeprecatedEntry> deprecated ) {
         this.prepVersion = prepVersion;
         this.api17 = api17;
         this.api19 = api19;
@@ -170,7 +115,6 @@ public final class PlatformPrepManifest {
         this.modules = modules;
         this.files = files;
         this.deprecated = deprecated;
-        this.rockbox = rockbox;
     }
 
     /** Load manifest from APK assets (platform/manifest.json). */
@@ -246,41 +190,12 @@ public final class PlatformPrepManifest {
             }
         }
 
-        RockboxConfig rockbox = null;
-        if (root.has("rockbox")) {
-            rockbox = parseRockbox(root.getJSONObject("rockbox"));
-        }
 
         return new PlatformPrepManifest(prepVersion, api17, api19, installerAsset, initHookAsset,
-                systemPaths, modules, files, deprecated, rockbox);
+                systemPaths, modules, files, deprecated);
     }
 
-    private static RockboxApkEntry parseRockboxApk(JSONObject o) throws Exception {
-        return new RockboxApkEntry(
-                o.getString("asset"),
-                o.getString("systemApk"),
-                o.optString("device", "both"),
-                o.optInt("versionCode", 1),
-                o.optString("sha256", ""));
-    }
 
-    private static RockboxConfig parseRockbox(JSONObject o) throws Exception {
-        RockboxApkEntry y1 = o.has("y1Apk") ? parseRockboxApk(o.getJSONObject("y1Apk")) : null;
-        RockboxApkEntry y2 = o.has("y2Apk") ? parseRockboxApk(o.getJSONObject("y2Apk")) : null;
-        RockboxSystemLib sysLib = null;
-        if (o.has("systemLib")) {
-            JSONObject sl = o.getJSONObject("systemLib");
-            sysLib = new RockboxSystemLib(
-                    sl.getString("asset"),
-                    sl.getString("dest"),
-                    sl.optString("device", "y2"),
-                    sl.optString("sha256", ""));
-        }
-        return new RockboxConfig(
-                o.optString("pkg", "org.rockbox"),
-                o.optString("stageIndex", ""),
-                y1, y2, sysLib);
-    }
 
     private static FrameworkVendor parseVendor(JSONObject o) throws Exception {
         return new FrameworkVendor(

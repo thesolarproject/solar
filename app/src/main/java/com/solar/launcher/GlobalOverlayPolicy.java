@@ -2,7 +2,7 @@ package com.solar.launcher;
 
 /**
  * 2026-07-14 — Hold policy: Solar-only POWER menu; HOLD BACK outside Solar returns to Solar Home.
- * Layman: ~420ms Back-hold jumps home from apps; Power menu only inside Solar; Rockbox keeps BACK.
+ * Layman: ~420ms Back-hold jumps home from apps; Power menu only inside Solar; third-party keeps BACK.
  * Technical: delegates to {@link com.solar.input.policy.GlobalInputPolicy} (policy_rev 22).
  * Ultra-long BACK/power arms rescue (7s HUD, 10s exec). Mutex: OverlayKeyGate / IME arbiter.
  * Reversal: POLICY_REV 21 system-wide WM quick menu for 3P POWER/BACK.
@@ -13,11 +13,10 @@ public final class GlobalOverlayPolicy {
 
     /**
      * 2026-07-06 — Stock/third-party + nav-owned launchers for center-long OK path only.
-     * BACK/POWER 4s modal uses {@link #shouldOfferBackLongGlobalModal} (includes Rockbox/JJ).
+     * BACK/POWER 4s modal uses {@link #shouldOfferBackLongGlobalModal} (includes third-party/JJ).
      */
     public static boolean shouldOfferGlobalModalForPackage(String pkg) {
         if (pkg == null || pkg.length() == 0) return false;
-        if (LauncherSwitch.ROCKBOX_PACKAGE.equals(pkg)) return false;
         // 2026-07-08 — JJ / Innioasis HOME use BACK-long via shouldOfferBackLongGlobalModal (300ms tier).
         if (com.solar.input.policy.GlobalInputPolicy.isJjKeylayoutLauncher(pkg)) return false;
         if ("com.solar.launcher".equals(pkg)) return false;
@@ -41,12 +40,11 @@ public final class GlobalOverlayPolicy {
 
     /**
      * When {@code sys.solar.overlay.active=1}, block hardware keys from reaching this foreground app.
-     * Rockbox is included so an overlay opened elsewhere does not leak wheel/BACK into Rockbox.
+     * third-party is included so an overlay opened elsewhere does not leak wheel/BACK into third-party.
      */
     public static boolean shouldBlockForegroundKeysWhileOverlayActive(String pkg) {
         if (pkg == null || pkg.length() == 0) return false;
         if (isSolarForegroundPackage(pkg)) return true;
-        if (LauncherSwitch.ROCKBOX_PACKAGE.equals(pkg)) return true;
         // 2026-07-08 — JJ + Innioasis HOME: overlay owns wheel while quick menu is up.
         if (com.solar.input.policy.GlobalInputPolicy.isJjKeylayoutLauncher(pkg)) return true;
         // Other innioasis vendor apps — leave keys alone (prior denylist).
@@ -55,7 +53,7 @@ public final class GlobalOverlayPolicy {
     }
 
     /**
-     * 2026-07-05 — Ultra-long BACK/power rescue hold — Rockbox, bare WM, and system shells included.
+     * 2026-07-05 — Ultra-long BACK/power rescue hold — third-party, bare WM, and system shells included.
      * Layman: hold Back/Power ~10s to restart Solar from almost any screen except Solar itself.
      * Technical: Solar foreground uses {@link MainActivity} native handler; null/android fg allowed.
      */
@@ -82,7 +80,7 @@ public final class GlobalOverlayPolicy {
     }
 
     /**
-     * 2026-07-14 — BACK-long → Solar Home eligibility (IME may escape Rockbox).
+     * 2026-07-14 — BACK-long → Solar Home eligibility (IME may escape third-party).
      * Name kept; action is launch Solar, not WM quick menu.
      */
     public static boolean shouldOfferBackLongGlobalModal(String pkg, boolean imeActive) {

@@ -77,7 +77,7 @@ public final class OverlayForegroundGuard {
 
     /** True when the snapshotted foreground task is Rockbox (overlay launcher rows). */
     public static boolean isRockboxSnapshottedForeground() {
-        return LauncherSwitch.ROCKBOX_PACKAGE.equals(snapshotPackage);
+        return false;
     }
 
     static void resetForTest() {

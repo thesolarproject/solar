@@ -34,8 +34,6 @@ public final class XposedModuleRegistry {
     private static final String PKG_BRIDGE_Y1 = "com.solar.launcher.xposed.bridge.y1";
     private static final String PKG_BRIDGE_Y2 = "com.solar.launcher.xposed.bridge.y2";
     private static final String PKG_THEME_FONT = "com.solar.launcher.xposed.themefont";
-    private static final String PKG_ROCKBOX_IME = "com.solar.launcher.xposed.rockbox.ime";
-    private static final String PKG_ROCKBOX_COMPAT = "com.solar.launcher.xposed.rockbox.compat";
     private static final String PKG_POWERMENU_TEST = "com.solar.launcher.xposed.powermenu";
 
     private XposedModuleRegistry() {}
@@ -60,20 +58,6 @@ public final class XposedModuleRegistry {
                 true,
                 R.string.settings_debug_xposed_theme_font_disable_warning,
                 false));
-        out.add(new Entry(
-                PKG_ROCKBOX_IME,
-                R.string.settings_debug_xposed_rockbox_ime,
-                true,
-                R.string.settings_debug_xposed_rockbox_ime_disable_warning,
-                false));
-        if (DeviceFeatures.isY2()) {
-            out.add(new Entry(
-                    PKG_ROCKBOX_COMPAT,
-                    R.string.settings_debug_xposed_rockbox_compat,
-                    true,
-                    R.string.settings_debug_xposed_rockbox_compat_disable_warning,
-                    false));
-        }
         // 2026-07-15 — NotPipe bridge removed; YouTube is native in Solar.
         out.add(new Entry(
                 PKG_POWERMENU_TEST,
@@ -89,10 +73,6 @@ public final class XposedModuleRegistry {
         List<String> pkgs = new ArrayList<String>();
         pkgs.add(bridgePackageForDevice());
         pkgs.add(PKG_THEME_FONT);
-        pkgs.add(PKG_ROCKBOX_IME);
-        if (DeviceFeatures.isY2()) {
-            pkgs.add(PKG_ROCKBOX_COMPAT);
-        }
         return Collections.unmodifiableList(pkgs);
     }
 
@@ -102,8 +82,6 @@ public final class XposedModuleRegistry {
         if (PKG_BRIDGE_Y1.equals(pkg)) return "/system/app/SolarContextBridgeY1.apk";
         if (PKG_BRIDGE_Y2.equals(pkg)) return "/system/app/SolarContextBridgeY2.apk";
         if (PKG_THEME_FONT.equals(pkg)) return "/system/app/SolarThemeFont.apk";
-        if (PKG_ROCKBOX_IME.equals(pkg)) return "/system/app/SolarRockboxIme.apk";
-        if (PKG_ROCKBOX_COMPAT.equals(pkg)) return "/system/app/SolarRockboxCompat.apk";
         // 2026-07-15 — A5 ROM may still ship unmodified NotPipe (not an Xposed module).
         if ("io.github.gohoski.notpipe".equals(pkg)) return "/system/app/io.github.gohoski.notpipe.apk";
         if ("com.solar.launcher.globalcontext".equals(pkg)) return "/system/app/SolarGlobalContextModal.apk";
@@ -116,8 +94,6 @@ public final class XposedModuleRegistry {
         if (apkPath.endsWith("SolarContextBridgeY1.apk")) return PKG_BRIDGE_Y1;
         if (apkPath.endsWith("SolarContextBridgeY2.apk")) return PKG_BRIDGE_Y2;
         if (apkPath.endsWith("SolarThemeFont.apk")) return PKG_THEME_FONT;
-        if (apkPath.endsWith("SolarRockboxIme.apk")) return PKG_ROCKBOX_IME;
-        if (apkPath.endsWith("SolarRockboxCompat.apk")) return PKG_ROCKBOX_COMPAT;
         if (apkPath.endsWith("io.github.gohoski.notpipe.apk")) return "io.github.gohoski.notpipe";
         if (apkPath.endsWith("SolarGlobalContextModal.apk")) return "com.solar.launcher.globalcontext";
         return null;

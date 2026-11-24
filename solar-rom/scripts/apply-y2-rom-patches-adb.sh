@@ -113,26 +113,6 @@ echo "==> Xposed framework (API 19)"
 ANDROID_ADB_TRANSPORT="${ANDROID_ADB_TRANSPORT:-}" \
     "$SCRIPT_DIR/install-xposed-adb.sh" --api 19 --no-reboot
 
-# --- Rockbox: fetch, patch for Y2, stage libs/.rockbox ---
-echo "==> Resign Rockbox for Y2 (manifest-only sharedUserId strip; compat via Xposed)"
-chmod +x "$SCRIPT_DIR/fetch-rockbox-y1-y2-assets.sh" \
-    "$SCRIPT_DIR/patch-rockbox-y2.sh" \
-    "$SCRIPT_DIR/extract-rockbox-staged-assets.sh"
-CACHE="$("$SCRIPT_DIR/fetch-rockbox-y1-y2-assets.sh")"
-[ -f "$CACHE/org.rockbox.apk" ] && [ -f "$CACHE/librockbox.so" ] \
-    || die "rockbox assets fetch failed"
-PATCHED="$WORK/org.rockbox-y2.apk"
-"$SCRIPT_DIR/patch-rockbox-y2.sh" "$CACHE/org.rockbox.apk" "$PATCHED"
-STAGED_LIBS="$WORK/rockbox-staged-libs"
-STAGED_RB="$WORK/rockbox-staged-dot-rockbox"
-"$SCRIPT_DIR/extract-rockbox-staged-assets.sh" "$PATCHED" "$STAGED_LIBS" "$STAGED_RB"
-
-push_to_system "$PATCHED" /system/app/org.rockbox.apk 644
-push_to_system "$CACHE/librockbox.so" /system/lib/librockbox.so 644
-push_dir_to_system "$STAGED_LIBS" /system/etc/solar/rockbox-libs
-push_dir_to_system "$STAGED_RB" /system/etc/solar/rockbox-dot-rockbox
-"${ADB[@]}" shell "su -c 'chmod -R 755 /system/etc/solar/rockbox-libs /system/etc/solar/rockbox-dot-rockbox'" 2>/dev/null || true
-
 # --- Solar APK + TLS prep ---
 echo "==> Solar APK + TLS (Conscrypt JNI + CA roots)"
 push_to_system "$APK" /system/app/com.solar.launcher.apk 644
@@ -154,8 +134,8 @@ push_to_system "$REPO_ROOT/solar-rom/system/99Y1ButtonScript" /system/etc/init.d
 mkdir -p "$WORK/etc-solar"
 # 2026-07-05: rescue trio added — build-rom.sh bakes them into /etc/solar, so the adb overlay
 # must too (lab devices stay in lockstep with flashed ROMs; emergency-eject + HUD tick scripts).
-for f in switch-to-stock.sh switch-to-rockbox.sh sync-rockbox-libs.sh sync-rockbox-assets.sh \
-    sync-y1-keymap.sh disable-rockbox-for-solar.sh apply-preferred-home-boot.sh disable-large-font-accessibility.sh enable-gpu-performance.sh solar-usb-recovery-agent.sh \
+for f in switch-to-stock.sh \
+    sync-y1-keymap.sh apply-preferred-home-boot.sh disable-large-font-accessibility.sh enable-gpu-performance.sh solar-usb-recovery-agent.sh \
     solar-rescue-exec.sh solar-rescue-daemon.sh solar-rescue-hud-watch.sh; do
     cp "$SCRIPT_DIR/$f" "$WORK/etc-solar/$f"
     chmod 755 "$WORK/etc-solar/$f"
@@ -164,9 +144,8 @@ for f in solar-enable-ums.sh solar-disable-ums.sh y1-enable-ums.sh y1-disable-um
     cp "$REPO_ROOT/app/src/main/assets/y1/$f" "$WORK/etc-solar/$f"
     chmod 755 "$WORK/etc-solar/$f"
 done
-cp "$REPO_ROOT/solar-rom/system/rockbox-y2-config.cfg" "$WORK/etc-solar/rockbox-y2-config.cfg"
 cp "$SCRIPT_DIR/Y2-Rockbox.kl" "$WORK/etc-solar/Y2-Rockbox.kl"
-chmod 644 "$WORK/etc-solar/rockbox-y2-config.cfg" "$WORK/etc-solar/Y2-Rockbox.kl"
+chmod 644 "$WORK/etc-solar/Y2-Rockbox.kl"
 for f in "$WORK/etc-solar"/*; do
     base=$(basename "$f")
     mode=755
@@ -202,31 +181,24 @@ grep -q '^persist\.sys\.country=' "$PROP_LOCAL" || echo 'persist.sys.country=US'
 push_to_system "$PROP_LOCAL" /system/build.prop 644
 
 # --- Package manager refresh ---
-echo "==> pm install Solar + Rockbox from /system/app"
+echo "==> pm install Solar from /system/app"
 "${ADB[@]}" shell "su -c 'pm install -r /system/app/com.solar.launcher.apk'" 2>/dev/null || true
-"${ADB[@]}" shell "su -c 'pm install -r /system/app/org.rockbox.apk'" 2>/dev/null || true
 
 # --- First-boot helpers (idempotent on live device) ---
 echo "==> Run install-recovery boot chain (daemonsu + init.d)"
 "${ADB[@]}" shell "su -c 'sh /system/etc/install-recovery.sh'" 2>/dev/null || true
 sleep 3
-echo "==> Run Rockbox sync + disable-for-Solar (idempotent)"
-"${ADB[@]}" shell "su -c 'sh /system/etc/solar/sync-rockbox-libs.sh'" 2>/dev/null || true
-"${ADB[@]}" shell "su -c 'sh /system/etc/solar/sync-rockbox-assets.sh'" 2>/dev/null || true
-"${ADB[@]}" shell "su -c 'sh /system/etc/solar/disable-rockbox-for-solar.sh'" 2>/dev/null || true
 
 # --- Post-apply verification snapshot ---
 KL105="$("${ADB[@]}" shell "su -c 'grep \"^key 105\" /system/usr/keylayout/Generic.kl'" 2>/dev/null | tr -d '\r' || true)"
-RB_PM="$("${ADB[@]}" shell pm path org.rockbox 2>/dev/null | tr -d '\r' || true)"
 SU_MODE="$("${ADB[@]}" shell "su -c 'stat -c %a /system/xbin/su'" 2>/dev/null | tr -d '\r' || true)"
 LANG="$("${ADB[@]}" shell getprop persist.sys.language 2>/dev/null | tr -d '\r' || true)"
 debug_log "POC" "apply-y2-rom-patches-adb.sh:verify" "post-apply snapshot" \
-    "key105=$KL105" "rockbox_pm=$RB_PM" "su_mode=$SU_MODE" "language=$LANG"
+    "key105=$KL105" "su_mode=$SU_MODE" "language=$LANG"
 
 echo ""
 echo "==> Y2 ROM /system overlay applied via adb"
 echo "  key 105: $KL105"
-echo "  org.rockbox: ${RB_PM:-MISSING}"
 echo "  su mode: $SU_MODE"
 echo "  language prop: ${LANG:-<empty>}"
 

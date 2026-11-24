@@ -100,8 +100,8 @@ adb_su_sh "rm -f /system/etc/init.d/99Y1LauncherInit.sh" 2>/dev/null || true
 mkdir -p "$WORK/etc-solar"
 # 2026-07-05: rescue trio added — build-rom.sh bakes them into /etc/solar, so the adb overlay
 # must too (lab devices stay in lockstep with flashed ROMs; emergency-eject + HUD tick scripts).
-for f in switch-to-stock.sh switch-to-rockbox.sh sync-rockbox-libs.sh sync-rockbox-assets.sh \
-    sync-y1-keymap.sh disable-rockbox-for-solar.sh apply-preferred-home-boot.sh disable-large-font-accessibility.sh enable-gpu-performance.sh solar-usb-recovery-agent.sh \
+for f in switch-to-stock.sh \
+    sync-y1-keymap.sh apply-preferred-home-boot.sh disable-large-font-accessibility.sh enable-gpu-performance.sh solar-usb-recovery-agent.sh \
     solar-rescue-exec.sh solar-rescue-daemon.sh solar-rescue-hud-watch.sh \
     solar-launcher-exec.sh solar-platform-daemon.sh; do
     cp "$SCRIPT_DIR/$f" "$WORK/etc-solar/$f"
@@ -138,8 +138,6 @@ fi
 
 echo "==> pm refresh Solar"
 adb_su_sh "pm install -r /system/app/com.solar.launcher.apk" 2>/dev/null || true
-adb_su_sh "sh /system/etc/solar/sync-rockbox-libs.sh" 2>/dev/null || true
-adb_su_sh "sh /system/etc/solar/disable-rockbox-for-solar.sh" 2>/dev/null || true
 adb_su_sh "sync"
 
 if [ "$REBOOT" -eq 1 ]; then

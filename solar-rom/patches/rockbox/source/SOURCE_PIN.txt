@@ -1,4 +1,0 @@
-# rockbox-y1 git pin for Solar source builds (branch + optional commit).
-# Clone: https://github.com/rockbox-y1/rockbox.git
-branch=y1
-commit=

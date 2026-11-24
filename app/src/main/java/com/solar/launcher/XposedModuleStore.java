@@ -284,14 +284,6 @@ public final class XposedModuleStore {
                 && new File("/system/app/SolarThemeFont.apk").isFile()) {
             return "/system/app/SolarThemeFont.apk";
         }
-        if ("com.solar.launcher.xposed.rockbox.ime".equals(pkg)
-                && new File("/system/app/SolarRockboxIme.apk").isFile()) {
-            return "/system/app/SolarRockboxIme.apk";
-        }
-        if ("com.solar.launcher.xposed.rockbox.compat".equals(pkg)
-                && new File("/system/app/SolarRockboxCompat.apk").isFile()) {
-            return "/system/app/SolarRockboxCompat.apk";
-        }
         if ("com.solar.launcher.xposed.bridge.y2".equals(pkg)
                 && new File("/system/app/SolarContextBridge.apk").isFile()) {
             return "/system/app/SolarContextBridge.apk";
@@ -309,12 +301,6 @@ public final class XposedModuleStore {
         }
         if ("com.solar.launcher.xposed.themefont".equals(pkg)) {
             return PlatformAssetExtractor.cachedModuleApkPath(ctx, "xposed/SolarThemeFont.apk");
-        }
-        if ("com.solar.launcher.xposed.rockbox.ime".equals(pkg)) {
-            return PlatformAssetExtractor.cachedModuleApkPath(ctx, "xposed/SolarRockboxIme.apk");
-        }
-        if ("com.solar.launcher.xposed.rockbox.compat".equals(pkg)) {
-            return PlatformAssetExtractor.cachedModuleApkPath(ctx, "xposed/SolarRockboxCompat.apk");
         }
         return null;
     }

@@ -68,9 +68,9 @@ public final class LauncherPickerActivity extends Activity {
     }
 
     /**
-     * Build Solar / Rockbox / JJ / Stock / PM-discovered HOME rows — skip helper middle-man.
+     * Build Solar / JJ / Stock / PM-discovered HOME rows — skip helper middle-man.
      * 2026-07-08 — Stock Innioasis row was missing; custom scan alone skipped dedicated stock pkgs.
-     * Reversal: drop stock block (only solar/rockbox/jj + custom).
+     * Reversal: drop stock block (only solar/jj + custom).
      */
     private void buildRows() {
         ArrayList<String> labels = new ArrayList<String>();
@@ -79,11 +79,6 @@ public final class LauncherPickerActivity extends Activity {
         labels.add(getString(R.string.picker_solar));
         targets.add(HomeTargetPolicy.TARGET_SOLAR);
         customComponents.add("");
-        if (isInstalled(HomeTargetPolicy.ROCKBOX_PKG)) {
-            labels.add(getString(R.string.picker_rockbox));
-            targets.add(HomeTargetPolicy.TARGET_ROCKBOX);
-            customComponents.add("");
-        }
         if (isInstalled(HomeTargetPolicy.JJ_PKG)) {
             labels.add(getString(R.string.picker_jj));
             targets.add(HomeTargetPolicy.TARGET_JJ);

@@ -47,21 +47,17 @@ require_path /etc/solar/XposedBridge.jar || fail "/etc/solar/XposedBridge.jar"
 require_path /xposed.prop || fail "/xposed.prop"
 require_path /app/XposedInstaller.apk || fail "/app/XposedInstaller.apk"
 require_path /app/SolarThemeFont.apk || fail "/app/SolarThemeFont.apk"
-require_path /app/SolarRockboxIme.apk || fail "/app/SolarRockboxIme.apk"
 require_path /app/SolarNotPipeBridge.apk || fail "/app/SolarNotPipeBridge.apk"
 if [ "$API" = "17" ] || [ "$API" = "18" ]; then
     require_path /app/SolarContextBridgeY1.apk || fail "/app/SolarContextBridgeY1.apk"
 else
     require_path /app/SolarContextBridgeY2.apk || fail "/app/SolarContextBridgeY2.apk"
-    require_path /app/SolarRockboxCompat.apk || fail "/app/SolarRockboxCompat.apk"
 fi
 require_path /etc/init.d/99XposedInit.sh || fail "/etc/init.d/99XposedInit.sh"
 
 init_hook="$(debugfs -R "cat /etc/init.d/99XposedInit.sh" "$sys" 2>/dev/null || true)"
 echo "$init_hook" | grep -q 'com.solar.launcher.xposed.themefont' \
     || fail "99XposedInit.sh must enable com.solar.launcher.xposed.themefont"
-echo "$init_hook" | grep -q 'com.solar.launcher.xposed.rockbox.ime' \
-    || fail "99XposedInit.sh must enable com.solar.launcher.xposed.rockbox.ime"
 echo "$init_hook" | grep -q 'com.solar.launcher.xposed.notpipe' \
     || fail "99XposedInit.sh must enable com.solar.launcher.xposed.notpipe"
 if [ "$API" = "17" ] || [ "$API" = "18" ]; then
@@ -70,8 +66,6 @@ if [ "$API" = "17" ] || [ "$API" = "18" ]; then
 else
     echo "$init_hook" | grep -q 'com.solar.launcher.xposed.bridge.y2' \
         || fail "99XposedInit.sh must enable com.solar.launcher.xposed.bridge.y2"
-    echo "$init_hook" | grep -q 'com.solar.launcher.xposed.rockbox.compat' \
-        || fail "99XposedInit.sh must enable com.solar.launcher.xposed.rockbox.compat"
 fi
 echo "$init_hook" | grep -q '_xposed_set_module_enabled_in_prefs' \
     || fail "99XposedInit.sh must use safe enabled_modules merge helper"

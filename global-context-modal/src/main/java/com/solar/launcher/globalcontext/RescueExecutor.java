@@ -26,7 +26,6 @@ public final class RescueExecutor {
 
         CompanionRescueHoldState.signalRestarting();
         String solar = GlobalInputPolicy.SOLAR_PKG;
-        String rockbox = GlobalInputPolicy.ROCKBOX_PKG;
         if (runShell("sh /system/etc/solar/solar-rescue-exec.sh")) {
             return;
         }

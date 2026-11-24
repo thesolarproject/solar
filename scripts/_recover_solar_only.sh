@@ -52,8 +52,6 @@ if [ "$MODEL" = "Y2" ]; then
 EOF
   cat >/data/data/de.robv.android.xposed.installer/conf/modules.list <<'EOF'
 /system/app/SolarThemeFont.apk
-/system/app/SolarRockboxIme.apk
-/system/app/SolarRockboxCompat.apk
 EOF
 else
   cat >/data/data/de.robv.android.xposed.installer/shared_prefs/enabled_modules.xml <<'EOF'
@@ -65,7 +63,6 @@ else
 EOF
   cat >/data/data/de.robv.android.xposed.installer/conf/modules.list <<'EOF'
 /system/app/SolarThemeFont.apk
-/system/app/SolarRockboxIme.apk
 EOF
 fi
 chmod 664 /data/data/de.robv.android.xposed.installer/shared_prefs/enabled_modules.xml \

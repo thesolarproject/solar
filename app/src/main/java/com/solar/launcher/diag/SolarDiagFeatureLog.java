@@ -79,7 +79,6 @@ public final class SolarDiagFeatureLog {
         if (lower.contains("soulseek") || lower.contains("reach")) return "reach";
         if (lower.contains("deezer")) return "deezer";
         if (lower.contains("podcast")) return "podcasts";
-        if (lower.contains("rockbox")) return "rockbox";
         if (lower.contains("wifi") || lower.contains("wlan")) return "wifi";
         if (lower.contains("playback") || lower.contains("media") || lower.contains("player")) {
             return "playback";

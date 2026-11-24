@@ -65,9 +65,6 @@ fi
 for p in \
     /etc/solar/switch-to-stock.sh \
     /etc/solar/sync-y1-keymap.sh \
-    /etc/solar/sync-rockbox-libs.sh \
-    /etc/solar/sync-rockbox-assets.sh \
-    /etc/solar/disable-rockbox-for-solar.sh \
     /etc/solar/apply-preferred-home-boot.sh \
     /etc/solar/disable-large-font-accessibility.sh \
     /etc/solar/enable-gpu-performance.sh \
@@ -88,7 +85,6 @@ for p in \
     /lib/libfmjni.so \
     /app/SolarContextBridgeY1.apk \
     /app/SolarThemeFont.apk \
-    /app/SolarRockboxIme.apk \
     /app/SolarNotPipeBridge.apk \
     /app/io.github.gohoski.notpipe.apk; do
     require_path "$p" || fail "missing $p"
@@ -102,9 +98,6 @@ if ! debugfs_cat /etc/init.d/99XposedInit.sh | grep -q 'com.solar.launcher.xpose
 fi
 if ! debugfs_cat /etc/init.d/99XposedInit.sh | grep -q 'com.solar.launcher.xposed.bridge.y1'; then
     fail "99XposedInit.sh must enable com.solar.launcher.xposed.bridge.y1"
-fi
-if ! debugfs_cat /etc/init.d/99XposedInit.sh | grep -q 'com.solar.launcher.xposed.rockbox.ime'; then
-    fail "99XposedInit.sh must enable com.solar.launcher.xposed.rockbox.ime"
 fi
 if ! debugfs_cat /etc/init.d/99XposedInit.sh | grep -q 'com.solar.launcher.xposed.notpipe'; then
     fail "99XposedInit.sh must enable com.solar.launcher.xposed.notpipe"

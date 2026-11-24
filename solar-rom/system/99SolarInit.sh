@@ -62,21 +62,7 @@ if [ -d "$SD" ]; then
         "$SD/Videos" "$SD/Pictures" "$SD/FM Recordings" "$SD/RadioBuffer" 2>/dev/null
 fi
 
-# 2026-07-10 — Solar-only: do not seed launcher switch scripts on boot (no Rockbox/JJ handoff).
-# Scripts remain on /system/etc/solar for adb recovery only.
-# Reversal: restore cp blocks below for alternate-launcher ROM builds.
-#if [ -f /system/etc/solar/switch-to-stock.sh ]; then
-#    cp /system/etc/solar/switch-to-stock.sh /data/data/
-#    chmod 755 /data/data/switch-to-stock.sh
-#fi
-#if [ -f /system/etc/solar/switch-to-rockbox.sh ]; then
-#    cp /system/etc/solar/switch-to-rockbox.sh /data/data/
-#    chmod 755 /data/data/switch-to-rockbox.sh
-#fi
-#if [ -f /system/etc/solar/solar-launcher-exec.sh ]; then
-#    cp /system/etc/solar/solar-launcher-exec.sh /data/data/
-#    chmod 755 /data/data/solar-launcher-exec.sh
-#fi
+# 2026-07-10 — Solar-only: launcher switch scripts are not seeded on boot.
 setprop persist.solar.home.target solar
 # 2026-07-15 — A5 ROM bakes A5-mtk.kl; pin family before keymap sync so Y1 wheel maps never win.
 # 2026-07-16 — Pin family for Reach usernames / UI: A5 QVGA unique; 360p disambiguated by
@@ -144,30 +130,6 @@ case "$(getprop persist.solar.device_family 2>/dev/null)" in
         esac
         ;;
 esac
-if [ -f /system/etc/solar/sync-rockbox-libs.sh ]; then
-    # 2026-07-19 — Skip codec sync unless Rockbox is installed (Solar-only ROMs).
-    # Was: always run on Y1/Y2. Reversal: drop pm path check.
-    case "$(getprop persist.solar.device_family 2>/dev/null)" in
-        a5) ;;
-        *)
-            if pm path org.rockbox >/dev/null 2>&1 \
-                    || [ -f /system/app/org.rockbox.apk ]; then
-                sh /system/etc/solar/sync-rockbox-libs.sh
-            fi
-            ;;
-    esac
-fi
-if [ -f /system/etc/solar/sync-rockbox-assets.sh ]; then
-    case "$(getprop persist.solar.device_family 2>/dev/null)" in
-        a5) ;;
-        *)
-            if pm path org.rockbox >/dev/null 2>&1 \
-                    || [ -f /system/app/org.rockbox.apk ]; then
-                sh /system/etc/solar/sync-rockbox-assets.sh
-            fi
-            ;;
-    esac
-fi
 if [ -f /system/etc/solar/sync-y1-keymap.sh ]; then
     sh /system/etc/solar/sync-y1-keymap.sh
 fi
@@ -175,8 +137,6 @@ fi
 # First boot after Solar ROM flash: apply saved HOME (default Solar) without Android picker dialogs.
 if [ -f /system/etc/solar/apply-preferred-home-boot.sh ]; then
     sh /system/etc/solar/apply-preferred-home-boot.sh
-elif [ -f /system/etc/solar/disable-rockbox-for-solar.sh ]; then
-    sh /system/etc/solar/disable-rockbox-for-solar.sh
 fi
 
 # 2026-07-06 — Platform supervisor + rescue evdev tier (hold timing in GlobalInputPolicy + Xposed).

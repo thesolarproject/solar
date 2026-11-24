@@ -120,10 +120,7 @@ public final class EqPresetStore {
             if (root == null) continue;
             addIfDir(dirs, new File(root, "Solar/EQ"));
             addIfDir(dirs, new File(root, "Music/EQ"));
-            addIfDir(dirs, new File(root, ".rockbox/eqs"));
         }
-        File rb = DeviceFeatures.getRockboxRoot();
-        if (rb != null) addIfDir(dirs, new File(rb, ".rockbox/eqs"));
         return dirs;
     }
 

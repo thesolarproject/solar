@@ -1030,7 +1030,6 @@ public final class SolarDiagnosticReporter {
             }
             for (File root : DeviceFeatures.getStorageRoots()) {
                 if (root == null) continue;
-                collectRockboxLogs(new File(root, ".rockbox"), out, "Rockbox/" + root.getName());
             }
             addDeviceSnapshot(out);
             // logcat -d is expensive on KitKat; only full ships (user report / pull / crash).
@@ -1069,20 +1068,6 @@ public final class SolarDiagnosticReporter {
             if (f.isFile() && f.getName().startsWith("debug-") && f.getName().endsWith(".log")) {
                 out.add(new LogSource("Solar/" + f.getName(), f));
             }
-        }
-    }
-
-    private static void collectRockboxLogs(File dir, List<LogSource> out, String prefix) {
-        if (dir == null || !dir.exists()) return;
-        if (dir.isFile() && dir.getName().endsWith(".log")) {
-            out.add(new LogSource(prefix + "/" + dir.getName(), dir));
-            return;
-        }
-        if (!dir.isDirectory()) return;
-        File[] kids = dir.listFiles();
-        if (kids == null) return;
-        for (File f : kids) {
-            collectRockboxLogs(f, out, prefix + "/" + f.getName());
         }
     }
 

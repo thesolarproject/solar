@@ -41,19 +41,6 @@ public final class Debug434250Log {
         } catch (Exception ignored) {}
     }
 
-    public static JSONObject rockboxModeSnapshot(Context ctx) {
-        JSONObject d = new JSONObject();
-        try {
-            d.put("homeTarget", LauncherPreference.getHomeTarget(ctx));
-            d.put("homeProp", readProp(LauncherPreference.PROP_HOME_TARGET));
-            d.put("homeApplying", readProp(LauncherPreference.PROP_HOME_APPLYING));
-            d.put("rockboxEnabled", LauncherSwitch.isRockboxEnabled(ctx));
-            d.put("rockboxDisabled", LauncherSwitch.isRockboxDisabled(ctx));
-            d.put("rockboxFg", LauncherSwitch.isRockboxForeground(ctx));
-            d.put("solarFg", ExternalInputHandoff.getForegroundPackageName(ctx));
-        } catch (Exception ignored) {}
-        return d;
-    }
 
     public static JSONObject rescueSnapshot() {
         JSONObject d = new JSONObject();

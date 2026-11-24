@@ -140,7 +140,7 @@ public final class UsbStorageOverlayReceiver extends BroadcastReceiver {
             }
             return;
         }
-        // 2026-07-16 — During first-wait / library scan only (not permanent prep/rockbox flags).
+        // 2026-07-16 — During first-wait / library scan only (not permanent prep flags).
         // Layman: wait until home is usable; never mark this plug “done” before the sheet shows.
         MainActivity alive = MainActivity.peekForOverlay();
         if (alive != null && alive.shouldDeferUsbConnectPromptNow()) {

@@ -212,9 +212,7 @@ public class SolarApplication extends Application {
             ThemeManager.preferInternalCacheForActiveTheme(this);
         }
         NavigationPreferences.syncPropertyFromPrefs(this);
-        // 2026-07-11 — Rockbox experiment sysprop for companion launcher picker gate.
-        RockboxExperiment.syncSyspropFromPrefs(this);
-        // Overlay process only hosts WM modal — skip HOME/bootstrap that could touch Rockbox focus.
+        // Overlay process only hosts WM modal — skip HOME/bootstrap.
         if (isOverlayProcess()) {
             // Theme I/O off Application main thread — startService can return while cache warms.
             if (OverlayKeyGate.isOverlayKeysActive()) {
@@ -295,20 +293,15 @@ public class SolarApplication extends Application {
         // 2026-07-08 — JJ/Rockbox/Stock HOME: claim MEDIA_BUTTON before bootstrap I/O (H2).
         String earlyHomeTarget = LauncherPreference.getHomeTarget(this);
         if (LauncherDefault.TARGET_JJ.equals(earlyHomeTarget)
-                || LauncherDefault.TARGET_ROCKBOX.equals(earlyHomeTarget)
                 || LauncherDefault.TARGET_STOCK.equals(earlyHomeTarget)) {
             MediaButtonRegistrar.ensureRegistered(this);
             ExternalInputHandoff.warmInjector(this);
-            RockboxForegroundMonitor.ensureStarted(this);
-            if (LauncherDefault.TARGET_JJ.equals(earlyHomeTarget)
-                    || LauncherDefault.TARGET_STOCK.equals(earlyHomeTarget)) {
-                ExternalInputHandoff.armJjShim(this);
-            }
+            ExternalInputHandoff.armJjShim(this);
             try {
                 startService(new Intent(this, SolarHandoffService.class));
             } catch (Exception ignored) {}
         }
-        // 2026-07-06 — Rescue setprop may land before prefs; reconcile before async bootstrap re-applies rockbox.
+        // 2026-07-06 — Rescue setprop may land before prefs; reconcile before async bootstrap.
         LauncherPreference.reconcileHomeTargetFromProperty(this);
         // 2026-07-06 — Record USB boot host before Application bootstrap thread races USB_STATE.
         UsbHostSessionPolicy.onBootCompleted(this);
@@ -349,14 +342,6 @@ public class SolarApplication extends Application {
                 // 2026-07-06 — OTA catalog (SolarUpdateClient) shares Conscrypt + bundled LE roots with TlsHelper.
                 OtaTlsHelper.init(SolarApplication.this);
                 Y1InputKeys.selfCheckWheelMapping();
-                // 2026-07-14 — A5 stock: skip ROM switch scripts / su prep (SuperSU steals UI).
-                // Was: always ensureSwitchScripts + RockboxDisable. Now: Y1/Y2 only.
-                // Reversal: remove isA5 continue; always run ensureSwitchScripts.
-                if (!DeviceFeatures.isA5()) {
-                    SolarBootPacing.pauseBetweenBootstrapSteps();
-                    RockboxDisable.ensureOnce(SolarApplication.this);
-                    SolarBootPacing.pauseBetweenBootstrapSteps();
-                }
                 LargeFontAccessibilitySuppressor.ensureNormalFontScale(SolarApplication.this);
                 GraphicsPerformancePolicy.ensureAsync(SolarApplication.this);
                 WifiMacRandomizer.ensureOnce(SolarApplication.this);
@@ -377,7 +362,6 @@ public class SolarApplication extends Application {
                 // 2026-07-08 — JJ/Rockbox/Stock HOME: prewarm inject before first wheel tick.
                 String homeTarget = LauncherPreference.getHomeTarget(SolarApplication.this);
                 if (LauncherDefault.TARGET_JJ.equals(homeTarget)
-                        || LauncherDefault.TARGET_ROCKBOX.equals(homeTarget)
                         || LauncherDefault.TARGET_STOCK.equals(homeTarget)) {
                     ExternalInputHandoff.warmInjector(SolarApplication.this);
                     if (LauncherDefault.TARGET_JJ.equals(homeTarget)
@@ -422,8 +406,6 @@ public class SolarApplication extends Application {
                 SolarBootPacing.pauseBetweenBootstrapSteps();
                 PmInstallPolicy.enforceInternalInstallLocation();
                 XposedModuleEnsurer.ensureRequiredModulesAsync(SolarApplication.this);
-                // 2026-07-06 — Monitor may already run from onCreate; idempotent ensureStarted.
-                RockboxForegroundMonitor.ensureStarted(SolarApplication.this);
                 LauncherWatchdogService.ensureStarted(SolarApplication.this);
                 SolarImeAccessibilityBootCheck.ensureEnabled(SolarApplication.this);
                 // Clear stale overlay key gate (persist prop survives crash / force-stop).

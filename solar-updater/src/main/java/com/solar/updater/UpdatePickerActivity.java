@@ -267,7 +267,7 @@ public final class UpdatePickerActivity extends Activity {
             return;
         }
         installing = true;
-        setStatus(getString(R.string.updater_companion_rockbox));
+        setStatus(getString(R.string.updater_companion_jj));
         final File workDir = getDir("update", Context.MODE_PRIVATE);
         new Thread(new Runnable() {
             @Override
@@ -277,10 +277,7 @@ public final class UpdatePickerActivity extends Activity {
                         new OtaCompanionInstaller.Progress() {
                             @Override
                             public void onPhase(String phase) {
-                                final int res;
-                                if ("rockbox".equals(phase)) {
-                                    res = R.string.updater_companion_rockbox;
-                                } else if ("rockbox_libs".equals(phase)) {
+                                final int res;if ("rockbox_libs".equals(phase)) {
                                     res = R.string.updater_companion_installing;
                                 } else {
                                     res = R.string.updater_companion_installing;
@@ -293,14 +290,14 @@ public final class UpdatePickerActivity extends Activity {
                                 });
                             }
                         });
-                final boolean ok = result.rockboxApkOk || result.rockboxLibsOk;
+                final boolean ok = result.jjOk;
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
                         installing = false;
                         setStatus(getString(ok
-                                ? R.string.updater_companion_rockbox_done
-                                : R.string.updater_companion_rockbox_failed));
+                                ? R.string.updater_companion_jj_done
+                                : R.string.updater_companion_jj_failed));
                     }
                 });
             }
@@ -331,9 +328,7 @@ public final class UpdatePickerActivity extends Activity {
                                             final int res;
                                             if ("jj".equals(phase)) {
                                                 res = R.string.updater_companion_jj;
-                                            } else if ("rockbox".equals(phase)) {
-                                                res = R.string.updater_companion_rockbox;
-                                            } else {
+                                            } else{
                                                 res = R.string.updater_companion_installing;
                                             }
                                             runOnUiThread(new Runnable() {
@@ -365,8 +360,7 @@ public final class UpdatePickerActivity extends Activity {
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
-                            if (!companions.jjOk && !companions.rockboxApkOk
-                                    && !companions.rockboxLibsOk) {
+                            if (!companions.jjOk) {
                                 setStatus(getString(R.string.updater_companion_skipped));
                             } else {
                                 setStatus(getString(R.string.updater_installing));

@@ -35,11 +35,6 @@ public final class FirstSessionReadyGate {
             if (PlatformPrepState.needsSilentPrep(ctx, manifest)) return true;
             if (PlatformPrepState.isRebootPending(ctx)) return true;
         } catch (Exception ignored) {}
-        // ROM first boot: HOME preference script has not finished.
-        if (LauncherSwitch.isRockboxAvailable(ctx)
-                && !new File(RockboxDisable.MARKER_PATH).exists()) {
-            return true;
-        }
         return !isUiReadyComplete(ctx);
     }
 

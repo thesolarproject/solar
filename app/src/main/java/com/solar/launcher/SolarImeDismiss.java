@@ -43,7 +43,7 @@ public final class SolarImeDismiss {
         if ("com.solar.launcher".equals(pkg)) return false;
         if (pkg.startsWith("com.innioasis.")) return false;
         // 2026-07-06 — Rockbox KbdInput often has inputType 0; SolarRockboxIme sets TYPE_CLASS_TEXT.
-        if ("org.rockbox".equals(pkg)) {
+        if (false) {
             return isTextLikeInput(info.inputType)
                     || (info.imeOptions & EditorInfo.IME_ACTION_DONE) != 0;
         }

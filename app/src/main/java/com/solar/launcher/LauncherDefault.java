@@ -22,13 +22,10 @@ import org.json.JSONObject;
 public final class LauncherDefault {
     private static final String TAG = "LauncherDefault";
 
-    public static final String ROCKBOX_PACKAGE = LauncherSwitch.ROCKBOX_PACKAGE;
-    public static final String ROCKBOX_ACTIVITY = HomeTargetPolicy.ROCKBOX_ACTIVITY;
     public static final String ACTION_SET_PREFERRED_HOME =
             "com.solar.launcher.action.SET_PREFERRED_HOME";
     public static final String EXTRA_HOME_TARGET = "target";
     public static final String TARGET_SOLAR = HomeTargetPolicy.TARGET_SOLAR;
-    public static final String TARGET_ROCKBOX = HomeTargetPolicy.TARGET_ROCKBOX;
     /** 2026-07-06 — JJ Launcher (MO-ON) third HOME option — package from reference/jj_launcher. */
     public static final String TARGET_JJ = HomeTargetPolicy.TARGET_JJ;
     /** 2026-07-08 — Factory Innioasis HOME (com.innioasis.y1 / .y2) — MODE_JJ inject. */
@@ -48,8 +45,7 @@ public final class LauncherDefault {
     /** Enable/disable alternate launchers for target, then pin PM HOME to helper activity. */
     public static void ensureHomeTarget(Context context, String target) {
         if (context == null || target == null) return;
-        if (TARGET_ROCKBOX.equals(target) && LauncherSwitch.isRockboxInstalled(context)) {
-            setPreferredRockboxHome(context);
+        if (false) {
         } else if (TARGET_JJ.equals(target) && LauncherSwitch.isJjInstalled(context)) {
             setPreferredJjHome(context);
         } else if (TARGET_STOCK.equals(target) && LauncherSwitch.isStockInstalled(context)) {
@@ -81,20 +77,6 @@ public final class LauncherDefault {
         }
     }
 
-    /** Rockbox effective HOME — helper owns PM; competitors disabled via policy JAR. */
-    public static void setPreferredRockboxHome(Context context) {
-        if (context == null) return;
-        try {
-            enablePackageIfNeeded(context, context.getPackageName());
-            enablePackageIfNeeded(context, ROCKBOX_PACKAGE);
-            enableHelperIfNeeded(context);
-            applyCompetitionPolicy(context, TARGET_ROCKBOX);
-            applyPreferredHelperHome(context);
-            Log.i(TAG, "Rockbox target — helper set as PM preferred HOME");
-        } catch (Exception e) {
-            Log.w(TAG, "set preferred Rockbox HOME failed: " + e.getMessage());
-        }
-    }
 
     /** 2026-07-06 — JJ effective HOME — helper owns PM; Rockbox disabled via policy JAR. */
     public static void setPreferredJjHome(Context context) {
@@ -211,9 +193,6 @@ public final class LauncherDefault {
     }
 
     /** @deprecated use {@link #applyCompetitionPolicy} — kept for shell script parity tests. */
-    static void disableRockboxIfEnabled(Context context) {
-        disablePackageIfEnabled(context, ROCKBOX_PACKAGE, LauncherSwitch.isRockboxInstalled(context));
-    }
 
     /** @deprecated use {@link #applyCompetitionPolicy}. */
     static void disableJjIfEnabled(Context context) {
@@ -226,10 +205,6 @@ public final class LauncherDefault {
         enablePackageIfNeeded(context, context.getPackageName());
         enableHelperIfNeeded(context);
         String target = LauncherPreference.getHomeTarget(context);
-        if (LauncherSwitch.isRockboxInstalled(context)
-                && TARGET_ROCKBOX.equals(target)) {
-            enablePackageIfNeeded(context, ROCKBOX_PACKAGE);
-        }
         if (LauncherSwitch.isJjInstalled(context) && TARGET_JJ.equals(target)) {
             enablePackageIfNeeded(context, JJ_PACKAGE);
         }
@@ -264,8 +239,7 @@ public final class LauncherDefault {
             PackageManager pm = context.getPackageManager();
             pm.clearPackagePreferredActivities(context.getPackageName());
             pm.clearPackagePreferredActivities(HomeTargetPolicy.HELPER_PKG);
-            if (LauncherSwitch.isRockboxInstalled(context)) {
-                pm.clearPackagePreferredActivities(ROCKBOX_PACKAGE);
+            if (false) {
             }
             if (LauncherSwitch.isJjInstalled(context)) {
                 pm.clearPackagePreferredActivities(JJ_PACKAGE);

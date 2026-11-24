@@ -187,7 +187,6 @@ strip_solar_artefacts() {
         SolarContextBridgeY1.apk \
         SolarContextBridgeY2.apk \
         SolarThemeFont.apk \
-        SolarRockboxIme.apk \
         SolarVersions.apk \
         Y1Bridge.apk
     do

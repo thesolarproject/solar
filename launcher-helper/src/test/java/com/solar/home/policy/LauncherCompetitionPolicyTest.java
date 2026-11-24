@@ -13,8 +13,8 @@ public class LauncherCompetitionPolicyTest {
     public void packageForTarget_mapsKnownIds() {
         assertEquals(HomeTargetPolicy.SOLAR_PKG,
                 LauncherCompetitionPolicy.packageForTarget(HomeTargetPolicy.TARGET_SOLAR));
-        assertEquals(HomeTargetPolicy.ROCKBOX_PKG,
-                LauncherCompetitionPolicy.packageForTarget(HomeTargetPolicy.TARGET_ROCKBOX));
+        assertEquals(HomeTargetPolicy.SOLAR_PKG,
+                LauncherCompetitionPolicy.packageForTarget("rockbox"));
         assertEquals(HomeTargetPolicy.JJ_PKG,
                 LauncherCompetitionPolicy.packageForTarget(HomeTargetPolicy.TARGET_JJ));
     }
@@ -31,12 +31,12 @@ public class LauncherCompetitionPolicyTest {
         // Solar active — Rockbox, JJ, and both factory Innioasis packages get parked.
         assertEquals(4, solarOff.length);
         String[] rockboxOff = LauncherCompetitionPolicy.packagesToDisableForTarget(
-                HomeTargetPolicy.TARGET_ROCKBOX);
+                "rockbox");
         // Rockbox active — JJ + factory packages parked; Rockbox itself never in its own list.
         assertEquals(3, rockboxOff.length);
         assertEquals(HomeTargetPolicy.JJ_PKG, rockboxOff[0]);
         for (String pkg : rockboxOff) {
-            assertFalse(HomeTargetPolicy.ROCKBOX_PKG.equals(pkg));
+            assertFalse("org.rockbox".equals(pkg));
         }
         // Stock active — factory package stays enabled; Rockbox + JJ parked.
         String[] stockOff = LauncherCompetitionPolicy.packagesToDisableForTarget(
@@ -54,7 +54,6 @@ public class LauncherCompetitionPolicyTest {
 
     @Test
     public void targetForPackage_roundTrips() {
-        assertEquals(HomeTargetPolicy.TARGET_ROCKBOX,
-                LauncherCompetitionPolicy.targetForPackage(HomeTargetPolicy.ROCKBOX_PKG));
+        assertNull(LauncherCompetitionPolicy.targetForPackage("org.rockbox"));
     }
 }

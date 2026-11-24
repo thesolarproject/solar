@@ -16,11 +16,8 @@ public class Y1AssetsSyncTest {
 
     private static final List<String> SYNCED_FILES = Arrays.asList(
             "switch-to-stock.sh",
-            "switch-to-rockbox.sh",
-            "sync-rockbox-libs.sh",
-            "sync-y1-keymap.sh",
-            "disable-rockbox-for-solar.sh",
-            "apply-preferred-home-boot.sh",
+                                    "sync-y1-keymap.sh",
+                        "apply-preferred-home-boot.sh",
             "solar-usb-recovery-agent.sh",
             "Y1-Rockbox.kl",
             "Y2-Rockbox.kl",

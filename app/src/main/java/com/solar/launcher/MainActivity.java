@@ -2277,7 +2277,6 @@ public class MainActivity extends Activity {
     private float playbackSpeed = 1.0f;
     private boolean isSoundEffectEnabled = true;
     /** Reset screen checkbox state — not persisted until Continue runs. */
-    private boolean resetPickRockbox;
     private boolean resetPickSolar;
     private boolean resetPickThemes;
     private boolean resetPickMicroSd;
@@ -3782,12 +3781,9 @@ public class MainActivity extends Activity {
             return;
         }
 
-        // ponytail: wire RockboxRestartGrace before ensureRockboxDisabled to protect Rockbox HOME self-restarts.
-        boolean rockboxGraceExit = RockboxRestartGrace.onMainActivityCreate(this);
         // #region agent log
         try {
             org.json.JSONObject d = new org.json.JSONObject();
-            d.put("rockboxGraceExit", rockboxGraceExit);
             d.put("solarHome", LauncherPreference.isSolarHome(this));
             d.put("homeTarget", LauncherPreference.getHomeTarget(this));
             d.put("stemSession", com.solar.launcher.stem.StemPlayerHost.isSessionActive());
@@ -3799,10 +3795,6 @@ public class MainActivity extends Activity {
             Debug543e15Log.log("MainActivity.onCreate", "post-grace gate", "BLANK_A", d);
         } catch (Exception ignored) {}
         // #endregion
-        if (rockboxGraceExit) {
-            finish();
-            return;
-        }
 
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
         setContentView(R.layout.activity_main);
@@ -21011,7 +21003,6 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     private String resolveSoulseekSolarConfigKey(String rowKey) {
         if (rowKey == null) return null;
-        if (RowKeys.SWITCH_ROCKBOX.equals(rowKey)) return "settingsRockbox";
         if (RowKeys.SOULSEEK_SEARCH.equals(rowKey)) return "soulseekSearch";
         if (RowKeys.SOULSEEK_ACCOUNT.equals(rowKey)) return "soulseekAccount";
         if (RowKeys.SOULSEEK_REGENERATE.equals(rowKey)) return "soulseekRegenerate";
@@ -21058,7 +21049,6 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         if (RowKeys.BACKGROUND.equals(rowKey)) return "wallpaper";
         if (RowKeys.NOW_PLAYING.equals(rowKey)) return "nowPlaying";
         if (RowKeys.DATETIME.equals(rowKey)) return "dateTime";
-        if (RowKeys.SWITCH_ROCKBOX.equals(rowKey)) return "launcher";
         return null;
     }
 
@@ -21120,9 +21110,6 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         }
         if (RowKeys.DEBUG_YOUTUBE_EXPERIMENT.equals(rowKey)) {
             return stateOnOff(com.solar.launcher.youtube.YouTubeExperiment.isEnabled(prefs));
-        }
-        if (RowKeys.DEBUG_ROCKBOX_EXPERIMENT.equals(rowKey)) {
-            return stateOnOff(RockboxExperiment.isEnabled(prefs));
         }
         if (RowKeys.DEBUG_PLEX_EXPERIMENT.equals(rowKey)) {
             return stateOnOff(com.solar.launcher.plex.PlexExperiment.isEnabled(prefs));
@@ -21201,9 +21188,6 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         if (RowKeys.AUTO_FETCH.equals(rowKey)) return stateOnOff(isAutoFetchEnabled);
         if (RowKeys.ABOUT.equals(rowKey)) {
             return AppVersion.displayLabel(this);
-        }
-        if (RowKeys.SWITCH_ROCKBOX.equals(rowKey)) {
-            return getString(R.string.settings_switch_rockbox_hint);
         }
         if (RowKeys.NOW_PLAYING_ALBUM_BLUR.equals(rowKey)) return stateOnOff(playerAlbumBlurEnabled);
         if (RowKeys.WIDGET_CLOCK.equals(rowKey)) return stateOnOff(false);
@@ -21368,7 +21352,6 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         // ponytail: Reach blurb only in Reach settings sub-panes — home preview uses appReach icon
         if (RowKeys.SOULSEEK.equals(rowKey)) return "";
         if (SettingsScreens.RESET.equals(settingsSubScreenKey)) {
-            if (RowKeys.RESET_ROCKBOX.equals(rowKey)) return stateOnOff(resetPickRockbox);
             if (RowKeys.RESET_SOLAR.equals(rowKey)) return stateOnOff(resetPickSolar);
             if (RowKeys.RESET_THEMES.equals(rowKey)) return stateOnOff(resetPickThemes);
             if (RowKeys.RESET_MICROSD.equals(rowKey)) return stateOnOff(resetPickMicroSd);
@@ -21380,7 +21363,6 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     private String resolveResetSettingsPreviewText(String rowKey) {
         if (!SettingsScreens.RESET.equals(settingsSubScreenKey) || rowKey == null) return null;
-        if (RowKeys.RESET_ROCKBOX.equals(rowKey)) return getString(R.string.settings_preview_reset_rockbox);
         if (RowKeys.RESET_SOLAR.equals(rowKey)) return getString(R.string.settings_preview_reset_solar);
         if (RowKeys.RESET_THEMES.equals(rowKey)) return getString(R.string.settings_preview_reset_themes);
         if (RowKeys.RESET_MICROSD.equals(rowKey)) return getString(R.string.settings_preview_reset_microsd);
@@ -23668,8 +23650,6 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             org.json.JSONObject d = new org.json.JSONObject();
             d.put("rowCount", labels.size());
             d.put("usbOffer", UsbHostPresence.shouldOfferEnableUsbStorageInPowerMenu(this));
-            d.put("rockboxInstalled", LauncherSwitch.isRockboxInstalled(this));
-            d.put("rockboxAvailable", LauncherSwitch.isRockboxAvailable(this));
             d.put("switchScript", LauncherSwitch.isSwitchScriptAvailable());
             DebugAgentLog.log(this, "MainActivity.refreshContextPowerTier", "power tier", "H-POWER", d);
         } catch (Exception ignored) {}
@@ -32038,25 +32018,12 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     }
 
     /** 2026-07-05 — Clear stuck Rockbox switch panel after crash or failed handoff. */
-    void dismissRockboxSwitchOverlayIfNeeded() {
-        if (themedContextMenu == null || !themedContextMenu.isHintOnlyMode()) return;
-        dismissPleaseWaitOverlay();
-        isIntentionalFocusLoss = false;
-        // #region agent log
-        try {
-            org.json.JSONObject d = Debug434250Log.rockboxModeSnapshot(this);
-            Debug434250Log.log("MainActivity.dismissRockboxSwitchOverlayIfNeeded", "cleared", "H-C", d);
-        } catch (Exception ignored) {}
-        // #endregion
-    }
+    void dismissRockboxSwitchOverlayIfNeeded() {}
 
     private static final long ROCKBOX_SWITCH_POLL_MS = 400L;
     private static final long ROCKBOX_SWITCH_TIMEOUT_MS = 10_000L;
 
-    private void launchRockboxSwitch() {
-        // 2026-07-08 — Canonical PowerActions path (helper single-fire); keep please-wait + poll.
-        launchAlternateHomeSwitch(LauncherDefault.TARGET_ROCKBOX);
-    }
+    private void launchRockboxSwitch() {}
 
     /** 2026-07-06 — Install JJ when online, then switch HOME without reboot. */
     private void launchJjSwitch() {
@@ -32082,8 +32049,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             }
             showPleaseWaitOverlay(getString(R.string.dialog_jj_rebooting));
             PowerActions.switchToJj(this);
-        } else if (LauncherDefault.TARGET_ROCKBOX.equals(target)) {
-            if (!LauncherSwitch.isRockboxInstalled(this)) {
+        } else if (false) {
+            if (!false) {
                 Toast.makeText(this, getString(R.string.dialog_rockbox_unavailable), Toast.LENGTH_SHORT).show();
                 return;
             }
@@ -32114,7 +32081,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         } else if (LauncherDefault.TARGET_STOCK.equals(target)) {
             fg = LauncherSwitch.isStockForeground(this);
         } else {
-            fg = LauncherSwitch.isRockboxForeground(this);
+            fg = false;
         }
         if (fg) {
             dismissRockboxSwitchOverlayIfNeeded();
@@ -32123,16 +32090,11 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                     || LauncherDefault.TARGET_STOCK.equals(target)) {
                 MediaButtonRegistrar.ensureRegistered(this);
                 ExternalInputHandoff.armJjShim(this);
-                RockboxForegroundMonitor.ensureStarted(this);
                 if (LauncherDefault.TARGET_JJ.equals(target)) {
                     beginExternalInputHandoff(LauncherDefault.JJ_PACKAGE);
                 } else {
                     beginExternalInputHandoff(LauncherSwitch.stockPackageForDevice(this));
                 }
-            } else if (LauncherDefault.TARGET_ROCKBOX.equals(target)) {
-                MediaButtonRegistrar.ensureRegistered(this);
-                ExternalInputHandoff.armForForegroundPackage(this);
-                RockboxForegroundMonitor.ensureStarted(this);
             }
             if (!LauncherPreference.isSolarHome(this)) {
                 finish();
@@ -32149,7 +32111,6 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                             ? R.string.dialog_stock_failed
                             : R.string.dialog_rockbox_failed);
             Toast.makeText(this, getString(msg), Toast.LENGTH_SHORT).show();
-            RockboxRestartGrace.arm(getApplicationContext());
             return;
         }
         new Handler().postDelayed(new Runnable() {
@@ -32162,7 +32123,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     /** Poll until Rockbox owns the screen, then drop overlay or time out. */
     private void pollRockboxSwitchCompletion(final long switchStartMs, final int attempt) {
-        pollAlternateHomeSwitchCompletion(LauncherDefault.TARGET_ROCKBOX, switchStartMs, attempt);
+        pollAlternateHomeSwitchCompletion("rockbox", switchStartMs, attempt);
     }
 
     private boolean isSoulseekSharingRejectionMessage(String text) {
@@ -34829,7 +34790,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                 clickFeedback();
                 if (current) {
                     LauncherHelperClient.restartActiveLauncher(MainActivity.this, "settings");
-                } else if (LauncherDefault.TARGET_ROCKBOX.equals(rowTarget)) {
+                } else if ("rockbox".equals(rowTarget)) {
                     launchRockboxSwitch();
                 } else if (LauncherDefault.TARGET_JJ.equals(rowTarget)) {
                     launchJjSwitch();
@@ -34853,10 +34814,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         addSettingsInfoParagraph(getString(R.string.settings_home_launcher_hint));
 
         String target = LauncherPreference.getHomeTarget(this);
-        int statusRes = R.string.settings_home_launcher_solar;
-        if (LauncherDefault.TARGET_ROCKBOX.equals(target)) {
-            statusRes = R.string.settings_home_launcher_rockbox;
-        } else if (LauncherDefault.TARGET_JJ.equals(target)) {
+        int statusRes = R.string.settings_home_launcher_solar;        if (LauncherDefault.TARGET_JJ.equals(target)) {
             statusRes = R.string.settings_home_launcher_jj;
         } else if (LauncherDefault.TARGET_STOCK.equals(target)) {
             statusRes = R.string.settings_home_launcher_stock;
@@ -35689,7 +35647,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     }
 
     private void clearResetSelections() {
-        resetPickRockbox = false;
+        false = false;
         resetPickSolar = false;
         resetPickThemes = false;
         resetPickMicroSd = false;
@@ -35698,18 +35656,15 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     }
 
     private void syncResetEverythingFlag() {
-        resetPickEverything = resetPickRockbox && resetPickSolar && resetPickThemes
+        resetPickEverything = resetPickSolar && resetPickThemes
                 && resetPickMicroSd && resetPickCaches;
     }
 
     private void toggleResetPick(String rowKey) {
         if (RowKeys.RESET_EVERYTHING.equals(rowKey)) {
             resetPickEverything = !resetPickEverything;
-            resetPickRockbox = resetPickSolar = resetPickThemes = resetPickMicroSd = resetPickCaches
+            resetPickSolar = resetPickThemes = resetPickMicroSd = resetPickCaches
                     = resetPickEverything;
-        } else if (RowKeys.RESET_ROCKBOX.equals(rowKey)) {
-            resetPickRockbox = !resetPickRockbox;
-            syncResetEverythingFlag();
         } else if (RowKeys.RESET_SOLAR.equals(rowKey)) {
             resetPickSolar = !resetPickSolar;
             syncResetEverythingFlag();
@@ -35726,7 +35681,6 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     }
 
     private void refreshAllResetToggleRows() {
-        refreshSettingsPreview(RowKeys.RESET_ROCKBOX);
         refreshSettingsPreview(RowKeys.RESET_SOLAR);
         refreshSettingsPreview(RowKeys.RESET_THEMES);
         refreshSettingsPreview(RowKeys.RESET_MICROSD);
@@ -35735,12 +35689,12 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     }
 
     private boolean anyResetSelected() {
-        return resetPickRockbox || resetPickSolar || resetPickThemes || resetPickMicroSd || resetPickCaches;
+        return false || resetPickSolar || resetPickThemes || resetPickMicroSd || resetPickCaches;
     }
 
     private SolarDataReset.Selection buildResetSelection() {
         SolarDataReset.Selection sel = new SolarDataReset.Selection();
-        sel.rockboxConfig = resetPickRockbox;
+        
         sel.solarPrefs = resetPickSolar;
         sel.storedThemes = resetPickThemes;
         sel.microSdContents = resetPickMicroSd;
@@ -35826,8 +35780,6 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             }
         });
         containerSettingsItems.addView(btnBack);
-
-        addResetToggleRow(RowKeys.RESET_ROCKBOX, R.string.settings_reset_rockbox);
         addResetToggleRow(RowKeys.RESET_SOLAR, R.string.settings_reset_solar);
         addResetToggleRow(RowKeys.RESET_THEMES, R.string.settings_reset_themes);
         addResetToggleRow(RowKeys.RESET_MICROSD, R.string.settings_reset_microsd);
@@ -41302,23 +41254,6 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         });
         containerSettingsItems.addView(btnYouTubeExperiment);
         refreshSettingsPreview(RowKeys.DEBUG_YOUTUBE_EXPERIMENT);
-
-        final LinearLayout btnRockboxExperiment = createSettingsRow(RowKeys.DEBUG_ROCKBOX_EXPERIMENT,
-                R.string.settings_debug_rockbox_experiment, false);
-        btnRockboxExperiment.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                clickFeedback();
-                RockboxExperiment.setEnabled(MainActivity.this,
-                        !RockboxExperiment.isEnabled(prefs));
-                refreshSettingsPreview(RowKeys.DEBUG_ROCKBOX_EXPERIMENT);
-                Toast.makeText(MainActivity.this,
-                        R.string.settings_debug_rockbox_experiment_hint,
-                        Toast.LENGTH_LONG).show();
-            }
-        });
-        containerSettingsItems.addView(btnRockboxExperiment);
-        refreshSettingsPreview(RowKeys.DEBUG_ROCKBOX_EXPERIMENT);
 
         final LinearLayout btnPlexExperiment = createSettingsRow(RowKeys.DEBUG_PLEX_EXPERIMENT,
                 R.string.settings_debug_plex_experiment, false);
@@ -61163,8 +61098,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         SolarRecoveryCoordinator.onMainActivityResume(this);
         XposedModuleEnsurer.ensureRequiredModulesOnResume(this);
         endExternalInputHandoff();
-        RockboxRestartGrace.onMainActivityResume(this);
-        LauncherSwitch.assertRockboxDisabledWhileSolarHome(this);
+        
         if (isScreenInteractive()) {
             maybeRestoreWifiAfterSleepPolicy();
         }

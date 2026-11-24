@@ -127,8 +127,6 @@ final class DialogHooks {
     /** Classify dialog, open Solar overlay, register pending session — false to fail-open. */
     static boolean tryInterceptDialog(Object dialog) {
         if (dialog == null) return false;
-        // 2026-07-05 — Rockbox search keyboard must stay stock Holo + Solar IME Enter hook.
-        if (RockboxKeyboardDialogProbe.isRockboxKeyboardDialog(dialog)) return false;
         try {
             AlertDialogExtract.Snapshot snap = AlertDialogExtract.fromDialog(dialog, FIELDS);
             if (snap.kind == AlertDialogExtract.Kind.EMPTY

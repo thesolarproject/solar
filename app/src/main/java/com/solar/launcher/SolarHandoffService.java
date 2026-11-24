@@ -15,7 +15,6 @@ public final class SolarHandoffService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
-        RockboxForegroundMonitor.ensureStarted(this);
         MediaButtonRegistrar.ensureRegistered(this);
         ExternalInputHandoff.armForForegroundPackage(this);
     }
@@ -26,8 +25,7 @@ public final class SolarHandoffService extends Service {
             ExternalInputHandoff.armJjShim(this);
         } else {
             String target = LauncherPreference.getHomeTarget(this);
-            if (LauncherDefault.TARGET_JJ.equals(target)
-                    || LauncherDefault.TARGET_ROCKBOX.equals(target)) {
+            if (LauncherDefault.TARGET_JJ.equals(target)) {
                 ExternalInputHandoff.armForForegroundPackage(this);
                 MediaButtonRegistrar.ensureRegistered(this);
             }

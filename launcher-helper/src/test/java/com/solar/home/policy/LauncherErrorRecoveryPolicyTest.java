@@ -27,7 +27,7 @@ public class LauncherErrorRecoveryPolicyTest {
     @Test
     public void expectedSwitchVictimWhenTargetRockbox() {
         LauncherErrorRecoveryPolicy.setKillReasonForTest(LauncherErrorRecoveryPolicy.REASON_SWITCH);
-        LauncherErrorRecoveryPolicy.setHomeTargetForTest(HomeTargetPolicy.TARGET_ROCKBOX);
+        LauncherErrorRecoveryPolicy.setHomeTargetForTest("rockbox");
         assertTrue(LauncherErrorRecoveryPolicy.isExpectedSwitchVictim(HomeTargetPolicy.SOLAR_PKG));
     }
 
@@ -49,7 +49,7 @@ public class LauncherErrorRecoveryPolicyTest {
         LauncherErrorRecoveryPolicy.setCrashTimesForTest(
                 String.valueOf(now - 30_000L) + "," + String.valueOf(now - 60_000L)
                         + "," + String.valueOf(now - 90_000L));
-        LauncherErrorRecoveryPolicy.setHomeTargetForTest(HomeTargetPolicy.TARGET_ROCKBOX);
+        LauncherErrorRecoveryPolicy.setHomeTargetForTest("rockbox");
         assertFalse(LauncherErrorRecoveryPolicy.shouldOfferRecoveryOverlay(HomeTargetPolicy.SOLAR_PKG));
         LauncherErrorRecoveryPolicy.setHomeTargetForTest(HomeTargetPolicy.TARGET_SOLAR);
         assertTrue(LauncherErrorRecoveryPolicy.shouldOfferRecoveryOverlay(HomeTargetPolicy.SOLAR_PKG));

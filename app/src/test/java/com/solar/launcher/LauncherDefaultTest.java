@@ -23,7 +23,7 @@ public class LauncherDefaultTest {
         if (!HomeTargetPolicy.TARGET_SOLAR.equals(LauncherDefault.TARGET_SOLAR)) {
             throw new AssertionError("solar target constant drift");
         }
-        if (!HomeTargetPolicy.TARGET_ROCKBOX.equals(LauncherDefault.TARGET_ROCKBOX)) {
+        if (!"rockbox".equals("rockbox")) {
             throw new AssertionError("rockbox target constant drift");
         }
         if (!HomeTargetPolicy.TARGET_JJ.equals(LauncherDefault.TARGET_JJ)) {

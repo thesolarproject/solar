@@ -6,11 +6,7 @@ SRC="$ROOT/solar-rom/scripts"
 DST="$ROOT/app/src/main/assets/y1"
 FILES=(
     switch-to-stock.sh
-    switch-to-rockbox.sh
-    sync-rockbox-libs.sh
-    sync-rockbox-assets.sh
     sync-y1-keymap.sh
-    disable-rockbox-for-solar.sh
     apply-preferred-home-boot.sh
     # 2026-07-08 — root HOME-switch executor; was unsynced and drifted between ROM and APK.
     solar-launcher-exec.sh
