@@ -59,7 +59,7 @@ if [ -f "\$ROOT/solar-rom/scripts/lib-root.sh" ]; then
     source "\$ROOT/solar-rom/scripts/lib-root.sh"
     ensure_sudo_shim_when_root
 fi
-require_cmd simg2img img2simg e2fsck tune2fs sudo curl unzip binutils zip
+require_cmd simg2img img2simg e2fsck tune2fs sudo curl unzip zip cmp file
 BUILD_ROM="$BUILD_ROM"
 APK="$APK"
 DIST="$DIST"

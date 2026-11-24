@@ -596,6 +596,10 @@ require_cmd cmp
 require_cmd openssl
 require_cmd sudo
 
+# 2026-11-24 — Base firmware / APK downloads are 270–530 MB; a single mid-transfer drop
+# used to kill the whole release. Retry transient network errors instead.
+CURL_RETRY=(--retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 30)
+
 resolve_latest_solar_tag() {
     local release_url tag
     release_url="$(
@@ -618,7 +622,7 @@ download_solar_apk() {
 
     if [ -n "$apk_url" ]; then
         echo "Downloading $(basename "$apk_url")"
-        curl -fsSL -o "$dest" "$apk_url"
+        curl -fsSL "${CURL_RETRY[@]}" -o "$dest" "$apk_url"
         return
     fi
 
@@ -637,7 +641,7 @@ download_solar_apk() {
 
     apk_url="https://github.com${apk_url}"
     echo "Downloading $(basename "$apk_url") from release ${tag}"
-    curl -fsSL -o "$dest" "$apk_url"
+    curl -fsSL "${CURL_RETRY[@]}" -o "$dest" "$apk_url"
 }
 
 SOLAR_SYS="$REPO_ROOT/solar-rom/system"
@@ -1345,14 +1349,14 @@ if [ -n "$LOCAL_BASE_ZIP" ] && [ -f "$LOCAL_BASE_ZIP" ]; then
     cp "$LOCAL_BASE_ZIP" "$BASE_DIR/rom.zip"
 elif [ -n "$LOCAL_BASE_ZIP" ] && [[ "$LOCAL_BASE_ZIP" == http://* || "$LOCAL_BASE_ZIP" == https://* ]]; then
     echo "==> Downloading type-${TYPE} base firmware from SOLAR_*_BASE_ZIP URL"
-    curl -fsSL -o "$BASE_DIR/rom.zip" "$LOCAL_BASE_ZIP" \
+    curl -fsSL "${CURL_RETRY[@]}" -o "$BASE_DIR/rom.zip" "$LOCAL_BASE_ZIP" \
         || die "SOLAR_*_BASE_ZIP URL not readable: $LOCAL_BASE_ZIP"
 else
     if [ -n "$LOCAL_BASE_ZIP" ]; then
         echo "==> Ignoring non-file SOLAR_*_BASE_ZIP ($LOCAL_BASE_ZIP); using default URL"
     fi
     echo "==> Downloading type-${TYPE} base firmware"
-    curl -fsSL -o "$BASE_DIR/rom.zip" "$BASE_URL"
+    curl -fsSL "${CURL_RETRY[@]}" -o "$BASE_DIR/rom.zip" "$BASE_URL"
 fi
 unzip -q "$BASE_DIR/rom.zip" -d "$BASE_DIR"
 normalize_firmware_layout
