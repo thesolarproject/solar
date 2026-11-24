@@ -35647,7 +35647,6 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     }
 
     private void clearResetSelections() {
-        false = false;
         resetPickSolar = false;
         resetPickThemes = false;
         resetPickMicroSd = false;

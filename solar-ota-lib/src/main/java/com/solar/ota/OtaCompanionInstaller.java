@@ -23,9 +23,9 @@ public final class OtaCompanionInstaller {
     public static final class Result {
         public final boolean jjOk;
 
-        public Result(boolean jjOk, ) {
+        public Result(boolean jjOk) {
             this.jjOk = jjOk;
-                                }
+        }
     }
 
     /** 2026-07-19 — No-op: companions are not installed with Solar OTA. */

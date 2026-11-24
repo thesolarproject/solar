@@ -40,20 +40,6 @@ public class JjLauncherInstallerDeviceTest {
         android.util.Log.i("JjInstallerTest", "downloaded bytes=" + dest.length());
     }
 
-    @Test
-    public void device_downloadRockboxInstallLadder_overHttps() throws Exception {
-        Context ctx = InstrumentationRegistry.getInstrumentation().getTargetContext();
-        if (!ConnectivityHelper.isOnline(ctx)) {
-            android.util.Log.w("JjInstallerTest", "offline — skip rockbox");
-            return;
-        }
-        TlsHelper.init(ctx.getApplicationContext());
-        File dest = new File(ctx.getCacheDir(), "rockbox_device_test.apk");
-        if (dest.exists()) dest.delete();
-        OtaDownload.downloadFirstOk(OtaCompanionUrls.ROCKBOX_INSTALL_URLS, dest, "SolarDeviceTest/1.0");
-        assertTrue("rockbox install APK must be >1MB", dest.isFile() && dest.length() > 1_000_000L);
-        android.util.Log.i("JjInstallerTest", "rockbox bytes=" + dest.length());
-    }
 
     /**
      * 2026-07-19 — installJjIfNeeded is presence-only (never downloads).

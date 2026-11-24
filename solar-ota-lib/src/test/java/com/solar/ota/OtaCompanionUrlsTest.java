@@ -2,7 +2,7 @@ package com.solar.ota;
 
 import org.junit.Test;
 
-/** 2026-07-06 — OTA companion URL constants and fallback order. */
+/** OTA companion URL constants. */
 public class OtaCompanionUrlsTest {
 
     @Test
@@ -11,16 +11,9 @@ public class OtaCompanionUrlsTest {
     }
 
     @Test
-    public void installLadderStartsWithRbY1Latest() {
-        if (!OtaCompanionUrls.ROCKBOX_INSTALL_URLS[0].contains("rb_y1_latest")) {
-            throw new AssertionError("primary Rockbox install URL must be rb_y1_latest");
-        }
-    }
-
-    @Test
-    public void libsLadderEndsWithUpdateZipConstant() {
-        if (!OtaCompanionUrls.ROCKBOX_UPDATE_ZIP_URL.endsWith("update.zip")) {
-            throw new AssertionError("update.zip fallback URL missing");
+    public void jjUrlIsPresent() {
+        if (!OtaCompanionUrls.JJ_APK_URL.contains("jj_latest.apk")) {
+            throw new AssertionError("JJ URL missing");
         }
     }
 }
