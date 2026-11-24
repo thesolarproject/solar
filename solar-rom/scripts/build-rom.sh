@@ -1366,6 +1366,23 @@ sudo cp "$STAGING_APK" "$MOUNT_SYS/app/$SYSTEM_APK_NAME"
 sudo chmod 644 "$MOUNT_SYS/app/$SYSTEM_APK_NAME"
 sudo chown root:root "$MOUNT_SYS/app/$SYSTEM_APK_NAME"
 
+# Android 4.x system apps do not always extract APK-native libs; install to /system/lib.
+echo "==> Extract native libs from Solar APK to /system/lib"
+for abi in armeabi-v7a armeabi; do
+    if unzip -l "$STAGING_APK" "lib/$abi/*.so" >/dev/null 2>&1; then
+        tmp_lib="$(mktemp -d)"
+        unzip -j -o "$STAGING_APK" "lib/$abi/*.so" -d "$tmp_lib" >/dev/null
+        for so in "$tmp_lib"/*.so; do
+            [ -f "$so" ] || continue
+            sudo cp "$so" "$MOUNT_SYS/lib/$(basename "$so")"
+            sudo chmod 644 "$MOUNT_SYS/lib/$(basename "$so")"
+            sudo chown root:root "$MOUNT_SYS/lib/$(basename "$so")"
+        done
+        rm -rf "$tmp_lib"
+        break
+    fi
+done
+
 UPDATER_APK="${SOLAR_UPDATER_APK:-$REPO_ROOT/solar-updater/build/outputs/apk/release/solar-updater-release.apk}"
 if [ -f "$UPDATER_APK" ]; then
     echo "==> Install Solar Versions updater ($UPDATER_APK)"
