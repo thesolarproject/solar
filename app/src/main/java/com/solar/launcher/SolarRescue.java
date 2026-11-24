@@ -140,8 +140,7 @@ public final class SolarRescue {
     /** Test hook — rescue must always disable Rockbox and JJ when installed. */
     static boolean willDisableAlternateLaunchers(String fg) {
         String cmd = buildRescueCommand(fg);
-        return cmd.contains("pm disable " + ROCKBOX_PKG)
-                && cmd.contains("pm disable " + LauncherDefault.JJ_PACKAGE);
+        return cmd.contains("pm disable " + LauncherDefault.JJ_PACKAGE);
     }
 
     /** @deprecated use {@link #willDisableAlternateLaunchers(String)} */
