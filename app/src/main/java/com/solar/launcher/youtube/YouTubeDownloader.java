@@ -6,6 +6,9 @@ import com.solar.launcher.DeviceFeatures;
 import com.solar.launcher.net.SolarHttp;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
@@ -189,7 +192,8 @@ public final class YouTubeDownloader {
                         postError(cb, "no dest");
                         return;
                     }
-                    downloadResolved(ctx, stream.url, dest, cb);
+                    String quality = YouTubeClient.preferredVideoQuality();
+                    downloadResolved(ctx, stream.url, dest, cb, video.id, quality, audioOnly, playCacheOnly);
                 } catch (Exception e) {
                     postError(cb, e.getMessage());
                 }
@@ -217,7 +221,8 @@ public final class YouTubeDownloader {
     }
 
     private static void downloadResolved(final Context ctx, final String url, final File dest,
-            final Callback cb) {
+            final Callback cb, final String videoId, final String quality,
+            final boolean audioOnly, final boolean playCacheOnly) {
         executor.execute(new Runnable() {
             @Override public void run() {
                 try {
@@ -228,26 +233,46 @@ public final class YouTubeDownloader {
                     try {
                         org.json.JSONObject d = new org.json.JSONObject();
                         d.put("dest", dest.getName());
+                        d.put("audioOnly", audioOnly);
+                        d.put("playCacheOnly", playCacheOnly);
                         d.put("urlPrefix", url != null && url.length() > 80
                                 ? url.substring(0, 80) : url);
                         com.solar.launcher.Debug88eea4Log.log(ctx,
                                 "YouTubeDownloader.downloadResolved", "http start", "B", d);
                     } catch (Exception ignored) {}
                     // #endregion
-                    final AtomicLong lastUiMs = new AtomicLong(0L);
-                    SolarHttp.downloadToFile(url, dest, new SolarHttp.DownloadProgress() {
-                        @Override
-                        public void onProgress(long bytesRead, long totalBytes) {
-                            long now = System.currentTimeMillis();
-                            // 2026-07-15 — Throttle UI posts so Y1 doesn't flood the main thread.
-                            if (now - lastUiMs.get() < 200L && bytesRead < totalBytes) return;
-                            lastUiMs.set(now);
-                            int pct = totalBytes > 0
-                                    ? (int) Math.min(100L, (bytesRead * 100L) / totalBytes)
-                                    : -1;
-                            postProgress(cb, "download", pct, bytesRead, totalBytes);
+                    if (!audioOnly) {
+                        // Permanent video save: use progressive cache download, then copy to Videos/YouTube.
+                        final AtomicLong lastUiMs = new AtomicLong(0L);
+                        File cached = YouTubeProgressiveCache.download(ctx, url, videoId, quality, null,
+                                new YouTubeProgressiveCache.Progress() {
+                                    @Override
+                                    public void onProgress(int percent, long done, long total) {
+                                        long now = System.currentTimeMillis();
+                                        if (now - lastUiMs.get() < 200L && done < total) return;
+                                        lastUiMs.set(now);
+                                        postProgress(cb, "download", Math.max(0, Math.min(100, percent)), done, total);
+                                    }
+                                });
+                        if (cached == null || !cached.isFile()) {
+                            throw new IOException("progressive cache failed");
                         }
-                    });
+                        copyFile(cached, dest);
+                    } else {
+                        final AtomicLong lastUiMs = new AtomicLong(0L);
+                        SolarHttp.downloadToFile(url, dest, new SolarHttp.DownloadProgress() {
+                            @Override
+                            public void onProgress(long bytesRead, long totalBytes) {
+                                long now = System.currentTimeMillis();
+                                if (now - lastUiMs.get() < 200L && bytesRead < totalBytes) return;
+                                lastUiMs.set(now);
+                                int pct = totalBytes > 0
+                                        ? (int) Math.min(100L, (bytesRead * 100L) / totalBytes)
+                                        : -1;
+                                postProgress(cb, "download", pct, bytesRead, totalBytes);
+                            }
+                        });
+                    }
                     // #region agent log
                     try {
                         org.json.JSONObject d = new org.json.JSONObject();
@@ -259,7 +284,6 @@ public final class YouTubeDownloader {
                     } catch (Exception ignored) {}
                     // #endregion
                     // #region agent log
-                    // 2026-07-20 — 0b8f80 H3/H4: file landed; Music/YouTube vs play-cache path.
                     try {
                         String p = dest.getAbsolutePath();
                         boolean underMusicYt = p.indexOf("/Music/YouTube/") >= 0;
@@ -298,6 +322,22 @@ public final class YouTubeDownloader {
                 }
             }
         });
+    }
+
+    private static void copyFile(File src, File dst) throws IOException {
+        FileInputStream in = null;
+        FileOutputStream out = null;
+        try {
+            in = new FileInputStream(src);
+            out = new FileOutputStream(dst);
+            byte[] buf = new byte[16 * 1024];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            out.flush();
+        } finally {
+            try { if (in != null) in.close(); } catch (Exception ignored) {}
+            try { if (out != null) out.close(); } catch (Exception ignored) {}
+        }
     }
 
     private static void postProgress(final Callback cb, final String phase, final int percent,

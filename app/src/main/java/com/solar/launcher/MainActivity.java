@@ -55937,9 +55937,15 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     }
 
     void teardownBrowserSession() {
-        // 2026-07-20 — Bump cancels in-flight scan/art; Tier-0 must match new gen or Artists go blank.
+        // Bump cancels in-flight scan/art; keep Tier-0 shelves bound to the new gen.
         final int prevGen = libraryScanGen;
         libraryScanGen++;
+        if (libraryRamCache != null) {
+            libraryRamCache.rebindGeneration(libraryScanGen);
+        }
+        if (libraryCategoryIndex != null) {
+            libraryCategoryIndex.rebindGeneration(libraryScanGen);
+        }
         // #region agent log
         try {
             org.json.JSONObject d = new org.json.JSONObject();
@@ -55952,10 +55958,9 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             d.put("mode", libraryRamCache != null ? String.valueOf(libraryRamCache.mode()) : "?");
             d.put("customLib", customLibrary != null ? customLibrary.size() : -1);
             Debug708768Log.log(this, "MainActivity.teardownBrowserSession",
-                    "gen bump leaves Tier-0?", "H-GEN", d);
-            // 2026-07-20 — Session 6eff1e: same gen-orphan trail for blank Artists hunt.
+                    "gen bump rebound Tier-0", "H-GEN", d);
             Debug6eff1eLog.log(this, "MainActivity.teardownBrowserSession",
-                    "gen bump leaves Tier-0?", "H-GEN", d);
+                    "gen bump rebound Tier-0", "H-GEN", d);
         } catch (Exception ignored) {}
         // #endregion
         cancelReachDownloadIfAny(false);

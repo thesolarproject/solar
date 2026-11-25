@@ -130,6 +130,16 @@ public final class LibraryCategoryIndex {
         years = Collections.emptyList();
     }
 
+    /**
+     * Keep existing genre/year indexes valid after an external scan-generation bump.
+     * Reversal: delete and let callers rebuild after teardown.
+     */
+    public synchronized void rebindGeneration(int gen) {
+        if (libraryGen >= 0) {
+            libraryGen = gen;
+        }
+    }
+
     public synchronized List<String> genres(int gen) {
         return libraryGen == gen ? genres : Collections.<String>emptyList();
     }

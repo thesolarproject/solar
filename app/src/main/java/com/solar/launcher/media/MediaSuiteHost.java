@@ -332,6 +332,7 @@ public final class MediaSuiteHost {
     private List<File> videoFiles = new ArrayList<File>();
     private int videoIndex;
     private boolean videoPlaybackYoutube;
+    private boolean videoLocalCachedSource;
     private String youtubeStreamUrl;
     private final List<YouTubeVideo> youtubeVideos = new ArrayList<YouTubeVideo>();
     private int youtubeLoadGen;
@@ -4342,6 +4343,7 @@ public final class MediaSuiteHost {
         youtubeNowPlayingId = video.id;
         youtubeStreamQuality = quality;
         youtubeIjkFallbackPending = false;
+        videoLocalCachedSource = false;
         final int gen = ++youtubeLoadGen;
         youtubeResolvingStream = true;
         String qLabel = quality != null && quality.length() > 0 ? quality : "stream";
@@ -4568,6 +4570,7 @@ public final class MediaSuiteHost {
         setYoutubeResolveStatus("");
         youtubeStreamUrl = null;
         videoPlaybackYoutube = false;
+        videoLocalCachedSource = false;
         youtubeIjkFallbackPending = false;
         // 2026-07-18 — Drop YT/video busy throbbers when engines stop.
         com.solar.launcher.ui.UiBusy.clear(com.solar.launcher.ui.UiBusy.REASON_YOUTUBE_RESOLVE);
@@ -5035,6 +5038,7 @@ public final class MediaSuiteHost {
         endVideoForceLandscapeSession();
         if (wasYt) {
             videoPlaybackYoutube = false;
+            videoLocalCachedSource = false;
             if (youtubeDetailVideo != null) {
                 host.changeScreen(STATE_YOUTUBE_DETAIL);
             } else {
@@ -5129,7 +5133,11 @@ public final class MediaSuiteHost {
                     public void run() {
                         if (host.getCurrentScreenState() != STATE_VIDEO_PLAYER) return;
                         // 2026-07-18 — Track buffer edge for scrub-past-buffer + secondary progress.
-                        videoBufferPercent = Math.max(0, Math.min(100, percent));
+                        if (videoLocalCachedSource) {
+                            videoBufferPercent = 100;
+                        } else {
+                            videoBufferPercent = Math.max(0, Math.min(100, percent));
+                        }
                         if (videoPendingSeekMs >= 0L) {
                             maybeCompletePendingVideoSeek();
                             return;
@@ -5532,6 +5540,11 @@ public final class MediaSuiteHost {
                     videoController.attachHolder(videoSurface.getHolder());
                 }
             }
+            // Local progressive cache — fully buffered; seek should work immediately.
+            videoLocalCachedSource = true;
+            videoBufferPercent = 100;
+            videoPendingSeekMs = -1L;
+            com.solar.launcher.ui.UiBusy.clear(com.solar.launcher.ui.UiBusy.REASON_SEEK_BUFFER);
             // Surface may still be settling after long download — open then force play-on-ready.
             videoController.open(playFile);
             videoController.play();
@@ -5579,6 +5592,7 @@ public final class MediaSuiteHost {
                     youtubeNowPlayingTitle != null ? youtubeNowPlayingTitle : "", "", "");
             releaseVideoPlayer();
             videoPlaybackYoutube = false;
+            videoLocalCachedSource = false;
             youtubeStreamUrl = null;
             youtubeTriedProgDownload = false;
             if (host.getCurrentScreenState() == STATE_VIDEO_PLAYER) {
@@ -5599,6 +5613,7 @@ public final class MediaSuiteHost {
     /** 2026-07-14 — Exit video player after YouTube stream failure. */
     private void leaveYouTubePlayerOnError() {
         videoPlaybackYoutube = false;
+        videoLocalCachedSource = false;
         youtubeStreamUrl = null;
         youtubeResolvingStream = false;
         releaseVideoPlayer();

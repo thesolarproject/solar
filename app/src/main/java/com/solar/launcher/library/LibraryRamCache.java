@@ -52,6 +52,18 @@ public final class LibraryRamCache {
     }
 
     /**
+     * Keep existing Tier-0 indexes valid after an external scan-generation bump.
+     * Layman: leaving/re-entering the browser cancels stale async work, but the
+     * artist/album/genre/year shelves we already built are still good.
+     * Reversal: delete and let callers rebuild after teardown.
+     */
+    public synchronized void rebindGeneration(int gen) {
+        if (libraryGen >= 0) {
+            libraryGen = gen;
+        }
+    }
+
+    /**
      * Rebuild Tier-0 indexes when scan generation changes.
      * Layman: remember artist/album name lists for this library generation.
      * Technical: walks NavRow triples; prefers {@link #rebuildFromDistinct} when SQL DISTINCT is available.
