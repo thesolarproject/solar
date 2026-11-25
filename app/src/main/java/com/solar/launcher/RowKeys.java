@@ -150,6 +150,11 @@ public final class RowKeys {
     /** Debug → Xposed modules submenu entry (matches {@link SettingsScreens#XPOSED_MODULES}). */
     public static final String DEBUG_XPOSED_MODULES = "settings.debug.xposed_modules";
     public static final String DEBUG_XPOSED_APPLY = "settings.debug.xposed_apply";
+    /** Debug → Agent developer menu for live on-device testing (matches {@link SettingsScreens#AGENT_DEVELOPER}). */
+    public static final String DEBUG_AGENT_DEVELOPER = "settings.debug.agent_developer";
+    public static final String AGENT_DEV_WIRELESS_ADB = "settings.debug.agent_developer.wireless_adb";
+    public static final String AGENT_DEV_INSTALL_TEST_APK = "settings.debug.agent_developer.install_test_apk";
+    public static final String AGENT_DEV_RESTART_SOLAR = "settings.debug.agent_developer.restart_solar";
     public static final String XPOSED_MODULE_ROW_PREFIX = "settings.debug.xposed.pkg.";
     /** Inline config toggle on module detail — suffix is option key. */
     public static final String XPOSED_MODULE_CONFIG_ROW_PREFIX = "settings.debug.xposed.cfg.";
@@ -394,6 +399,10 @@ public final class RowKeys {
         if (DEBUG_FLOW_NO_REFLECTIONS.equals(rowKey)) return R.string.settings_debug_flow_no_reflections;
         if (DEBUG_XPOSED_MODULES.equals(rowKey)) return R.string.settings_debug_xposed_modules;
         if (DEBUG_XPOSED_APPLY.equals(rowKey)) return R.string.settings_debug_xposed_apply;
+        if (DEBUG_AGENT_DEVELOPER.equals(rowKey)) return R.string.settings_debug_agent_developer;
+        if (AGENT_DEV_WIRELESS_ADB.equals(rowKey)) return R.string.settings_debug_wireless_adb;
+        if (AGENT_DEV_INSTALL_TEST_APK.equals(rowKey)) return R.string.settings_debug_agent_install_test_apk;
+        if (AGENT_DEV_RESTART_SOLAR.equals(rowKey)) return R.string.settings_debug_agent_restart_solar;
         if (FLOW.equals(rowKey)) return R.string.settings_flow;
         if (FLOW_SETTINGS.equals(rowKey)) return R.string.settings_sub_flow;
         if (FLOW_MULTI_TRACK_ALBUMS.equals(rowKey)) return R.string.settings_flow_multi_track_albums;

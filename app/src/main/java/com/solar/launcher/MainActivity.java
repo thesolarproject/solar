@@ -8171,6 +8171,10 @@ public class MainActivity extends Activity {
             buildDebugUI();
             return true;
         }
+        if (SettingsScreens.AGENT_DEVELOPER.equals(settingsSubScreenKey)) {
+            buildDebugUI();
+            return true;
+        }
         if (SettingsScreens.FLOW.equals(settingsSubScreenKey)) {
             buildDebugUI();
             return true;
@@ -11158,7 +11162,8 @@ public class MainActivity extends Activity {
                 || SettingsScreens.FLOW.equals(key)
                 || SettingsScreens.EQ.equals(key)
                 || SettingsScreens.XPOSED_MODULES.equals(key)
-                || SettingsScreens.XPOSED_MODULE_DETAIL.equals(key);
+                || SettingsScreens.XPOSED_MODULE_DETAIL.equals(key)
+                || SettingsScreens.AGENT_DEVELOPER.equals(key);
     }
 
     /**
@@ -15046,6 +15051,8 @@ public class MainActivity extends Activity {
                 } else {
                     xposedBuildXposedModulesUI();
                 }
+            } else if (SettingsScreens.AGENT_DEVELOPER.equals(settingsSubScreenKey)) {
+                buildAgentDeveloperMenuUI();
             } else if (SettingsScreens.FLOW.equals(settingsSubScreenKey)) {
                 buildFlowSettingsUI();
             } else if (SettingsScreens.SYSTEM_UPDATE.equals(settingsSubScreenKey)) {
@@ -21090,7 +21097,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
             return getString(label);
         }
         if (RowKeys.DEBUG_JJ_THEMES.equals(rowKey)) return stateOnOff(ActiveThemeEngine.isJjMode());
-        if (RowKeys.DEBUG_WIRELESS_ADB.equals(rowKey)) {
+        if (RowKeys.DEBUG_WIRELESS_ADB.equals(rowKey) || RowKeys.AGENT_DEV_WIRELESS_ADB.equals(rowKey)) {
             return stateOnOff(prefs != null && prefs.getBoolean("settings.debug.wireless_adb_enabled", true));
         }
         if (RowKeys.DEBUG_SHOW_ERROR_TOASTS.equals(rowKey)) {
@@ -21822,8 +21829,16 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                     : R.string.settings_menu_item_padding_hint) + "\n\n"
                     + (stateText != null ? stateText : "");
         }
-        if (RowKeys.DEBUG_WIRELESS_ADB.equals(rowKey)) {
+        if (RowKeys.DEBUG_WIRELESS_ADB.equals(rowKey) || RowKeys.AGENT_DEV_WIRELESS_ADB.equals(rowKey)) {
             stateText = getString(R.string.settings_debug_wireless_adb_hint);
+        }
+        if (RowKeys.AGENT_DEV_INSTALL_TEST_APK.equals(rowKey)) {
+            String p = AgentDeveloperSupport.findTestApkPath();
+            stateText = p != null ? AgentDeveloperSupport.describeTestApk(p)
+                    : getString(R.string.settings_debug_agent_install_test_apk_hint);
+        }
+        if (RowKeys.AGENT_DEV_RESTART_SOLAR.equals(rowKey)) {
+            stateText = getString(R.string.settings_debug_agent_restart_solar_hint);
         }
         if (RowKeys.DEBUG_MICROSD_FORMAT.equals(rowKey)) {
             stateText = getString(R.string.settings_debug_microsd_format_hint);
@@ -41181,6 +41196,17 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         containerSettingsItems.addView(btnWirelessAdb);
         refreshSettingsPreview(RowKeys.DEBUG_WIRELESS_ADB);
 
+        final LinearLayout btnAgentDeveloper = createSettingsRow(RowKeys.DEBUG_AGENT_DEVELOPER,
+                R.string.settings_debug_agent_developer, true);
+        btnAgentDeveloper.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildAgentDeveloperMenuUI();
+            }
+        });
+        containerSettingsItems.addView(btnAgentDeveloper);
+
         final LinearLayout btnMicroSdFormat = createSettingsRow(RowKeys.DEBUG_MICROSD_FORMAT,
                 R.string.settings_debug_microsd_format, true);
         btnMicroSdFormat.setOnClickListener(new View.OnClickListener() {
@@ -41397,6 +41423,271 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         containerSettingsItems.addView(btnFlowSettings);
 
         btnXposedModules.requestFocus();
+    }
+
+    private void buildAgentDeveloperMenuUI() {
+        setSettingsSubScreen(SettingsScreens.AGENT_DEVELOPER);
+        applyReachBrowseLayoutMode();
+        updateStatusBarTitle();
+        updateScreenBackground(STATE_SETTINGS);
+        containerSettingsItems.removeAllViews();
+
+        Button btnBack = createListButton(getString(R.string.common_back_short));
+        styleSecondaryLabel(btnBack);
+        btnBack.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildDebugUI();
+            }
+        });
+        containerSettingsItems.addView(btnBack);
+
+        addInfoParagraph(getString(R.string.settings_debug_agent_developer_hint));
+
+        final LinearLayout statusDevice = createSettingsRow("settings.debug.agent_developer.status.device",
+                getString(R.string.settings_debug_agent_status_device) + ": …", false, true);
+        final LinearLayout statusBuild = createSettingsRow("settings.debug.agent_developer.status.build",
+                getString(R.string.settings_debug_agent_status_build) + ": …", false, true);
+        final LinearLayout statusRoot = createSettingsRow("settings.debug.agent_developer.status.root",
+                getString(R.string.settings_debug_agent_status_root) + ": …", false, true);
+        final LinearLayout statusAdb = createSettingsRow("settings.debug.agent_developer.status.adb",
+                getString(R.string.settings_debug_agent_status_adb) + ": …", false, true);
+        final LinearLayout statusIp = createSettingsRow("settings.debug.agent_developer.status.ip",
+                getString(R.string.settings_debug_agent_status_ip) + ": …", false, true);
+        final LinearLayout statusEndpoint = createSettingsRow("settings.debug.agent_developer.status.endpoint",
+                getString(R.string.settings_debug_agent_status_endpoint) + ": …", false, true);
+        containerSettingsItems.addView(statusDevice);
+        containerSettingsItems.addView(statusBuild);
+        containerSettingsItems.addView(statusRoot);
+        containerSettingsItems.addView(statusAdb);
+        containerSettingsItems.addView(statusIp);
+        containerSettingsItems.addView(statusEndpoint);
+
+        final LinearLayout btnWirelessAdb = createSettingsRow(RowKeys.AGENT_DEV_WIRELESS_ADB,
+                R.string.settings_debug_wireless_adb, false);
+        btnWirelessAdb.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                boolean enable = !prefs.getBoolean("settings.debug.wireless_adb_enabled", true);
+                prefs.edit().putBoolean("settings.debug.wireless_adb_enabled", enable).apply();
+                refreshSettingsPreview(RowKeys.AGENT_DEV_WIRELESS_ADB);
+                if (enable) {
+                    WirelessAdbEnabler.ensureWirelessAdb(MainActivity.this);
+                }
+                refreshAgentDeveloperStatus(statusDevice, statusBuild, statusRoot, statusAdb, statusIp, statusEndpoint);
+            }
+        });
+        containerSettingsItems.addView(btnWirelessAdb);
+        refreshSettingsPreview(RowKeys.AGENT_DEV_WIRELESS_ADB);
+
+        final LinearLayout btnInstallTestApk = createSettingsRow(RowKeys.AGENT_DEV_INSTALL_TEST_APK,
+                R.string.settings_debug_agent_install_test_apk, false);
+        btnInstallTestApk.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                promptAgentInstallTestApk();
+            }
+        });
+        containerSettingsItems.addView(btnInstallTestApk);
+        refreshSettingsPreview(RowKeys.AGENT_DEV_INSTALL_TEST_APK);
+
+        final LinearLayout btnRestartSolar = createSettingsRow(RowKeys.AGENT_DEV_RESTART_SOLAR,
+                R.string.settings_debug_agent_restart_solar, false);
+        btnRestartSolar.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                promptAgentRestartSolar();
+            }
+        });
+        containerSettingsItems.addView(btnRestartSolar);
+        refreshSettingsPreview(RowKeys.AGENT_DEV_RESTART_SOLAR);
+
+        addInfoParagraph(getString(R.string.settings_debug_agent_push_hint));
+
+        refreshAgentDeveloperStatus(statusDevice, statusBuild, statusRoot, statusAdb, statusIp, statusEndpoint);
+        btnBack.requestFocus();
+    }
+
+    private void refreshAgentDeveloperStatus(final LinearLayout statusDevice, final LinearLayout statusBuild,
+            final LinearLayout statusRoot, final LinearLayout statusAdb, final LinearLayout statusIp,
+            final LinearLayout statusEndpoint) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final String model = android.os.Build.MODEL != null ? android.os.Build.MODEL : "?";
+                final String family = DeviceFeatures.deviceFamily();
+                final String deviceText = getString(R.string.settings_debug_agent_status_device) + ": " + model + " (" + family + ")";
+                final String buildText = getString(R.string.settings_debug_agent_status_build) + ": " + android.os.Build.DISPLAY;
+                final boolean su = agentCanRunSu();
+                final String rootText = getString(R.string.settings_debug_agent_status_root) + ": "
+                        + getString(su ? R.string.settings_debug_agent_value_available : R.string.settings_debug_agent_value_unavailable);
+                final String port = AgentDeveloperSupport.resolveAdbTcpPort(agentGetSystemProp("service.adb.tcp.port", ""));
+                final String adbd = agentGetSystemProp("init.svc.adbd", "");
+                final String adbText = getString(R.string.settings_debug_agent_status_adb) + ": "
+                        + ("running".equals(adbd) ? "adbd running" : "adbd " + (adbd.isEmpty() ? "?" : adbd))
+                        + (port != null ? ", tcp " + port : ", usb/tcp off");
+                final String ip = AgentDeveloperSupport.firstIpv4Address();
+                final String ipText = getString(R.string.settings_debug_agent_status_ip) + ": "
+                        + (ip != null ? ip : getString(R.string.settings_debug_agent_value_unknown));
+                final String endpointText;
+                if (ip != null && port != null) {
+                    endpointText = getString(R.string.settings_debug_agent_status_endpoint) + ": adb connect " + ip + ":" + port;
+                } else {
+                    endpointText = getString(R.string.settings_debug_agent_status_endpoint) + ": "
+                            + getString(R.string.settings_debug_agent_adb_usb_only);
+                }
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (!SettingsScreens.AGENT_DEVELOPER.equals(settingsSubScreenKey)) return;
+                        setAgentStatusRowText(statusDevice, deviceText);
+                        setAgentStatusRowText(statusBuild, buildText);
+                        setAgentStatusRowText(statusRoot, rootText);
+                        setAgentStatusRowText(statusAdb, adbText);
+                        setAgentStatusRowText(statusIp, ipText);
+                        setAgentStatusRowText(statusEndpoint, endpointText);
+                    }
+                });
+            }
+        }, "AgentDevStatus").start();
+    }
+
+    private void setAgentStatusRowText(LinearLayout row, String text) {
+        if (row == null || text == null) return;
+        if (row.getChildCount() > 0 && row.getChildAt(0) instanceof TextView) {
+            ((TextView) row.getChildAt(0)).setText(text);
+        }
+    }
+
+    private String agentGetSystemProp(String key, String def) {
+        try {
+            Class<?> sp = Class.forName("android.os.SystemProperties");
+            Object v = sp.getMethod("get", String.class, String.class).invoke(null, key, def);
+            return v != null ? String.valueOf(v) : def;
+        } catch (Exception ignored) {
+            return def;
+        }
+    }
+
+    private boolean agentCanRunSu() {
+        for (String su : new String[] {"/system/xbin/su", "/system/bin/su", "su"}) {
+            Process p = null;
+            try {
+                p = Runtime.getRuntime().exec(new String[] {su, "-c", "id"});
+                if (p.waitFor() == 0) return true;
+            } catch (Exception ignored) {
+            } finally {
+                if (p != null) p.destroy();
+            }
+        }
+        return false;
+    }
+
+    private boolean agentRunSu(String command) {
+        if (command == null || command.trim().isEmpty()) return false;
+        for (String su : new String[] {"/system/xbin/su", "/system/bin/su", "su"}) {
+            Process process = null;
+            try {
+                process = Runtime.getRuntime().exec(new String[] {su, "-c", command});
+                if (process.waitFor() == 0) return true;
+            } catch (Exception ignored) {
+            } finally {
+                if (process != null) process.destroy();
+            }
+        }
+        return false;
+    }
+
+    private void promptAgentInstallTestApk() {
+        final String apkPath = AgentDeveloperSupport.findTestApkPath();
+        if (apkPath == null) {
+            Toast.makeText(this, R.string.settings_debug_agent_no_apk, Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (!agentCanRunSu()) {
+            Toast.makeText(this, R.string.settings_debug_agent_root_unavailable, Toast.LENGTH_LONG).show();
+            return;
+        }
+        final String desc = AgentDeveloperSupport.describeTestApk(apkPath);
+        showThemedConfirm(getString(R.string.settings_debug_agent_install_test_apk),
+                getString(R.string.settings_debug_agent_install_confirm, desc),
+                getString(R.string.common_install),
+                getString(R.string.common_cancel),
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        installAgentTestApk(apkPath);
+                    }
+                });
+    }
+
+    private void installAgentTestApk(final String apkPath) {
+        final String cmd = AgentDeveloperSupport.buildInstallCommand(apkPath);
+        if (cmd == null) {
+            Toast.makeText(this, getString(R.string.settings_debug_agent_install_failed, apkPath), Toast.LENGTH_LONG).show();
+            return;
+        }
+        Toast.makeText(this, R.string.settings_debug_agent_installing, Toast.LENGTH_SHORT).show();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                boolean ok = agentRunSu(cmd);
+                final boolean success = ok;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (success) {
+                            Toast.makeText(MainActivity.this,
+                                    getString(R.string.settings_debug_agent_install_ok, apkPath),
+                                    Toast.LENGTH_LONG).show();
+                        } else {
+                            Toast.makeText(MainActivity.this,
+                                    getString(R.string.settings_debug_agent_install_failed, apkPath),
+                                    Toast.LENGTH_LONG).show();
+                        }
+                        if (SettingsScreens.AGENT_DEVELOPER.equals(settingsSubScreenKey)) {
+                            buildAgentDeveloperMenuUI();
+                        }
+                    }
+                });
+            }
+        }, "AgentDevInstall").start();
+    }
+
+    private void promptAgentRestartSolar() {
+        showThemedConfirm(getString(R.string.settings_debug_agent_restart_solar),
+                getString(R.string.settings_debug_agent_restart_confirm),
+                getString(R.string.common_restart),
+                getString(R.string.common_cancel),
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        restartSolarForAgent();
+                    }
+                });
+    }
+
+    private void restartSolarForAgent() {
+        try {
+            android.content.Intent launch = getPackageManager().getLaunchIntentForPackage(getPackageName());
+            if (launch != null) {
+                launch.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                        | android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                startActivity(launch);
+            }
+        } catch (Exception ignored) {
+        }
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try { Thread.sleep(150); } catch (InterruptedException ignored) {}
+                agentRunSu("am force-stop " + getPackageName());
+            }
+        }, "AgentDevRestart").start();
     }
 
     /** Debug → Flow: all experimental Flow toggles live here, not on the root Debug list. */

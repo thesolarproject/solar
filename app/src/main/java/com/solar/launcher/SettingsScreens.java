@@ -46,6 +46,8 @@ public final class SettingsScreens {
     public static final String XPOSED_MODULES = "settings.debug.xposed_modules";
     /** One installed hook — enable + inline / external config; extra = module label. */
     public static final String XPOSED_MODULE_DETAIL = "settings.debug.xposed_module_detail";
+    /** Debug submenu — agent connection/test workflow for live fixes on Y1/Y2. */
+    public static final String AGENT_DEVELOPER = "settings.debug.agent_developer";
     public static final String SYSTEM_UPDATE = "settings.system_update";
     public static final String HOME = "settings.home";
     public static final String HOME_ARRANGE = "settings.home.arrange";
@@ -112,6 +114,7 @@ public final class SettingsScreens {
         if (FLOW.equals(key)) return R.string.settings_sub_flow;
         if (XPOSED_MODULES.equals(key)) return R.string.settings_debug_xposed_modules;
         if (XPOSED_MODULE_DETAIL.equals(key)) return R.string.settings_debug_xposed_module_detail_title;
+        if (AGENT_DEVELOPER.equals(key)) return R.string.settings_debug_agent_developer;
         if (SYSTEM_UPDATE.equals(key)) return R.string.settings_sub_system_update;
         if (HOME.equals(key)) return R.string.settings_sub_home;
         if (HOME_ARRANGE.equals(key)) return R.string.settings_sub_home_arrange;
@@ -198,7 +201,8 @@ public final class SettingsScreens {
                 || HOME_LAUNCHER.equals(key) || PLAYBACK.equals(key) || LIBRARY.equals(key)
                 || MEDIA.equals(key) || POWER.equals(key) || RESET.equals(key)
                 || DEBUG.equals(key) || FLOW.equals(key) || XPOSED_MODULES.equals(key)
-                || XPOSED_MODULE_DETAIL.equals(key) || SYSTEM_UPDATE.equals(key)
+                || XPOSED_MODULE_DETAIL.equals(key) || AGENT_DEVELOPER.equals(key)
+                || SYSTEM_UPDATE.equals(key)
                 || HOME.equals(key) || HOME_ARRANGE.equals(key) || HOME_MORE.equals(key)
                 || HOME_MORE_ARRANGE.equals(key) || BACKGROUND.equals(key)
                 || NOW_PLAYING.equals(key) || DATETIME.equals(key) || LANGUAGE.equals(key)
