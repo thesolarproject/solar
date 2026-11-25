@@ -98,6 +98,18 @@ Please leave your feedback and issue reports in the [Issues Tracker](https://git
 
 ## Developers
 
+### TODO
+
+Fix youtube
+
+Add OPENVPN support possibly
+
+Plex/Jellyfin
+
+Fix only All songs working
+
+Add AgentDeveloperMenu for y2/y1s so agents can connect to the y2 and test fixes before pushing a new rom
+
 Local **Solar Designer** (1:1 GUI simulator / agent bridge) lives at `solar-designer/` and is gitignored — clone the tree or create it locally, then `cd solar-designer && npm install && npm start`. See `solar-designer/README.md` when present.
 
 # solar-os
