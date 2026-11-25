@@ -41443,7 +41443,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         });
         containerSettingsItems.addView(btnBack);
 
-        addInfoParagraph(getString(R.string.settings_debug_agent_developer_hint));
+        addSettingsInfoParagraph(getString(R.string.settings_debug_agent_developer_hint));
 
         final LinearLayout statusDevice = createSettingsRow("settings.debug.agent_developer.status.device",
                 getString(R.string.settings_debug_agent_status_device) + ": …", false, true);
@@ -41506,7 +41506,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         containerSettingsItems.addView(btnRestartSolar);
         refreshSettingsPreview(RowKeys.AGENT_DEV_RESTART_SOLAR);
 
-        addInfoParagraph(getString(R.string.settings_debug_agent_push_hint));
+        addSettingsInfoParagraph(getString(R.string.settings_debug_agent_push_hint));
 
         refreshAgentDeveloperStatus(statusDevice, statusBuild, statusRoot, statusAdb, statusIp, statusEndpoint);
         btnBack.requestFocus();
