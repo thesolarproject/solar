@@ -22,6 +22,7 @@ public final class InstancesConfig {
     private static final String KEY_YTAPI = "ytapilegacy";
     private static final String KEY_LAST_UPDATE = "last_update_ms";
     private static final String KEY_YT2009 = "yt2009";
+    private static final String KEY_YTDLP = "ytdlp";
     private static final String KEY_UPDATE_URL = "update_url";
     private static final String KEY_REMOTE_REFRESHED = "remote_refreshed";
 
@@ -54,6 +55,11 @@ public final class InstancesConfig {
         return new ArrayList<String>();
     }
 
+    /** 2026-11-25 — yt-dlp sidecar endpoints (user-configured). */
+    public static List<String> seedYtDlp() {
+        return new ArrayList<String>();
+    }
+
     private final SharedPreferences prefs;
 
     public InstancesConfig(Context ctx) {
@@ -81,6 +87,51 @@ public final class InstancesConfig {
         return readList(KEY_YT2009, new String[0]);
     }
 
+    /** 2026-11-25 — yt-dlp sidecar base URLs (e.g. http://192.168.1.5:8787). */
+    public List<String> getYtDlp() {
+        List<String> out = readList(KEY_YTDLP, new String[0]);
+        // Fallbacks for easy agent/device config without UI.
+        String prop = readSystemProp("persist.solar.ytdlp_url");
+        if (prop.length() == 0) prop = readSystemProp("solar.ytdlp.url");
+        if (prop.length() > 0 && !out.contains(prop)) out.add(prop);
+        String file = readFirstLine("/sdcard/Solar/ytdlp_server.txt");
+        if (file.length() > 0 && !out.contains(file)) out.add(file);
+        return out;
+    }
+
+    private static String readSystemProp(String key) {
+        try {
+            Class<?> sp = Class.forName("android.os.SystemProperties");
+            Object v = sp.getMethod("get", String.class, String.class).invoke(null, key, "");
+            return v != null ? String.valueOf(v).trim() : "";
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private static String readFirstLine(String path) {
+        try {
+            java.io.File f = new java.io.File(path);
+            if (!f.isFile()) return "";
+            java.io.BufferedReader br = new java.io.BufferedReader(new java.io.FileReader(f));
+            try {
+                String line = br.readLine();
+                return line != null ? line.trim() : "";
+            } finally {
+                br.close();
+            }
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    /** 2026-11-25 — Persist yt-dlp sidecar URLs (keeps other instance lists). */
+    public void saveYtDlp(List<String> ytdlp) {
+        SharedPreferences.Editor ed = prefs.edit();
+        ed.putString(KEY_YTDLP, toJson(ytdlp));
+        ed.commit();
+    }
+
     public List<String> getYtApiLegacy() {
         return readList(KEY_YTAPI, new String[] { DEFAULT_YTAPI });
     }
@@ -94,14 +145,21 @@ public final class InstancesConfig {
         return !prefs.getBoolean(KEY_REMOTE_REFRESHED, false);
     }
 
-    /** Replace all four lists from a successful remote update. */
+    /** Replace lists from a successful remote update (preserves yt-dlp user config). */
     public void saveLists(List<String> invidious, List<String> piped,
                           List<String> ytapi, List<String> yt2009) {
+        saveLists(invidious, piped, ytapi, yt2009, getYtDlp());
+    }
+
+    /** Replace all lists from a successful remote update / explicit config. */
+    public void saveLists(List<String> invidious, List<String> piped,
+                          List<String> ytapi, List<String> yt2009, List<String> ytdlp) {
         SharedPreferences.Editor ed = prefs.edit();
         ed.putString(KEY_INVIDIOUS, toJson(invidious));
         ed.putString(KEY_PIPED, toJson(piped));
         ed.putString(KEY_YTAPI, toJson(ytapi));
         ed.putString(KEY_YT2009, toJson(yt2009));
+        ed.putString(KEY_YTDLP, toJson(ytdlp));
         ed.putLong(KEY_LAST_UPDATE, System.currentTimeMillis());
         ed.putBoolean(KEY_REMOTE_REFRESHED, true);
         ed.commit();
@@ -121,9 +179,12 @@ public final class InstancesConfig {
             ed.putString(KEY_PIPED, toJson(new ArrayList<String>()));
             ed.putString(KEY_YTAPI, toJson(listOf(new String[] { DEFAULT_YTAPI })));
             ed.putString(KEY_YT2009, toJson(new ArrayList<String>()));
+            ed.putString(KEY_YTDLP, toJson(new ArrayList<String>()));
             ed.remove(KEY_LAST_UPDATE);
             ed.putBoolean(KEY_REMOTE_REFRESHED, false);
             ed.commit();
+        } else if (!prefs.contains(KEY_YTDLP)) {
+            prefs.edit().putString(KEY_YTDLP, toJson(new ArrayList<String>())).commit();
         }
     }
 

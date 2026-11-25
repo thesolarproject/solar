@@ -131,6 +131,7 @@ android {
         aidl true
     }
     compileOptions {
+        coreLibraryDesugaringEnabled true
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
     }
@@ -160,6 +161,9 @@ dependencies {
     // 2026-07-05 — okhttp 3.12.x last branch for API 17; 3.13+ requires API 21.
     implementation 'com.squareup.okhttp3:okhttp:3.12.13'
     implementation 'net.jthink:jaudiotagger:3.0.1'
+    // 2026-11-25 — On-device YouTube extraction (no PC/sidecar).
+    implementation 'com.github.teamnewpipe:NewPipeExtractor:v0.24.6'
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs_nio:2.1.4'
     testImplementation libs.junit
     testImplementation 'org.json:json:20240303'
     testImplementation 'net.sf.kxml:kxml2:2.3.0'

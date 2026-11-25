@@ -62,6 +62,15 @@ public final class InstancePool {
         for (int i = 0; i < yt.size(); i++) {
             next.add(new YtApiLegacyBackend(yt.get(i)));
         }
+        // 2026-11-25 — yt-dlp sidecar backends (resolve/download preferred when configured).
+        List<String> ytdlp = cfg.getYtDlp();
+        for (int i = 0; i < ytdlp.size(); i++) {
+            String raw = ytdlp.get(i);
+            if (raw == null || raw.length() == 0) continue;
+            next.add(new YtDlpBackend(raw));
+        }
+        // 2026-11-25 — On-device NewPipeExtractor fallback (no PC/server needed).
+        next.add(new NewPipeBackend());
         synchronized (lock) {
             all = next;
         }
@@ -159,6 +168,8 @@ public final class InstancePool {
      * 2026-07-24 — Cooling hosts go last so dead ytapilegacy seeds don't burn resolve budget.
      */
     private List<YoutubeBackend> streamOrder(boolean lowTier) {
+        List<YoutubeBackend> preferredWarm = new ArrayList<YoutubeBackend>();
+        List<YoutubeBackend> preferredCool = new ArrayList<YoutubeBackend>();
         List<YoutubeBackend> ytapiWarm = new ArrayList<YoutubeBackend>();
         List<YoutubeBackend> ytapiCool = new ArrayList<YoutubeBackend>();
         List<YoutubeBackend> warm = new ArrayList<YoutubeBackend>();
@@ -168,7 +179,10 @@ public final class InstancePool {
                 YoutubeBackend b = all.get(i);
                 if (b == null) continue;
                 boolean cooling = isHostCooling(b);
-                if ("YtApiLegacy".equals(b.getName())) {
+                String name = b.getName();
+                if ("YtDlp".equals(name) || "NewPipe".equals(name)) {
+                    (cooling ? preferredCool : preferredWarm).add(b);
+                } else if ("YtApiLegacy".equals(name)) {
                     (cooling ? ytapiCool : ytapiWarm).add(b);
                 } else if (lowTier) {
                     // 360 pool: any that supports progressive 360
@@ -177,20 +191,25 @@ public final class InstancePool {
                     }
                 } else {
                     // HQ pool: only progressive-quality backends (YtApi / rich hosts); Invidious 360-muxed only.
-                    if (b.supportsHqVideo() && !"Invidious".equals(b.getName())) {
+                    if (b.supportsHqVideo() && !"Invidious".equals(name)) {
                         (cooling ? cool : warm).add(b);
                     }
                 }
             }
         }
+        Collections.shuffle(preferredWarm, RANDOM);
+        Collections.shuffle(preferredCool, RANDOM);
         Collections.shuffle(ytapiWarm, RANDOM);
         Collections.shuffle(ytapiCool, RANDOM);
         Collections.shuffle(warm, RANDOM);
         Collections.shuffle(cool, RANDOM);
         List<YoutubeBackend> order = new ArrayList<YoutubeBackend>(
-                ytapiWarm.size() + warm.size() + ytapiCool.size() + cool.size());
+                preferredWarm.size() + ytapiWarm.size() + warm.size()
+                        + preferredCool.size() + ytapiCool.size() + cool.size());
+        order.addAll(preferredWarm);
         order.addAll(ytapiWarm);
         order.addAll(warm);
+        order.addAll(preferredCool);
         order.addAll(ytapiCool);
         order.addAll(cool);
         return order;
@@ -210,18 +229,26 @@ public final class InstancePool {
 
     public YoutubeBackend.AudioStream resolveAudio(String videoId) throws IOException {
         IOException last = null;
-        // Prefer Invidious/Piped (YtApi has no audio); skip cooling hosts first.
-        for (YoutubeBackend b : failoverOrder(true)) {
-            if ("YtApiLegacy".equals(b.getName())) continue;
-            try {
-                YoutubeBackend.AudioStream a = b.resolveAudio(videoId);
-                if (a != null && a.url != null && a.url.length() > 0) {
-                    markHostOk(b);
-                    return a;
+        // 2026-11-25 — Prefer on-device/sidecar extraction, then Invidious/Piped. YtApi has no audio.
+        List<YoutubeBackend> order = failoverOrder(true);
+        for (int pass = 0; pass < 2; pass++) {
+            for (int i = 0; i < order.size(); i++) {
+                YoutubeBackend b = order.get(i);
+                if (b == null) continue;
+                String name = b.getName();
+                boolean preferred = "YtDlp".equals(name) || "NewPipe".equals(name);
+                if (pass == 0 && !preferred) continue;
+                if (pass == 1 && (preferred || "YtApiLegacy".equals(name))) continue;
+                try {
+                    YoutubeBackend.AudioStream a = b.resolveAudio(videoId);
+                    if (a != null && a.url != null && a.url.length() > 0) {
+                        markHostOk(b);
+                        return a;
+                    }
+                } catch (IOException e) {
+                    markHostFailed(b);
+                    last = e;
                 }
-            } catch (IOException e) {
-                markHostFailed(b);
-                last = e;
             }
         }
         throw last != null ? last : new IOException("no audio backends");
