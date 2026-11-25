@@ -35,6 +35,12 @@ public class SolarApplication extends Application {
     }
 
     @Override
+    protected void attachBaseContext(android.content.Context base) {
+        super.attachBaseContext(base);
+        androidx.multidex.MultiDex.install(this);
+    }
+
+    @Override
     public void onCreate() {
         super.onCreate();
         sApp = this;
