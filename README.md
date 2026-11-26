@@ -100,15 +100,24 @@ Please leave your feedback and issue reports in the [Issues Tracker](https://git
 
 ### TODO
 
-Fix youtube
+~~Fix youtube~~
 
 Add OPENVPN support possibly
 
 Plex/Jellyfin
 
-Fix only All songs working
+~~Fix only All songs working~~
 
-Add AgentDeveloperMenu for y2/y1s so agents can connect to the y2 and test fixes before pushing a new rom
+~~Add AgentDeveloperMenu for y2/y1s so agents can connect to the y2 and test fixes before pushing a new rom~~
+
+### Agent Developer Menu (Y1 / Y2)
+
+**Settings ▸ About ▸ Debug and Experiments ▸ Agent Developer Menu**
+
+Purpose: contributors can get a change tested on real hardware without cutting a ROM — an agent can drive the loop over ADB, and the same screen still works by hand when no agent is attached.
+
+- **With an agent** — turn on **Wireless ADB** (needs root; starts `adbd` on TCP 5555) and read the `adb connect <ip>:5555` line off the status rows, which also report device family, build, root and `adbd` state so the agent can confirm it is on the right unit.
+- **Manually** — copy the build to the device as `/sdcard/Solar/test.apk` (or `/sdcard/Download/app-release.apk`) and tap **Install test APK** (`pm install -r`), or run `adb install -r app-release.apk` from a PC over USB. **Restart Solar** relaunches the launcher so the new build is picked up.
 
 Local **Solar Designer** (1:1 GUI simulator / agent bridge) lives at `solar-designer/` and is gitignored — clone the tree or create it locally, then `cd solar-designer && npm install && npm start`. See `solar-designer/README.md` when present.
 
