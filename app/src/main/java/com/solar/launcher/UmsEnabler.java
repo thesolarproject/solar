@@ -87,6 +87,7 @@ public class UmsEnabler {
     private static void enableMassStorageY1(String volumePath) throws Exception {
         traceLine("y1 enable start");
         System.err.println("UmsEnabler Y1 enable start path=" + volumePath);
+        labelExports();
         recoverY1UsbDesyncPropOnly();
         Object mountService = getMountService();
         invokeSetUsbMassStorageEnabled(mountService, false);
@@ -135,6 +136,9 @@ public class UmsEnabler {
     private static void enableMassStorageY2(String volumePath) throws Exception {
         traceLine("y2 enable start");
         System.err.println("UmsEnabler Y2 enable start path=" + volumePath);
+        // 2026-11-26 — Name the drives while they are still mounted: MountService unmounts
+        // them during the share, after which the block device cannot be found from /proc/mounts.
+        labelExports();
         recoverUsbDesyncPropOnly();
         Object mountService = getMountService();
         invokeSetUsbMassStorageEnabled(mountService, false);
@@ -177,6 +181,50 @@ public class UmsEnabler {
     /** Y2 export paths — internal symlink + MicroSD slot. */
     private static String[] y2ExportVolumePaths() {
         return new String[]{"/storage/sdcard0", "/storage/sdcard1"};
+    }
+
+    /**
+     * 2026-11-26 — Label the exported filesystems "Internal" and "SD".
+     * Layman: the drive shows up with the same name on the player and on the computer.
+     * Tech: FAT label on the block device behind each volume; the stock Y2 image has no
+     *   dosfstools, so {@link FatLabel} writes the BPB, FAT32 backup, and root entry itself.
+     *   FUSE (emulated internal) and loop nodes are skipped — they have no filesystem label.
+     * Reversal: delete this call and FatLabel.java; existing labels stay on the cards.
+     */
+    private static void labelExports() {
+        labelExport("/storage/sdcard0", "Internal");
+        labelExport("/storage/sdcard1", "SD");
+    }
+
+    private static void labelExport(String path, String name) {
+        String dev = mountDevice(path);
+        if (dev.length() == 0 || "/dev/fuse".equals(dev)) {
+            dev = mountDevice("/mnt/media_rw/" + path.substring(path.lastIndexOf('/') + 1));
+        }
+        if (!dev.startsWith("/dev/block/")) return;
+        if (dev.startsWith("/dev/block/loop")) return;
+        FatLabel.apply(dev, name);
+    }
+
+    /** First field of the /proc/mounts entry for {@code path}, or "". */
+    private static String mountDevice(String path) {
+        BufferedReader reader = null;
+        try {
+            reader = new BufferedReader(new FileReader("/proc/mounts"));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String[] parts = line.split("\\s+");
+                if (parts.length >= 2 && path.equals(parts[1])) return parts[0];
+            }
+        } catch (Exception ignored) {
+        } finally {
+            if (reader != null) {
+                try {
+                    reader.close();
+                } catch (Exception ignored) {}
+            }
+        }
+        return "";
     }
 
     /** Best-effort sysfs functions write when setprop stalls on MTK (2026-07-05). */

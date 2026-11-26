@@ -13,6 +13,12 @@ setprop sys.solar.overlay.shell_visible 0 2>/dev/null
 setprop sys.solar.ime.active 0 2>/dev/null
 setprop sys.solar.ime.ui 0 2>/dev/null
 
+# 2026-11-26 — Y2 USB disk mode gate. install-recovery.sh arms it before zygote; repeat here
+# for init.d-only boots so UsbMassStorageServerHooks always installs at system_server start.
+case "$(getprop ro.product.model 2>/dev/null)" in
+    *[Yy]2*) setprop persist.sys.solar.ums.experiment 1 2>/dev/null ;;
+esac
+
 # 2026-07-06 — Y1/Y2 fixed landscape 480×360; block apps from leaving portrait/rotated state.
 settings put system accelerometer_rotation 0 2>/dev/null
 settings put system user_rotation 0 2>/dev/null

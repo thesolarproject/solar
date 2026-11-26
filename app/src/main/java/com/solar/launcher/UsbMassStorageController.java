@@ -111,7 +111,6 @@ public final class UsbMassStorageController {
         // 2026-07-15 — Arm before setprop so USB_STATE re-enum cannot tear LUN mid-enable.
         markUserSessionActive();
         boolean ok = runUmsToggle(context, true);
-        if (ok) labelExportVolumesAsync(context);
         if (!ok) {
             // Failed enable — drop session so Unauthorized can still clear stuck mass_storage.
             clearUserSession();
@@ -518,23 +517,6 @@ public final class UsbMassStorageController {
         }
         logUmsResult(enable, rootOk, result);
         return result;
-    }
-
-    /**
-     * 2026-11-26 — Name the exported filesystems so the host shows "Internal" and "SD".
-     * Layman: Finder / Explorer / Nautilus label the two drives the same way the player does.
-     * Tech: best-effort fatlabel / e2label on the block device behind each volume, async and
-     *   non-fatal — a failure only leaves the previous drive names in place.
-     * Reversal: drop the call after {@code runUmsToggle} and the y1/solar-label-ums.sh asset.
-     */
-    private static void labelExportVolumesAsync(Context context) {
-        if (context == null) return;
-        try {
-            File cached = new File(context.getCacheDir(), "solar-label-ums.sh");
-            if (!extractAsset(context, "y1/solar-label-ums.sh", cached)) return;
-            RootShell.runAsync("chmod 755 " + shellQuote(cached.getAbsolutePath())
-                    + " && sh " + shellQuote(cached.getAbsolutePath()));
-        } catch (Throwable ignored) {}
     }
 
     /** Resolve baked, cached, or asset-extracted UMS script path. */

@@ -142,9 +142,11 @@ final class UsbMassStorageServerHooks {
                     mountServiceRef = param.thisObject;
                     if (param.args == null || param.args.length < 1) return;
                     if (!Boolean.TRUE.equals(param.args[0])) return;
-                    // KitKat: MountService UMS needs UsbDeviceManager on mass_storage first (2026-07-05).
-                    if (UsbMassStorageProbe.readUsbConfig().contains("mass_storage")
-                            || UsbMassStorageProbe.probeKernelMassStorageMode()) {
+                    // 2026-11-26 — Solar's manual Turn on calls MountService directly and its
+                    // root-shell setprop is denied on Y2 SELinux, so the gadget stayed on mtp,adb
+                    // and the PC never saw the disk. Move UsbDeviceManager here, before vold shares.
+                    // Only when not already mass_storage so shareY2Volumes -> enable cannot loop.
+                    if (!UsbMassStorageProbe.readUsbConfig().contains("mass_storage")) {
                         syncUsbDeviceManagerFunctions("mass_storage,adb");
                     }
                 }
@@ -156,7 +158,9 @@ final class UsbMassStorageServerHooks {
                     boolean enable = Boolean.TRUE.equals(param.args[0]);
                     SolarContextBridge.log("MountService.setUsbMassStorageEnabled(" + enable + ")");
                     if (enable) {
-                        scheduleShareY2Volumes(param.thisObject, 400L);
+                        // 2026-11-26 — 400 ms raced the gadget re-enum started above; wait for the
+                        // new function set to settle before re-binding any LUN it cleared.
+                        scheduleShareY2Volumes(param.thisObject, 1200L);
                     }
                 }
             });

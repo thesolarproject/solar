@@ -110,6 +110,9 @@ fi
 if ! debugfs_cat /etc/install-recovery.sh | grep -q 'daemonsu'; then
     fail "install-recovery.sh must start daemonsu (init.rc flash_recovery hook)"
 fi
+if ! debugfs_cat /etc/install-recovery.sh | grep -q 'persist.sys.solar.ums.experiment'; then
+    fail "install-recovery.sh must arm the Y2 UMS gate before system_server starts"
+fi
 
 # Unified keylayout playbook — wheel MEDIA on 103/108, identical mtk mirrors.
 canon="$tmpdir/Y2-Rockbox.kl"
