@@ -5,26 +5,53 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
-import android.text.Layout;
 import android.util.AttributeSet;
 import android.view.MotionEvent;
 import android.view.View;
 
+import com.solar.launcher.R;
+
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+
 /**
  * 2026-11-26 — Two-page book surface (single page when the panel is too narrow).
  * Layman: left/right pages; tap a side, or the side buttons, to turn.
- * Tech: EPUB draws StaticLayouts, PDF draws PDFium bitmaps rendered off-thread.
- *   Rendering is generation-guarded so a fast page turn cannot paint an old spread.
+ * Tech: EPUB paints windows into one chapter layout, PDF draws PDFium bitmaps.
+ *
+ * 2026-11-26 (reader rework) — PDF pages render on ONE worker thread with a small bitmap
+ *   cache and the following spread prefetched: PDFium is not thread safe, and the old code
+ *   started a fresh thread per page (two at once) and re-rendered every turn.
+ *   Was: leftBitmap/rightBitmap + new Thread per page, recycled on every turn.
+ *   Reversal: restore that pair of fields and the per-page Thread.
  */
 public final class EbookReaderView extends View {
+    /** Rendered PDF pages kept around (current spread + the one ahead + the one behind). */
+    private static final int PDF_CACHE_MAX = 6;
+
     private EbookReaderState state;
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint paper = new Paint();
-    private Bitmap leftBitmap;
-    private Bitmap rightBitmap;
+    private final Map<String, Bitmap> pdfCache =
+            new LinkedHashMap<String, Bitmap>(8, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Bitmap> eldest) {
+                    if (size() > PDF_CACHE_MAX) {
+                        Bitmap b = eldest.getValue();
+                        if (b != null && !b.isRecycled()) b.recycle();
+                        return true;
+                    }
+                    return false;
+                }
+            };
+    private final Set<String> pdfQueued = new HashSet<String>();
+    private ExecutorService pdfWorker;
     private int renderGen;
-    /** Spread+size already sent to PDFium — stops onDraw from queueing the same render twice. */
-    private String pendingPdfKey;
     private boolean touchTurnEnabled = true;
 
     public EbookReaderView(Context ctx) {
@@ -45,9 +72,20 @@ public final class EbookReaderView extends View {
     }
 
     public void setReader(EbookReaderState s) {
+        if (state != null) state.setListener(null);
         state = s;
         releaseBitmaps();
-        if (state != null) state.setViewSize(getWidth(), getHeight());
+        if (state != null) {
+            state.setListener(new EbookReaderState.Listener() {
+                @Override
+                public void onReaderChanged() {
+                    invalidate();
+                }
+            });
+            if (getWidth() > 0 && getHeight() > 0) {
+                state.setViewSize(getWidth(), getHeight());
+            }
+        }
         invalidate();
     }
 
@@ -62,11 +100,17 @@ public final class EbookReaderView extends View {
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
-        if (state != null) {
+        if (state != null && w > 0 && h > 0) {
             state.setViewSize(w, h);
             releaseBitmaps();
             invalidate();
         }
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        releaseBitmaps();
+        super.onDetachedFromWindow();
     }
 
     /** Page turn from hard buttons / wheel / touch. */
@@ -75,7 +119,6 @@ public final class EbookReaderView extends View {
         boolean moved = next ? state.next() : state.prev();
         if (!moved) return false;
         state.saveProgress();
-        releaseBitmaps();
         invalidate();
         return true;
     }
@@ -92,7 +135,7 @@ public final class EbookReaderView extends View {
         super.onDraw(canvas);
         if (state == null || !state.isOpen()) {
             paint.setColor(0xFF9A9A9A);
-            canvas.drawText("Book could not be opened", 12f, 40f, paint);
+            canvas.drawText(getContext().getString(R.string.ebook_open_failed), 12f, 40f, paint);
             return;
         }
         drawHeader(canvas);
@@ -135,35 +178,46 @@ public final class EbookReaderView extends View {
     }
 
     private void drawEpub(Canvas canvas) {
+        if (state.isLoading()) {
+            drawCentered(canvas, getContext().getString(R.string.ebook_formatting));
+            return;
+        }
+        EpubBook book = state.epub();
+        if (book == null) {
+            drawCentered(canvas, getContext().getString(R.string.ebook_open_failed));
+            return;
+        }
         for (int slot = 0; slot <= 1; slot++) {
             int pageIndex = state.pageAt(slot);
             if (pageIndex < 0) continue;
-            Layout layout = state.epub().pageLayout(state.chapter(), pageIndex);
-            if (layout == null) continue;
             int x = pageLeftX(slot);
             int top = contentTop();
             canvas.drawRect(x, top, x + state.pageWidth(), top + state.pageHeight(), paper);
-            canvas.save();
-            canvas.translate(x + 4f, top + 2f);
-            canvas.clipRect(0f, 0f, state.pageWidth() - 8, state.pageHeight() - 4);
-            paint.setColor(0xFF111111);
-            layout.getPaint().setColor(0xFF111111);
-            layout.draw(canvas);
-            canvas.restore();
+            book.drawPage(canvas, state.chapter(), pageIndex,
+                    x + EbookReaderState.PAGE_PAD_X, top + EbookReaderState.PAGE_PAD_Y,
+                    state.pageWidth() - 2 * EbookReaderState.PAGE_PAD_X,
+                    state.pageHeight() - 2 * EbookReaderState.PAGE_PAD_Y);
         }
     }
 
     private void drawPdf(Canvas canvas) {
-        if (leftBitmap == null || (state.twoUp() && rightBitmap == null
-                && state.pageAt(1) >= 0)) {
-            requestPdf();
+        for (int slot = 0; slot <= 1; slot++) {
+            int pageIndex = state.pageAt(slot);
+            if (pageIndex < 0) continue;
+            int x = pageLeftX(slot);
+            int top = contentTop();
+            canvas.drawRect(x, top, x + state.pageWidth(), top + state.pageHeight(), paper);
+            Bitmap bmp = pdfCache.get(pdfKey(pageIndex));
+            if (bmp == null || bmp.isRecycled()) {
+                requestPdfPage(pageIndex);
+                continue;
+            }
+            drawPdfBitmap(canvas, bmp, slot);
         }
-        if (leftBitmap != null && !leftBitmap.isRecycled()) {
-            drawPdfBitmap(canvas, leftBitmap, 0);
-        }
-        if (rightBitmap != null && !rightBitmap.isRecycled()) {
-            drawPdfBitmap(canvas, rightBitmap, 1);
-        }
+        // Warm the spread after this one so the next turn paints immediately.
+        int nextFirst = state.page() + (state.twoUp() ? 2 : 1);
+        requestPdfPage(nextFirst);
+        if (state.twoUp()) requestPdfPage(nextFirst + 1);
     }
 
     private void drawPdfBitmap(Canvas canvas, Bitmap bmp, int slot) {
@@ -179,56 +233,69 @@ public final class EbookReaderView extends View {
         canvas.drawBitmap(bmp, dx, dy, null);
     }
 
-    private void requestPdf() {
-        final EbookReaderState snapshot = state;
-        if (snapshot == null || snapshot.pdf() == null) return;
-        final int leftPage = snapshot.pageAt(0);
-        final int rightPage = snapshot.pageAt(1);
-        final int w = snapshot.pageWidth();
-        final int h = snapshot.pageHeight();
-        String key = leftPage + ":" + rightPage + ":" + w + "x" + h;
-        if (key.equals(pendingPdfKey)) return;
-        pendingPdfKey = key;
-        final int gen = ++renderGen;
-        final PdfBook source = snapshot.pdf();
-        if (source == null) return;
-        if (leftPage >= 0 && leftBitmap == null) {
-            render(source, leftPage, w, h, gen, true);
-        }
-        if (rightPage >= 0 && rightBitmap == null) {
-            render(source, rightPage, w, h, gen, false);
-        }
+    private String pdfKey(int page) {
+        return page + "@" + state.pageWidth() + "x" + state.pageHeight();
     }
 
-    private void render(final PdfBook source, final int page,
-                        final int w, final int h, final int gen, final boolean left) {
-        new Thread(new Runnable() {
+    private void requestPdfPage(final int page) {
+        final EbookReaderState snapshot = state;
+        if (snapshot == null || snapshot.pdf() == null) return;
+        final PdfBook source = snapshot.pdf();
+        if (page < 0 || page >= source.pageCount()) return;
+        final String key = pdfKey(page);
+        if (pdfCache.containsKey(key) || pdfQueued.contains(key)) return;
+        pdfQueued.add(key);
+        final int w = snapshot.pageWidth();
+        final int h = snapshot.pageHeight();
+        final int gen = renderGen;
+        pdfWorker().execute(new Runnable() {
             @Override
             public void run() {
                 final Bitmap bmp = source.renderPage(page, w, h);
                 post(new Runnable() {
                     @Override
                     public void run() {
-                        if (gen != renderGen || state == null) {
-                            if (bmp != null) bmp.recycle();
+                        pdfQueued.remove(key);
+                        if (bmp == null) return;
+                        if (gen != renderGen || state == null || state.pdf() != source) {
+                            bmp.recycle();
                             return;
                         }
-                        if (left) leftBitmap = bmp;
-                        else rightBitmap = bmp;
+                        pdfCache.put(key, bmp);
                         invalidate();
                     }
                 });
             }
-        }).start();
+        });
+    }
+
+    private ExecutorService pdfWorker() {
+        if (pdfWorker == null) {
+            pdfWorker = Executors.newSingleThreadExecutor(new ThreadFactory() {
+                @Override
+                public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "ebook-pdf");
+                    t.setDaemon(true);
+                    return t;
+                }
+            });
+        }
+        return pdfWorker;
     }
 
     private void releaseBitmaps() {
         renderGen++;
-        pendingPdfKey = null;
-        if (leftBitmap != null && !leftBitmap.isRecycled()) leftBitmap.recycle();
-        if (rightBitmap != null && !rightBitmap.isRecycled()) rightBitmap.recycle();
-        leftBitmap = null;
-        rightBitmap = null;
+        for (Bitmap b : pdfCache.values()) {
+            if (b != null && !b.isRecycled()) b.recycle();
+        }
+        pdfCache.clear();
+    }
+
+    private void drawCentered(Canvas canvas, String text) {
+        paint.setColor(0xFF9A9A9A);
+        paint.setTextSize(13f);
+        float w = paint.measureText(text);
+        canvas.drawText(text, (getWidth() - w) / 2f, getHeight() / 2f, paint);
     }
 
     private String ellipsize(String text, float maxWidth) {

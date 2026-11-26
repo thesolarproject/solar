@@ -43,7 +43,9 @@ public final class EbookProgressStore {
 
     public static void save(Context ctx, File f, int chapter, int page) {
         if (ctx == null || f == null) return;
-        prefs(ctx).edit().putString(key(f), chapter + ":" + page).commit();
+        // 2026-11-26 — apply(), not commit(): committing on every page turn blocked the
+        // UI thread on disk. Reversal: .commit().
+        prefs(ctx).edit().putString(key(f), chapter + ":" + page).apply();
     }
 
     static Progress parse(String raw) {

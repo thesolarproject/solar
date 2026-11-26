@@ -59308,25 +59308,35 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         return isMediaNextKey(keyCode) || isMediaPrevKey(keyCode);
     }
 
+    /** 2026-11-26 — last accepted page turn (anti double-turn). */
+    private long lastEbookTurnMs;
+
     /**
      * 2026-11-26 — E-Book reader keys.
-     * Layman: the two forward buttons flip the spread; wheel and arrows do the same.
+     * Layman: the right forward button flips forward, the left one flips back; the wheel
+     * notches and the arrows do the same.
      * True = consumed, so the track-skip path never fires while a book is open.
      */
     private boolean handleEbookReaderKeyDown(int keyCode, KeyEvent event) {
-        boolean next;
-        if (isMediaNextKey(keyCode) || Y1InputKeys.isWheelDown(keyCode)
-                || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
-            next = true;
-        } else if (isMediaPrevKey(keyCode) || Y1InputKeys.isWheelUp(keyCode)
-                || keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
-            next = false;
-        } else {
-            return false;
-        }
-        if (event == null || event.getRepeatCount() == 0) {
-            if (mediaSuite != null && mediaSuite.ebookTurnPage(next)) clickFeedback();
-        }
+        // 2026-11-26 — Right forwards (side next / wheel down / DPAD right) vs left forwards.
+        boolean isNext = isMediaNextKey(keyCode) || Y1InputKeys.isWheelDown(keyCode)
+                || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
+                || keyCode == KeyEvent.KEYCODE_PAGE_DOWN
+                || keyCode == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD;
+        boolean isPrev = isMediaPrevKey(keyCode) || Y1InputKeys.isWheelUp(keyCode)
+                || keyCode == KeyEvent.KEYCODE_DPAD_LEFT
+                || keyCode == KeyEvent.KEYCODE_PAGE_UP
+                || keyCode == KeyEvent.KEYCODE_MEDIA_REWIND;
+        if (!isNext && !isPrev) return false;
+        // 2026-11-26 — key-up used to turn again, so one press skipped a whole spread.
+        // Was: `event.getRepeatCount() == 0` with no action check. Reversal: that guard.
+        if (event == null || event.getAction() != KeyEvent.ACTION_DOWN) return true;
+        if (event.getRepeatCount() > 0) return true;
+        // Wheel ghost repeats can land milliseconds apart — one press, one page.
+        long now = android.os.SystemClock.uptimeMillis();
+        if (now - lastEbookTurnMs < 120L) return true;
+        lastEbookTurnMs = now;
+        if (mediaSuite != null && mediaSuite.ebookTurnPage(isNext)) clickFeedback();
         return true;
     }
 

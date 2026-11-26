@@ -1,9 +1,13 @@
 package com.solar.launcher.ebook;
 
+import android.graphics.Canvas;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.Layout;
 import android.text.SpannableStringBuilder;
 import android.text.StaticLayout;
 import android.text.TextPaint;
+import android.text.style.RelativeSizeSpan;
 import android.text.style.StyleSpan;
 import android.util.Xml;
 
@@ -14,41 +18,78 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 
 /**
  * 2026-11-26 — Minimal EPUB reader: zip → container.xml → OPF spine → chapter text.
  * Layman: pulls the words out of the book and cuts them into pages that fit the screen.
  * Tech: no dependency beyond the platform. XHTML is walked with XmlPullParser into a
- *   SpannableStringBuilder (bold/italic/heading sizes kept), then paginated with
- *   StaticLayout at the width/height the reader view asks for. Inline images, CSS and
- *   tables are dropped on purpose — ponytail: text-only, upgrade path is an image-aware
- *   layout pass if anyone misses covers mid-chapter.
+ *   SpannableStringBuilder (bold/italic/heading sizes kept), laid out once per chapter as
+ *   a single StaticLayout, and cut into pages by line index — pages are drawn as windows
+ *   into that one layout, so turning never re-flowed text.
+ *
+ * 2026-11-26 (reader rework) — Pagination runs on one low-priority worker thread and the
+ *   reader shows "Formatting…" until the chapter is ready, so opening or leaving a chapter
+ *   no longer freezes the UI. Only the last few chapters are kept in memory.
+ *   Was: paginate lazily on the UI thread from onDraw. Reversal: pages(chapter) called
+ *   synchronously by pageCount/pageLayout.
  */
 public final class EpubBook {
+    /** Called on the main thread once a chapter's page breaks are ready. */
+    public interface Ready {
+        void onPagesReady(int chapter);
+    }
+
+    /** Chapters kept laid out in memory (current + one ahead + one behind). */
+    private static final int CACHE_CHAPTERS = 3;
+    private static final float LINE_SPACING_MULT = 1.06f;
+    private static final float LINE_SPACING_ADD = 2f;
+
     private final File file;
     private final ZipFile zip;
     private final String title;
     private final List<String> spineHrefs = new ArrayList<String>();
-    private final Map<Integer, SpannableStringBuilder> textCache =
-            new HashMap<Integer, SpannableStringBuilder>();
-    private final Map<Integer, List<StaticLayout>> pageCache =
-            new HashMap<Integer, List<StaticLayout>>();
-    private final Map<Integer, List<Integer>> startsCache =
-            new HashMap<Integer, List<Integer>>();
 
-    private int layoutW;
-    private int layoutH;
-    private float textSize;
+    private final Object lock = new Object();
+    private final Map<Integer, SpannableStringBuilder> textCache = bounded(CACHE_CHAPTERS);
+    /** Full chapter layout — pages are windows into this. */
+    private final Map<Integer, StaticLayout> layouts = bounded(CACHE_CHAPTERS);
+    /** First line index of every page in the chapter. */
+    private final Map<Integer, List<Integer>> starts = bounded(CACHE_CHAPTERS);
+    private final Set<Integer> queued = new HashSet<Integer>();
+
+    private final ExecutorService worker;
+    private final Handler main = new Handler(Looper.getMainLooper());
+
+    private volatile Ready ready;
+    private volatile int layoutW;
+    private volatile int layoutH;
+    private volatile float textSize;
+    /** Bumped on every geometry change so a stale background pass is thrown away. */
+    private volatile int layoutGen;
+    private volatile boolean closed;
 
     private EpubBook(File file, ZipFile zip, String title) {
         this.file = file;
         this.zip = zip;
         this.title = title;
+        this.worker = Executors.newSingleThreadExecutor(new ThreadFactory() {
+            @Override
+            public Thread newThread(Runnable r) {
+                Thread t = new Thread(r, "epub-pages");
+                t.setDaemon(true);
+                t.setPriority(Thread.NORM_PRIORITY - 1);
+                return t;
+            }
+        });
     }
 
     public static EpubBook open(File file, int width, int height, float textSize)
@@ -83,7 +124,7 @@ public final class EpubBook {
     }
 
     private static final class Manifest {
-        final Map<String, String> hrefById = new HashMap<String, String>();
+        final Map<String, String> hrefById = new LinkedHashMap<String, String>();
         final List<String> spine = new ArrayList<String>();
     }
 
@@ -99,96 +140,182 @@ public final class EpubBook {
         return "Chapter " + (chapter + 1);
     }
 
-    /** Page geometry changed (window resize / text size): rebuild page cuts lazily. */
+    /** Page geometry changed (first layout / resize): throw the old cuts away. */
     public void setLayout(int width, int height, float size) {
         if (width == layoutW && height == layoutH && size == textSize) return;
         layoutW = Math.max(1, width);
         layoutH = Math.max(1, height);
         textSize = size;
-        pageCache.clear();
-        startsCache.clear();
+        layoutGen++;
+        synchronized (lock) {
+            textCache.clear();
+            layouts.clear();
+            starts.clear();
+            queued.clear();
+        }
     }
 
+    /** True once the chapter has page breaks — false while it is still being formatted. */
+    public boolean pagesReady(int chapter) {
+        synchronized (lock) {
+            return starts.containsKey(chapter);
+        }
+    }
+
+    /** Pages in the chapter; 0 while it is still being formatted. */
     public int pageCount(int chapter) {
-        pages(chapter);
-        List<StaticLayout> pages = pageCache.get(chapter);
-        return pages != null ? Math.max(1, pages.size()) : 1;
+        synchronized (lock) {
+            List<Integer> s = starts.get(chapter);
+            return s != null ? Math.max(1, s.size()) : 0;
+        }
     }
 
-    public StaticLayout pageLayout(int chapter, int page) {
-        pages(chapter);
-        List<StaticLayout> pages = pageCache.get(chapter);
-        if (pages == null || pages.isEmpty()) return null;
-        int i = Math.max(0, Math.min(page, pages.size() - 1));
-        return pages.get(i);
+    /** Kick off background pagination for a chapter (no-op when ready or already queued). */
+    public void requestPages(final int chapter) {
+        if (closed || chapter < 0 || chapter >= spineHrefs.size()) return;
+        synchronized (lock) {
+            if (starts.containsKey(chapter) || !queued.add(chapter)) return;
+        }
+        final int gen = layoutGen;
+        worker.execute(new Runnable() {
+            @Override
+            public void run() {
+                boolean ok;
+                try {
+                    ok = paginate(chapter, gen);
+                } catch (Throwable t) {
+                    ok = false;
+                }
+                final boolean done = ok;
+                main.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        synchronized (lock) {
+                            queued.remove(chapter);
+                        }
+                        if (!done || closed) return;
+                        Ready r = ready;
+                        if (r != null) r.onPagesReady(chapter);
+                    }
+                });
+            }
+        });
+    }
+
+    public void setReadyListener(Ready listener) {
+        ready = listener;
+    }
+
+    /**
+     * Draw one page as a window into the chapter layout.
+     * Layman: paints the slice of the chapter that belongs on this page.
+     */
+    public boolean drawPage(Canvas canvas, int chapter, int page,
+                            float x, float y, float clipW, float clipH) {
+        StaticLayout layout;
+        int firstLine;
+        synchronized (lock) {
+            layout = layouts.get(chapter);
+            List<Integer> s = starts.get(chapter);
+            if (layout == null || s == null || s.isEmpty()) return false;
+            firstLine = s.get(Math.max(0, Math.min(page, s.size() - 1)));
+        }
+        canvas.save();
+        canvas.clipRect(x, y, x + clipW, y + clipH);
+        canvas.translate(x, y - layout.getLineTop(firstLine));
+        layout.draw(canvas);
+        canvas.restore();
+        return true;
     }
 
     /** Character offset of a page start — the resume anchor inside the chapter. */
     public int pageStart(int chapter, int page) {
-        pages(chapter);
-        List<Integer> starts = startsCache.get(chapter);
-        if (starts == null || starts.isEmpty()) return 0;
-        int i = Math.max(0, Math.min(page, starts.size() - 1));
-        return starts.get(i);
+        StaticLayout layout;
+        int firstLine;
+        synchronized (lock) {
+            layout = layouts.get(chapter);
+            List<Integer> s = starts.get(chapter);
+            if (layout == null || s == null || s.isEmpty()) return 0;
+            firstLine = s.get(Math.max(0, Math.min(page, s.size() - 1)));
+        }
+        int lines = Math.max(1, layout.getLineCount());
+        int start = layout.getLineStart(Math.max(0, Math.min(firstLine, lines - 1)));
+        return Math.max(0, start);
     }
 
     public int pageForOffset(int chapter, int offset) {
-        pages(chapter);
-        List<Integer> starts = startsCache.get(chapter);
-        if (starts == null || starts.isEmpty()) return 0;
+        StaticLayout layout;
+        List<Integer> s;
+        synchronized (lock) {
+            layout = layouts.get(chapter);
+            s = starts.get(chapter);
+        }
+        if (layout == null || s == null || s.isEmpty()) return 0;
         int best = 0;
-        for (int i = 0; i < starts.size(); i++) {
-            if (starts.get(i) <= offset) best = i;
+        int lines = Math.max(1, layout.getLineCount());
+        for (int i = 0; i < s.size(); i++) {
+            int line = Math.max(0, Math.min(s.get(i), lines - 1));
+            if (layout.getLineStart(line) <= offset) best = i;
             else break;
         }
         return best;
     }
 
-    private void pages(int chapter) {
-        if (pageCache.containsKey(chapter)) return;
-        SpannableStringBuilder text = chapterText(chapter);
+    /** Runs on the worker thread. Returns false when the result was thrown away. */
+    private boolean paginate(int chapter, int gen) {
+        if (closed || gen != layoutGen) return false;
+        int w = Math.max(1, layoutW);
+        int h = Math.max(1, layoutH);
+
+        SpannableStringBuilder text;
+        try {
+            text = chapterText(chapter);
+        } catch (Throwable t) {
+            text = new SpannableStringBuilder();
+        }
+
         TextPaint paint = new TextPaint(TextPaint.ANTI_ALIAS_FLAG);
         paint.setTextSize(textSize);
-        StaticLayout full = new StaticLayout(text, paint, layoutW,
-                Layout.Alignment.ALIGN_NORMAL, 1.05f, 0f, false);
-        List<StaticLayout> pages = new ArrayList<StaticLayout>();
-        List<Integer> starts = new ArrayList<Integer>();
-        int lineCount = full.getLineCount();
-        int firstLine = 0;
+        paint.setColor(0xFF111111);
+        paint.setSubpixelText(true);
+
+        StaticLayout layout;
+        try {
+            layout = new StaticLayout(text, paint, w, Layout.Alignment.ALIGN_NORMAL,
+                    LINE_SPACING_MULT, LINE_SPACING_ADD, false);
+        } catch (Throwable t) {
+            layout = new StaticLayout("", paint, w, Layout.Alignment.ALIGN_NORMAL,
+                    LINE_SPACING_MULT, LINE_SPACING_ADD, false);
+        }
+
+        List<Integer> pageStarts = new ArrayList<Integer>();
+        pageStarts.add(0);
         int pageTop = 0;
-        for (int line = 0; line < lineCount; line++) {
-            int bottom = full.getLineBottom(line);
-            if (bottom - pageTop > layoutH && line > firstLine) {
-                int from = full.getLineStart(firstLine);
-                int to = full.getLineStart(line);
-                pages.add(new StaticLayout(text.subSequence(from, to), paint, layoutW,
-                        Layout.Alignment.ALIGN_NORMAL, 1.05f, 0f, false));
-                starts.add(from);
-                firstLine = line;
-                pageTop = full.getLineTop(line);
+        int lineCount = layout.getLineCount();
+        for (int line = 1; line < lineCount; line++) {
+            if (layout.getLineBottom(line) - pageTop > h) {
+                pageStarts.add(line);
+                pageTop = layout.getLineTop(line);
             }
         }
-        if (firstLine < lineCount) {
-            int from = full.getLineStart(firstLine);
-            pages.add(new StaticLayout(text.subSequence(from, text.length()), paint, layoutW,
-                    Layout.Alignment.ALIGN_NORMAL, 1.05f, 0f, false));
-            starts.add(from);
+
+        if (closed || gen != layoutGen) return false;
+        synchronized (lock) {
+            if (closed || gen != layoutGen) return false;
+            layouts.put(chapter, layout);
+            starts.put(chapter, pageStarts);
         }
-        if (pages.isEmpty()) {
-            pages.add(new StaticLayout("", paint, layoutW,
-                    Layout.Alignment.ALIGN_NORMAL, 1.05f, 0f, false));
-            starts.add(0);
-        }
-        pageCache.put(chapter, pages);
-        startsCache.put(chapter, starts);
+        return true;
     }
 
     private SpannableStringBuilder chapterText(int chapter) {
-        SpannableStringBuilder cached = textCache.get(chapter);
-        if (cached != null) return cached;
+        synchronized (lock) {
+            SpannableStringBuilder cached = textCache.get(chapter);
+            if (cached != null) return cached;
+        }
         SpannableStringBuilder out = new SpannableStringBuilder();
         if (chapter < 0 || chapter >= spineHrefs.size()) {
-            textCache.put(chapter, out);
+            synchronized (lock) { textCache.put(chapter, out); }
             return out;
         }
         ZipEntry entry = zip.getEntry(spineHrefs.get(chapter));
@@ -209,7 +336,7 @@ public final class EpubBook {
                 if (in != null) try { in.close(); } catch (IOException ignored) {}
             }
         }
-        textCache.put(chapter, out);
+        synchronized (lock) { textCache.put(chapter, out); }
         return out;
     }
 
@@ -217,7 +344,7 @@ public final class EpubBook {
         XmlPullParser parser = Xml.newPullParser();
         parser.setInput(new InputStreamReader(in, "UTF-8"));
         int event = parser.getEventType();
-        // Open emphasis spans: [style, start]
+        // Open emphasis spans: [style, sizePct, start]
         List<int[]> open = new ArrayList<int[]>();
         while (event != XmlPullParser.END_DOCUMENT) {
             if (event == XmlPullParser.START_TAG) {
@@ -258,8 +385,7 @@ public final class EpubBook {
                                     SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE);
                         }
                         if (top[1] > 0) {
-                            out.setSpan(new android.text.style.RelativeSizeSpan(top[1] / 100f),
-                                    start, end,
+                            out.setSpan(new RelativeSizeSpan(top[1] / 100f), start, end,
                                     SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE);
                         }
                     }
@@ -279,7 +405,16 @@ public final class EpubBook {
     }
 
     private static String lower(String s) {
-        return s == null ? "" : s.toLowerCase(java.util.Locale.US);
+        return s == null ? "" : s.toLowerCase(Locale.US);
+    }
+
+    private static <V> Map<Integer, V> bounded(final int max) {
+        return new LinkedHashMap<Integer, V>(8, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<Integer, V> eldest) {
+                return size() > max;
+            }
+        };
     }
 
     private static String findOpfPath(ZipFile zip) throws Exception {
@@ -343,9 +478,15 @@ public final class EpubBook {
     }
 
     public void close() {
-        textCache.clear();
-        pageCache.clear();
-        startsCache.clear();
+        closed = true;
+        ready = null;
+        worker.shutdownNow();
+        synchronized (lock) {
+            textCache.clear();
+            layouts.clear();
+            starts.clear();
+            queued.clear();
+        }
         try { zip.close(); } catch (IOException ignored) {}
     }
 

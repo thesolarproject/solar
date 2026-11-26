@@ -580,6 +580,7 @@
     <string name="ebook_library_empty">No books yet</string>
     <string name="ebook_library_empty_hint">Copy EPUB or PDF files into the Ebook folder</string>
     <string name="ebook_open_failed">Could not open that book</string>
+    <string name="ebook_formatting">Formatting…</string>
     <string name="ebook_zlib_loading">Loading…</string>
     <string name="ebook_zlib_none">Nothing found</string>
     <string name="ebook_zlib_search_row">Search Z-Library</string>

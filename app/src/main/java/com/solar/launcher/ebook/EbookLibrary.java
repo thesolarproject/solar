@@ -3,6 +3,7 @@ package com.solar.launcher.ebook;
 import android.content.Context;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -14,6 +15,11 @@ import java.util.Locale;
  * Layman: everything in the Ebook folder shows up in the reader.
  * Tech: matches README's lowercase "ebook" too (vfat is case-insensitive on device,
  *   but Internal/eMMC is not, so both spellings are listed).
+ *
+ * 2026-11-26 (reader rework) — roots are deduped by real path, so "Ebook" and "ebook"
+ *   on the same card are one folder instead of two. That double listing is why every
+ *   book appeared twice in the library.
+ *   Was: addUnique compared absolute paths only. Reversal: compare getAbsolutePath again.
  */
 public final class EbookLibrary {
     public static final String FOLDER = "Ebook";
@@ -79,11 +85,21 @@ public final class EbookLibrary {
     }
 
     private static void addUnique(List<File> out, File dir) {
-        String p = dir.getAbsolutePath();
+        String p = realPath(dir);
         for (File o : out) {
-            if (o.getAbsolutePath().equals(p)) return;
+            if (realPath(o).equals(p)) return;
         }
         out.add(dir);
+    }
+
+    /** Canonical path: on a case-insensitive card "Ebook" and "ebook" resolve the same. */
+    private static String realPath(File f) {
+        if (f == null) return "";
+        try {
+            return f.getCanonicalPath();
+        } catch (IOException e) {
+            return f.getAbsolutePath();
+        }
     }
 
     public static boolean isBook(File f) {
