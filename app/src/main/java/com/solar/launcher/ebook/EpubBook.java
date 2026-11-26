@@ -28,6 +28,8 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 /**
  * 2026-11-26 — Minimal EPUB reader: zip → container.xml → OPF spine → chapter text.
