@@ -56,9 +56,15 @@ final class UsbMassStorageServerHooks {
         installUsbServiceCapture(lpparam);
     }
 
-    /** Solar app sets {@code sys.solar.ums.experiment=1} when Debug experiment is on (2026-07-05). */
+    /**
+     * Solar app sets {@code sys.solar.ums.experiment=1} when the experiment is on (2026-07-05).
+     * 2026-11-26 — Also accept {@code persist.sys.solar.ums.experiment}. The volatile prop is
+     * gone after a reboot, and this gate is only read once, at system_server startup, so an APK
+     * that set the volatile prop could never arm the hooks again after the player rebooted.
+     */
     private static boolean isY2UmsExperimentActive() {
-        return "1".equals(readSysProp("sys.solar.ums.experiment", "0"));
+        return "1".equals(readSysProp("sys.solar.ums.experiment", "0"))
+                || "1".equals(readSysProp("persist.sys.solar.ums.experiment", "0"));
     }
 
     private static String readSysProp(String key, String def) {

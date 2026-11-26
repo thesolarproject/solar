@@ -17,6 +17,12 @@ public final class UsbMassStorageExperiment {
     public static final String PREF_USB_MASS_STORAGE_EXPERIMENT = "solar_y2_usb_mass_storage_experiment";
     /** Read by SolarContextBridgeY2 {@code UsbMassStorageServerHooks} — always 0 on Y2 product. */
     public static final String SYSPROP = "sys.solar.ums.experiment";
+    /**
+     * 2026-11-26 — Durable copy of {@link #SYSPROP}. The bridge reads its gate once, while
+     * system_server starts, so the volatile prop alone never survives the reboot it takes to
+     * reach that gate; this one does.
+     */
+    public static final String SYSPROP_PERSIST = "persist.sys.solar.ums.experiment";
 
     private UsbMassStorageExperiment() {}
 
@@ -45,7 +51,9 @@ public final class UsbMassStorageExperiment {
         if (ctx == null || !DeviceFeatures.isY2()) return;
         boolean enabled = isEnabled(ctx);
         if (!RootShell.canRun()) return;
-        RootShell.run("setprop " + SYSPROP + " " + (enabled ? "1" : "0"));
+        String value = enabled ? "1" : "0";
+        RootShell.run("setprop " + SYSPROP + " " + value);
+        RootShell.run("setprop " + SYSPROP_PERSIST + " " + value);
         if (enabled) {
             UsbStorageSessionFlags.setAutoConnect(ctx, true);
             return;
