@@ -100,6 +100,16 @@ public final class SolarUpdateClient {
                 return InstallRelation.SIDEGRADE;
             }
             if (local.startsWith("nightly-")) return InstallRelation.SIDEGRADE;
+            // 2026-11-26 — Timestamp stable builds carry a minute-resolution versionCode
+            // (20261126-1624 → 3631224) but compare EQUAL by versionName, because only the
+            // date digits are read (the time part is not parsed). Every newer build of the
+            // same day therefore looked like a sidegrade and Update reported "already up to
+            // date". Use versionCode first, exactly like compareStableRelease does.
+            // Reversal: drop this block; semver-only comparison returns.
+            if (versionCode > 0 && localCode > 0) {
+                if (versionCode > localCode) return InstallRelation.UPGRADE;
+                if (versionCode < localCode) return InstallRelation.DOWNGRADE;
+            }
             int cmp = compareSemver(local, versionName);
             if (cmp < 0) return InstallRelation.UPGRADE;
             if (cmp > 0) return InstallRelation.DOWNGRADE;

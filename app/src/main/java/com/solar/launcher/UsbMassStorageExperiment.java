@@ -4,11 +4,13 @@ import android.content.Context;
 import android.content.SharedPreferences;
 
 /**
- * 2026-07-10 — USB mass storage is Y1-only product path; Y2 stays MTP (UMS not working on 4.4.2).
- * Layman: Y1 can show the PC as a disk after Turn on; Y2 always uses normal phone file transfer.
- * Tech: gates UI + {@link UsbMassStorageController}; {@link #SYSPROP} stays 0 on Y2 for Xposed.
- * Was: Y2 opt-in experiment. Now: Y2 hard-off until a real MT6582 UMS path exists.
- * Reversal: restore experiment pref path on Y2 when hooks+LUN bind are proven.
+ * 2026-11-26 — USB mass storage is back on for Y2 as well as Y1.
+ * Layman: plug the cable in and the player shows up as a drive with Internal and SD on the PC
+ * (macOS Finder, Windows Explorer and Linux all read plain disks; MTP only works on Windows).
+ * Tech: gates UI + {@link UsbMassStorageController}; {@link #SYSPROP} = 1 lets the Y2 Xposed
+ * bridge install {@code UsbMassStorageServerHooks} so system_server shares Internal + MicroSD.
+ * Was: 2026-07-10 Y2 hard-off after 4.4.2 share failures. Reversal: force {@link #SYSPROP} 0
+ * and return {@code !DeviceFeatures.isY2()} from {@link #isEnabled(SharedPreferences)}.
  */
 public final class UsbMassStorageExperiment {
 
@@ -18,17 +20,14 @@ public final class UsbMassStorageExperiment {
 
     private UsbMassStorageExperiment() {}
 
-    /**
-     * Debug UMS experiment row — no longer shown (Y2 UMS retired for now).
-     * Kept for pref migration / old menus.
-     */
+    /** UMS row available on both families again (2026-11-26). */
     public static boolean isAvailableOnDevice() {
-        return false;
+        return true;
     }
 
-    /** Y1 always; Y2 never (MTP-only product policy 2026-07-10). */
+    /** Y1 and Y2 both export disks (2026-11-26). */
     public static boolean isEnabled(SharedPreferences prefs) {
-        return !DeviceFeatures.isY2();
+        return true;
     }
 
     public static boolean isEnabled(Context ctx) {
@@ -36,33 +35,41 @@ public final class UsbMassStorageExperiment {
         return isEnabled(ctx.getSharedPreferences("SOLAR_SETTINGS", Context.MODE_PRIVATE));
     }
 
-    /** Force sysprop 0 on Y2 so system_server UMS hooks stay off; no-op on Y1. */
+    /**
+     * Y2 — publish the experiment flag for the Xposed bridge, and keep the cable path armed.
+     * Layman: the player is ready to show its two drives the moment the cable goes in.
+     * Tech: sysprop 1 → {@code UsbMassStorageServerHooks.installY2}; Auto-Connect on →
+     *   {@code UsbHostWakeReceiver} arms the LUNs on plug-in without a prompt.
+     */
     public static void syncExperimentSysprop(Context ctx) {
         if (ctx == null || !DeviceFeatures.isY2()) return;
+        boolean enabled = isEnabled(ctx);
         if (!RootShell.canRun()) return;
-        RootShell.run("setprop " + SYSPROP + " 0");
+        RootShell.run("setprop " + SYSPROP + " " + (enabled ? "1" : "0"));
+        if (enabled) {
+            UsbStorageSessionFlags.setAutoConnect(ctx, true);
+            return;
+        }
         UsbMassStorageController.ensureStockMtpWhenExperimentOff(ctx);
     }
 
-    /** No-op — Y2 UMS cannot be enabled in product builds. */
+    /** Y2 — store the pref and re-sync the bridge flag / Auto-Connect. */
     public static void setEnabled(Context ctx, boolean enable) {
         if (ctx == null || !DeviceFeatures.isY2()) return;
         ctx.getSharedPreferences("SOLAR_SETTINGS", Context.MODE_PRIVATE)
                 .edit()
-                .putBoolean(PREF_USB_MASS_STORAGE_EXPERIMENT, false)
-                .apply();
+                .putBoolean(PREF_USB_MASS_STORAGE_EXPERIMENT, enable)
+                .commit();
         syncExperimentSysprop(ctx);
     }
 
-    /** Test hook — family only (Y2 always blocked regardless of pref). */
+    /** Test hook — family only; Y2 is enabled again (2026-11-26). */
     static boolean isEnabledForFamily(String family, boolean experimentPref) {
-        if (family != null && "y2".equals(family)) return false;
         return true;
     }
 
-    /** Connections → USB (UMS) submenu: Y1 only. */
+    /** Connections → USB (UMS) submenu: both families (2026-11-26). */
     static boolean connectionsUsbMenuVisibleForFamily(String family, boolean experimentPref) {
-        if (family != null && "y2".equals(family)) return false;
         return true;
     }
 }

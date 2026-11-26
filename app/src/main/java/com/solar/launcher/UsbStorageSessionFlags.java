@@ -184,6 +184,22 @@ public final class UsbStorageSessionFlags {
         }
     }
 
+    /**
+     * 2026-11-26 — Wired disk mode without a prompt: enable Auto-Connect from Settings.
+     * Layman: plugging the cable in shares Internal + SD straight away, no menu first.
+     * Tech: pref + sysprop (+ side effects) so UsbHostWakeReceiver arms UMS on connect.
+     * Reversal: drop callers; Auto-Connect goes back to the USB submenu only.
+     */
+    public static void setAutoConnect(Context ctx, boolean enabled) {
+        if (ctx == null) return;
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putBoolean(PREF_USB_AUTO_CONNECT, enabled)
+                .putBoolean(PREF_USB_MANUAL_DISABLE, !enabled)
+                .commit();
+        applyAutoConnectSideEffects(ctx, enabled);
+        syncAutoConnectSysprop(ctx);
+    }
+
     /** Settings → auto-connect — opt-in only; never default on (2026-07-06). */
     public static boolean isAutoConnectEnabled(Context ctx) {
         // ponytail: check system property first to bypass stale SharedPreferences cache in :overlay process

@@ -166,6 +166,8 @@ public final class RowKeys {
     public static final String FLOW_MULTI_TRACK_ALBUMS = "settings.flow.multi_track_albums";
     public static final String ARTWORK_PERSPECTIVE = "settings.artwork_perspective";
     public static final String SYSTEM_UPDATE = "settings.system_update";
+    /** 2026-11-26 — Settings root: check GitHub OTA, sideload the APK, restart Solar. */
+    public static final String UPDATE = "settings.update";
     public static final String BLUETOOTH_SETUP = "settings.bluetooth_setup";
     public static final String BLUETOOTH_PAIRING_PIN = "settings.bluetooth_pairing_pin";
     public static final String BRIGHTNESS = "settings.brightness";
@@ -407,6 +409,7 @@ public final class RowKeys {
         if (FLOW_SETTINGS.equals(rowKey)) return R.string.settings_sub_flow;
         if (FLOW_MULTI_TRACK_ALBUMS.equals(rowKey)) return R.string.settings_flow_multi_track_albums;
         if (SYSTEM_UPDATE.equals(rowKey)) return R.string.settings_app_version;
+        if (UPDATE.equals(rowKey)) return R.string.settings_update;
         if (BLUETOOTH_SETUP.equals(rowKey)) return R.string.settings_bluetooth_setup;
         if (BLUETOOTH_PAIRING_PIN.equals(rowKey)) return R.string.settings_bluetooth_pairing_pin;
         if (BRIGHTNESS.equals(rowKey)) return R.string.settings_display_brightness;

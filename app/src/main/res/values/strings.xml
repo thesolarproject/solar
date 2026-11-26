@@ -936,6 +936,9 @@
     <string name="update_download_stable">DOWNLOAD STABLE</string>
     <string name="update_download_nightly">DOWNLOAD NIGHTLY</string>
     <string name="update_up_to_date">ALREADY UP TO DATE</string>
+    <!-- 2026-11-26 — Settings root row: one-tap check, sideload and restart. -->
+    <string name="settings_update">Update</string>
+    <string name="update_rom_required">This update needs a ROM flash — use the version list in About</string>
     <string name="update_url_missing">Update URL missing.</string>
     <string name="update_download_title">Downloading Update</string>
     <string name="update_companion_jj">Fetching JJ Launcher…</string>

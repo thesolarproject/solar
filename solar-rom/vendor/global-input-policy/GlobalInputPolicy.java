@@ -174,7 +174,14 @@ public final class GlobalInputPolicy {    public static final String POLICY_REV_
      */
     public static boolean shouldOfferPowerLongModal(String pkg, boolean y2Device) {
         if (!y2Device) return false;
-        return SOLAR_PKG.equals(pkg);
+        // 2026-11-26 — Power-hold must still reach Solar when the PWM foreground probe misses
+        // (empty / systemui / shell) and when it reports one of Solar's own processes such as
+        // com.solar.launcher:overlay. Was: strict SOLAR_PKG.equals(pkg), so one probe lie made
+        // the hold do nothing at all.
+        // Reversal: drop the fail-open + sub-process match.
+        if (shouldFailOpenPowerFg(pkg)) return true;
+        if (SOLAR_PKG.equals(pkg)) return true;
+        return pkg.startsWith(SOLAR_PKG + ":");
     }
 
     /**

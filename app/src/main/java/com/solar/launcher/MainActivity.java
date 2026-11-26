@@ -22006,7 +22006,11 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     private boolean y2CenterOpensContextMenu() {
         if (isHomeScreenEditorActive()) return false;
         if (DeviceFeatures.isA5()) return true;
-        return DeviceFeatures.isY2() && !y2HoldOkToSleep;
+        // 2026-11-26 — Y2 OK-hold always opens the control menu. It used to be skipped when
+        // "hold OK to sleep" was on, which left the middle button with no menu at all; sleep
+        // stays on the POWER tap, so the menu must win the hold.
+        // Reversal: return DeviceFeatures.isY2() && !y2HoldOkToSleep;
+        return DeviceFeatures.isY2();
     }
 
     /**
@@ -34426,6 +34430,18 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         });
         containerSettingsItems.addView(btnReset);
 
+        // 2026-11-26 — Settings → Update: check the GitHub OTA feed, sideload the APK, restart.
+        // Layman: one button instead of browsing the version list under About.
+        LinearLayout btnUpdate = createSettingsRow(RowKeys.UPDATE, R.string.settings_update, true);
+        btnUpdate.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                runSettingsUpdate();
+            }
+        });
+        containerSettingsItems.addView(btnUpdate);
+
         LinearLayout btnReportIssue = createSettingsRow(RowKeys.REPORT_ISSUE,
                 R.string.settings_report_issue, true);
         btnReportIssue.setOnClickListener(new View.OnClickListener() {
@@ -41972,6 +41988,76 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     // 2026-07-19 — appendOtaCompanionRows / runOtaCompanionRockboxLatest removed (Solar-only).
     // Was: Get latest Rockbox under Versions when experiment on. Reversal: restore those methods.
+
+    /**
+     * 2026-11-26 — Settings → Update. Ask the OTA feed for the newest build in the installed
+     * channel, download it, install it and restart Solar. Layman: press Update once, get the
+     * latest Solar without a computer.
+     * Tech: latest stable row (or latest nightly on a nightly build) from updates.xml, newest
+     * first — not the next single step — with {@code isApkBlockedByRomGap} still refusing to
+     * jump over a ROM-only release. Then the existing download → install → restart path.
+     * Reversal: drop the row and this method; the About list still installs by hand.
+     */
+    private void runSettingsUpdate() {
+        if (!BuildConfig.FEATURE_OTA_UPDATE) {
+            Toast.makeText(this, getString(R.string.about_update_unavailable), Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (!ConnectivityHelper.isOnline(this)) {
+            Toast.makeText(this, getString(R.string.update_network_error), Toast.LENGTH_LONG).show();
+            return;
+        }
+        final int localCode = AppVersion.installedVersionCode(this);
+        final String localName = AppVersion.installedVersionName(this);
+        Toast.makeText(this, getString(R.string.update_checking), Toast.LENGTH_SHORT).show();
+        final String updatesUrl = OTA_UPDATES_URL != null && !OTA_UPDATES_URL.trim().isEmpty()
+                ? OTA_UPDATES_URL.trim() : SolarUpdateClient.DEFAULT_UPDATES_URL;
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                SolarUpdateClient.ReleaseInfo newest = null;
+                boolean romBlocked = false;
+                boolean reachable = true;
+                try {
+                    List<SolarUpdateClient.ReleaseInfo> releases =
+                            SolarUpdateClient.fetchUpdates(updatesUrl);
+                    boolean nightlyChannel = localName != null && localName.startsWith("nightly-");
+                    newest = nightlyChannel
+                            ? SolarUpdateClient.latestNightly(releases)
+                            : SolarUpdateClient.latestStable(releases);
+                    if (newest != null && newest.isNewerThan(localCode, localName)) {
+                        romBlocked = SolarUpdateClient.isApkBlockedByRomGap(
+                                releases, newest, localCode, localName);
+                    }
+                } catch (Exception ignored) {
+                    reachable = false;
+                }
+                final SolarUpdateClient.ReleaseInfo found = newest;
+                final boolean blocked = romBlocked;
+                final boolean online = reachable;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (isFinishing()) return;
+                        if (!online) {
+                            Toast.makeText(MainActivity.this, getString(R.string.update_network_error),
+                                    Toast.LENGTH_LONG).show();
+                        } else if (found != null && found.isNewerThan(localCode, localName)) {
+                            if (blocked) {
+                                Toast.makeText(MainActivity.this, getString(R.string.update_rom_required),
+                                        Toast.LENGTH_LONG).show();
+                            } else {
+                                downloadAndInstallApk(found);
+                            }
+                        } else {
+                            Toast.makeText(MainActivity.this, getString(R.string.update_up_to_date),
+                                    Toast.LENGTH_LONG).show();
+                        }
+                    }
+                });
+            }
+        }, "SolarSettingsUpdate").start();
+    }
 
     private void downloadAndInstallApk(final SolarUpdateClient.ReleaseInfo release) {
         if (!BuildConfig.FEATURE_OTA_UPDATE || release == null) return;

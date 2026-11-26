@@ -2,7 +2,11 @@ package com.solar.launcher;
 
 import org.junit.Test;
 
-/** Y2 USB mass storage experiment gating — unit checks without device (2026-07-05). */
+/**
+ * USB mass storage gating — unit checks without a device (2026-07-05).
+ * 2026-11-26 — Y2 exports disks again (MTP-only policy retired), so both families allow UMS
+ * and the Connections → USB submenu is visible on both. Was: Y2 always blocked.
+ */
 public class UsbMassStorageExperimentTest {
 
     @Test
@@ -13,19 +17,16 @@ public class UsbMassStorageExperimentTest {
     }
 
     @Test
-    public void y2AlwaysBlocksUms() {
-        if (UsbMassStorageExperiment.isEnabledForFamily("y2", false)) {
-            throw new AssertionError("Y2 must block UMS (MTP-only product)");
-        }
-        if (UsbMassStorageExperiment.isEnabledForFamily("y2", true)) {
-            throw new AssertionError("Y2 must block UMS even if old experiment pref is true");
+    public void y2AllowsUms() {
+        if (!UsbMassStorageExperiment.isEnabledForFamily("y2", false)) {
+            throw new AssertionError("Y2 must allow UMS (disk mode is a product path again)");
         }
     }
 
     @Test
-    public void connectionsUsbHiddenOnY2() {
-        if (UsbMassStorageExperiment.connectionsUsbMenuVisibleForFamily("y2", true)) {
-            throw new AssertionError("Connections USB submenu must hide on Y2");
+    public void connectionsUsbVisibleOnY2() {
+        if (!UsbMassStorageExperiment.connectionsUsbMenuVisibleForFamily("y2", true)) {
+            throw new AssertionError("Connections USB submenu must show on Y2");
         }
     }
 
