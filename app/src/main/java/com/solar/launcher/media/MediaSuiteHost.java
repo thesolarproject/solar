@@ -337,6 +337,8 @@ public final class MediaSuiteHost {
 
     // --- E-Book tab state (2026-11-26) ---
     private final EbookReaderState ebookReader = new EbookReaderState();
+    private final com.solar.launcher.ebook.EbookWebReader ebookWeb =
+            new com.solar.launcher.ebook.EbookWebReader();
     private List<File> ebookLibrary = new ArrayList<File>();
     private final List<ZlibClient.Book> ebookBooks = new ArrayList<ZlibClient.Book>();
     private String ebookQuery = "";
@@ -754,6 +756,7 @@ public final class MediaSuiteHost {
                 break;
             case STATE_EBOOK_READER:
                 ebookReader.close();
+                ebookWeb.close();
                 showEbookReaderLayer(false);
                 break;
             case STATE_EBOOK_SEARCH:
@@ -821,7 +824,7 @@ public final class MediaSuiteHost {
             case STATE_EBOOK_SETUP:
                 return host.getString(R.string.ebook_zlib_setup_title);
             case STATE_EBOOK_READER:
-                return ebookReader.title();
+                return ebookWeb.isOpen() ? ebookWeb.title() : ebookReader.title();
             default:
                 return "";
         }
@@ -6001,14 +6004,53 @@ public final class MediaSuiteHost {
         });
     }
 
-    /** Opens the two-page reader (progress restored from the last visit). */
+    /**
+     * Opens the reader with progress restored.
+     * 2026-11-26 — EPUB goes through the WebView engine (the book's own HTML/CSS, two
+     * columns per screen). PDFs, and ROMs without a usable WebView, keep the native
+     * two-page renderer.
+     */
     public void openEbookReader(File file) {
         if (file == null) return;
+        if (!EbookLibrary.isPdf(file)) {
+            android.webkit.WebView web = host.findViewById(R.id.ebook_web_view);
+            ebookWeb.setListener(new com.solar.launcher.ebook.EbookWebReader.Listener() {
+                @Override
+                public void onWebReaderFailed(File book) {
+                    if (book != null) openEbookNative(book);
+                }
+            });
+            if (web != null && ebookWeb.open(host.context(), web, file)) {
+                ebookReader.close();
+                showEbookWeb(true);
+                host.changeScreen(STATE_EBOOK_READER);
+                return;
+            }
+        }
+        openEbookNative(file);
+    }
+
+    /** Native fallback: PDFs, or an EPUB when the WebView engine is unavailable. */
+    private void openEbookNative(File file) {
+        if (file == null) return;
+        showEbookWeb(false);
         if (!ebookReader.open(host.context(), file)) {
             Toast.makeText(host.context(), R.string.ebook_open_failed, Toast.LENGTH_SHORT).show();
             return;
         }
-        host.changeScreen(STATE_EBOOK_READER);
+        if (host.getCurrentScreenState() == STATE_EBOOK_READER) {
+            bindEbookReader();
+        } else {
+            host.changeScreen(STATE_EBOOK_READER);
+        }
+    }
+
+    /** Which engine owns the reader layer (only one is visible at a time). */
+    private void showEbookWeb(boolean show) {
+        View web = host.findViewById(R.id.ebook_web_view);
+        View nativeView = host.findViewById(R.id.ebook_reader_view);
+        if (web != null) web.setVisibility(show ? View.VISIBLE : View.GONE);
+        if (nativeView != null) nativeView.setVisibility(show ? View.GONE : View.VISIBLE);
     }
 
     private void showEbookReaderLayer(boolean show) {
@@ -6020,6 +6062,7 @@ public final class MediaSuiteHost {
     }
 
     private void bindEbookReader() {
+        if (ebookWeb.isOpen()) return;
         EbookReaderView view = host.findViewById(R.id.ebook_reader_view);
         if (view == null) return;
         view.setReader(ebookReader);
@@ -6028,6 +6071,7 @@ public final class MediaSuiteHost {
 
     /** Layman: side buttons / wheel / tap turn the spread. True when the page moved. */
     public boolean ebookTurnPage(boolean next) {
+        if (ebookWeb.isOpen()) return ebookWeb.turn(next);
         EbookReaderView view = host.findViewById(R.id.ebook_reader_view);
         return view != null && view.turn(next);
     }

@@ -1,0 +1,26 @@
+/* 2026-11-26 — Solar E-Book reader: two CSS columns per screen.
+   Loaded into every chapter page by EbookWebReader; geometry is applied by reader.js. */
+html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden }
+#solar-view { position: absolute; left: 0; right: 0; overflow: hidden; background: #F7F7F2 }
+#solar-flow {
+  height: 100%; width: 100%;
+  overflow-x: auto; overflow-y: hidden;
+  font-family: serif; font-size: 16px; line-height: 1.32;
+  text-align: justify; color: #111;
+  -webkit-column-fill: auto; column-fill: auto;
+}
+#solar-flow::-webkit-scrollbar { width: 0; height: 0 }
+#solar-flow img { max-width: 100% !important; height: auto !important }
+#solar-flow p, #solar-flow div, #solar-flow li, #solar-flow blockquote,
+#solar-flow h1, #solar-flow h2, #solar-flow h3, #solar-flow h4 {
+  margin-left: 6px !important; margin-right: 6px !important;
+}
+#solar-hd, #solar-ft {
+  position: fixed; left: 0; right: 0; z-index: 99;
+  background: #000; font-family: sans-serif; font-size: 11px; overflow: hidden;
+}
+#solar-hd {
+  top: 0; height: 22px; line-height: 22px; padding: 0 6px; color: #9a9a9a;
+  white-space: nowrap; text-overflow: ellipsis;
+}
+#solar-ft { bottom: 0; height: 18px; line-height: 18px; text-align: center; color: #777 }

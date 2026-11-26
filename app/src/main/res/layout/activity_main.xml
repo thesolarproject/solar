@@ -905,6 +905,15 @@
             android:layout_height="match_parent"
             android:focusable="true"
             android:focusableInTouchMode="true" />
+
+        <!-- 2026-11-26 — EPUB engine: chapter HTML in two CSS columns. PDF + fallback
+             use the native view above; only one of the two is visible at a time. -->
+        <WebView
+            android:id="@+id/ebook_web_view"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="#FF000000"
+            android:visibility="gone" />
     </FrameLayout>
 
     <include layout="@layout/layout_flow_mode" />

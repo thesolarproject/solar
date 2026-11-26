@@ -17,6 +17,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -138,6 +139,57 @@ public final class EpubBook {
 
     public String chapterTitle(int chapter) {
         return "Chapter " + (chapter + 1);
+    }
+
+    /** Zip path of a spine item — used by the WebView engine to load the chapter file. */
+    public String chapterPath(int chapter) {
+        if (chapter < 0 || chapter >= spineHrefs.size()) return "";
+        return spineHrefs.get(chapter);
+    }
+
+    /**
+     * Unpack the whole book so the WebView can load a chapter with its images and CSS.
+     * Uses its own ZipFile handle: the native fallback may be paginating at the same time.
+     */
+    public void extractTo(File dir) throws IOException {
+        if (dir == null) return;
+        ZipFile source = new ZipFile(file);
+        try {
+            String base = dir.getCanonicalPath();
+            byte[] buf = new byte[8192];
+            java.util.Enumeration<? extends ZipEntry> entries = source.entries();
+            while (entries.hasMoreElements()) {
+                ZipEntry entry = entries.nextElement();
+                String name = entry.getName();
+                if (name == null || name.length() == 0) continue;
+                File out = new File(dir, name);
+                // Zip-slip guard: never write outside the cache folder.
+                if (!out.getCanonicalPath().startsWith(base)) continue;
+                if (entry.isDirectory()) {
+                    //noinspection ResultOfMethodCallIgnored
+                    out.mkdirs();
+                    continue;
+                }
+                File parent = out.getParentFile();
+                if (parent != null && !parent.exists()) {
+                    //noinspection ResultOfMethodCallIgnored
+                    parent.mkdirs();
+                }
+                InputStream in = null;
+                OutputStream sink = null;
+                try {
+                    in = source.getInputStream(entry);
+                    sink = new java.io.FileOutputStream(out);
+                    int n;
+                    while ((n = in.read(buf)) > 0) sink.write(buf, 0, n);
+                } finally {
+                    if (sink != null) try { sink.close(); } catch (IOException ignored) {}
+                    if (in != null) try { in.close(); } catch (IOException ignored) {}
+                }
+            }
+        } finally {
+            try { source.close(); } catch (IOException ignored) {}
+        }
     }
 
     /** Page geometry changed (first layout / resize): throw the old cuts away. */
