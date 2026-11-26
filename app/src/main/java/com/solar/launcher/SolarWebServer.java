@@ -172,6 +172,7 @@ public class SolarWebServer extends Thread {
                             "<p><a href='/stems' style='color:#0ff; font-weight:bold; font-size:18px; text-decoration:none; display:inline-block; margin:10px 0; padding:12px 24px; border:2px solid #00ffff; border-radius:30px; background:rgba(0,255,255,0.1);'>🚀 Solar Web Portal &amp; Stem Preparer (Deezer + YouTube + Library) →</a></p>" +
                             "<p><a href='/browse' style='color:#0ff'>Browse &amp; download files →</a></p>" +
                             "<p><a href='/deezer' style='color:#0ff'>Deezer account setup →</a></p>" +
+                            "<p><a href='/zlib' style='color:#0ff'>Z-Library (E-Book) setup →</a></p>" +
                             "<p><a href='/lalal' style='color:#0ff'>Stem Player (Lalal.ai) API key →</a></p>" +
                             "<p><a href='/navidrome' style='color:#0ff'>Navidrome server setup →</a></p>" +
                             "<p><a href='/plex' style='color:#0ff'>Plex server setup →</a></p>" +
@@ -222,6 +223,34 @@ public class SolarWebServer extends Thread {
 
                         String response = "HTTP/1.1 200 OK\r\n\r\nOK";
                         os.write(response.getBytes("UTF-8"));
+                    }
+                }
+                else if (path.equals("/zlib") || path.startsWith("/zlib?")) {
+                    // 2026-11-26 — E-Book tab: paste Z-Library session cookies from a PC.
+                    if (method.equals("GET")) {
+                        writeZlibSetupPage(os, null);
+                    } else if (method.equals("POST")) {
+                        byte[] body = readBody(is, contentLength);
+                        String bodyStr = new String(body, "UTF-8");
+                        String userid = formValue(bodyStr, "userid");
+                        String userkey = formValue(bodyStr, "userkey");
+                        String domain = formValue(bodyStr, "domain");
+                        String msg;
+                        if (userid == null || userid.trim().length() < 3
+                                || userkey == null || userkey.trim().length() < 8) {
+                            msg = "Both cookies are needed. Copy remix_userid and remix_userkey.";
+                        } else {
+                            SharedPreferences prefs = context.getSharedPreferences(
+                                    com.solar.launcher.ebook.ZlibAccount.PREFS_NAME,
+                                    Context.MODE_PRIVATE);
+                            com.solar.launcher.ebook.ZlibAccount.save(prefs, userid, userkey, domain);
+                            com.solar.launcher.ebook.ZlibClient client =
+                                    new com.solar.launcher.ebook.ZlibClient(prefs);
+                            boolean ok = client.profile();
+                            msg = ok ? "✅ Z-Library login verified!"
+                                    : "❌ Saved the cookies but the test failed. Re-copy them.";
+                        }
+                        writeZlibSetupPage(os, msg);
                     }
                 }
                 else if (path.equals("/deezer") || path.startsWith("/deezer?")) {
@@ -789,6 +818,61 @@ public class SolarWebServer extends Thread {
                 }
             } catch (Exception ignored) {}
             return "";
+        }
+
+        /**
+         * 2026-11-26 — PC page for the E-Book tab.
+         * Layman: paste the two Z-Library cookies here so the player can download books.
+         */
+        private void writeZlibSetupPage(OutputStream os, String message) throws java.io.IOException {
+            SharedPreferences prefs = context.getSharedPreferences(
+                    com.solar.launcher.ebook.ZlibAccount.PREFS_NAME, Context.MODE_PRIVATE);
+            boolean configured = com.solar.launcher.ebook.ZlibAccount.isConfigured(prefs);
+            String currentDomain = com.solar.launcher.ebook.ZlibAccount.domain(prefs);
+            String status = configured ? "Logged in" : "Not configured";
+            String msgHtml = message != null
+                    ? "<p style='color:" + (message.startsWith("✅") ? "#0f0" : "#f66") + "'>"
+                    + htmlEscape(message) + "</p>" : "";
+            String html = "<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>" +
+                    "<title>Solar Z-Library Setup</title><style>" +
+                    "body{font-family:sans-serif;background:#111;color:#fff;padding:20px;text-align:center;max-width:520px;margin:0 auto;}" +
+                    "input,select,button{font-size:16px;padding:10px;margin:5px 0;width:100%;max-width:400px;box-sizing:border-box;}" +
+                    "button{background:#00ffff;color:#000;border:none;font-weight:bold;cursor:pointer;}" +
+                    ".box{background:#222;padding:20px;border-radius:10px;margin:10px auto;max-width:480px;text-align:left;}" +
+                    "code{background:#333;padding:2px 4px;border-radius:3px;} a{color:#0ff;}" +
+                    "ol{padding-left:20px;font-size:14px;line-height:1.5;}</style></head><body>" +
+                    "<h2>📖 Z-Library (E-Book)</h2>" +
+                    "<div class='box'><h3>Get your cookies</h3>" +
+                    "<ol>" +
+                    "<li>In another tab, log in at <a href='https://z-lib.gd' target='_blank'>z-lib.gd</a>.</li>" +
+                    "<li>Press <b>F12</b> → <b>Application</b> (Chrome) or <b>Storage</b> (Firefox).</li>" +
+                    "<li>Open <b>Cookies</b> → <code>https://z-lib.gd</code>.</li>" +
+                    "<li>Copy <b>remix_userid</b> and <b>remix_userkey</b> values.</li>" +
+                    "</ol>" +
+                    "<p style='color:#f88;font-size:13px'>Treat these like your password: paste them only here, " +
+                    "on your home network.</p></div>" +
+                    "<div class='box'><p>Status: <b>" + htmlEscape(status) + "</b></p>" +
+                    msgHtml +
+                    "<form method='POST' action='/zlib'>" +
+                    "<input type='text' name='userid' placeholder='remix_userid' autocomplete='off'>" +
+                    "<input type='text' name='userkey' placeholder='remix_userkey' autocomplete='off'>" +
+                    "<select name='domain'>" +
+                    domainOptions(currentDomain) +
+                    "</select>" +
+                    "<button type='submit'>Save &amp; Test</button></form></div>" +
+                    "<p><a href='/'>← Back to upload</a></p></body></html>";
+            String response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n" + html;
+            os.write(response.getBytes("UTF-8"));
+        }
+
+        private String domainOptions(String current) {
+            StringBuilder sb = new StringBuilder();
+            for (String d : com.solar.launcher.ebook.ZlibAccount.DOMAINS) {
+                sb.append("<option value='").append(htmlEscape(d)).append("'")
+                        .append(d.equals(current) ? " selected" : "")
+                        .append(">").append(htmlEscape(d)).append("</option>");
+            }
+            return sb.toString();
         }
 
         private void writeDeezerSetupPage(OutputStream os, String message) throws java.io.IOException {

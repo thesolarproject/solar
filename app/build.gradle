@@ -162,6 +162,8 @@ dependencies {
     // 2026-07-05 — okhttp 3.12.x last branch for API 17; 3.13+ requires API 21.
     implementation 'com.squareup.okhttp3:okhttp:3.12.13'
     implementation 'net.jthink:jaudiotagger:3.0.1'
+    // 2026-11-26 — E-Book PDF pages: platform PdfRenderer needs API 21, pdfium works on API 14+.
+    implementation 'com.github.barteksc:pdfium-android:1.9.0'
     implementation 'androidx.multidex:multidex:2.0.1'
     // 2026-11-25 — On-device YouTube extraction (no PC/sidecar).
     implementation 'com.github.teamnewpipe:NewPipeExtractor:v0.24.6'

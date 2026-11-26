@@ -23,14 +23,16 @@ public class HomeMenuConfigTest {
     @Test
     public void stockHomeOrder_matchesY1Layout() {
         List<String> stock = HomeMenuConfig.STOCK_Y1_HOME_ORDER;
-        if (stock.size() != 7) throw new AssertionError("stock size " + stock.size());
+        // 2026-11-26 — E-Book row sits after Photos.
+        if (stock.size() != 8) throw new AssertionError("stock size " + stock.size());
         if (!HomeMenuConfig.ID_NOW_PLAYING.equals(stock.get(0))) throw new AssertionError("now playing");
         if (!HomeMenuConfig.ID_MUSIC.equals(stock.get(1))) throw new AssertionError("music");
         if (!HomeMenuConfig.ID_VIDEOS.equals(stock.get(2))) throw new AssertionError("videos");
         if (!HomeMenuConfig.ID_AUDIOBOOKS.equals(stock.get(3))) throw new AssertionError("audiobooks");
         if (!HomeMenuConfig.ID_PHOTOS.equals(stock.get(4))) throw new AssertionError("photos");
-        if (!HomeMenuConfig.ID_RADIO.equals(stock.get(5))) throw new AssertionError("radio");
-        if (!HomeMenuConfig.ID_SETTINGS.equals(stock.get(6))) throw new AssertionError("settings");
+        if (!HomeMenuConfig.ID_EBOOK.equals(stock.get(5))) throw new AssertionError("ebook");
+        if (!HomeMenuConfig.ID_RADIO.equals(stock.get(6))) throw new AssertionError("radio");
+        if (!HomeMenuConfig.ID_SETTINGS.equals(stock.get(7))) throw new AssertionError("settings");
     }
 
     @Test
@@ -38,23 +40,27 @@ public class HomeMenuConfigTest {
         // 2026-07-16 — Radio/FM experiment off: home omits Radio tile.
         // 2026-08-02 — Default (radio gated): NP → Music → Settings → Transfer → Podcasts → Get Music.
         List<HomeMenuConfig.Entry> visible = HomeMenuConfig.loadVisible(prefs);
-        if (visible.size() != 6) throw new AssertionError("default size " + visible.size());
+        // 2026-11-26 — E-Book tile ships on by default, right after Music.
+        if (visible.size() != 7) throw new AssertionError("default size " + visible.size());
         if (!HomeMenuConfig.ID_NOW_PLAYING.equals(visible.get(0).id)) {
             throw new AssertionError("now playing position");
         }
         if (!HomeMenuConfig.ID_MUSIC.equals(visible.get(1).id)) {
             throw new AssertionError("music position");
         }
-        if (!HomeMenuConfig.ID_SETTINGS.equals(visible.get(2).id)) {
+        if (!HomeMenuConfig.ID_EBOOK.equals(visible.get(2).id)) {
+            throw new AssertionError("ebook position");
+        }
+        if (!HomeMenuConfig.ID_SETTINGS.equals(visible.get(3).id)) {
             throw new AssertionError("settings position");
         }
-        if (!HomeMenuConfig.ID_PC_UPLOAD.equals(visible.get(3).id)) {
+        if (!HomeMenuConfig.ID_PC_UPLOAD.equals(visible.get(4).id)) {
             throw new AssertionError("pc upload position");
         }
-        if (!HomeMenuConfig.ID_PODCASTS.equals(visible.get(4).id)) {
+        if (!HomeMenuConfig.ID_PODCASTS.equals(visible.get(5).id)) {
             throw new AssertionError("podcasts position");
         }
-        if (!HomeMenuConfig.ID_SOULSEEK.equals(visible.get(5).id)) {
+        if (!HomeMenuConfig.ID_SOULSEEK.equals(visible.get(6).id)) {
             throw new AssertionError("get music position");
         }
         for (HomeMenuConfig.Entry e : visible) {
@@ -349,8 +355,9 @@ public class HomeMenuConfigTest {
         // 2026-07-15 — schema 8 dropped youtube_audio from SOLAR_HOME_EXTRAS.
         // 2026-08-02 — Home rows lead the editor (NP, Music, Settings, Transfer, Podcasts,
         // Get Music), then the fixed stock catalog — audiobooks moved to index 7.
-        if (editor.size() < 11) throw new AssertionError("catalog too small " + editor.size());
-        if (!HomeMenuConfig.ID_AUDIOBOOKS.equals(editor.get(7).id)) {
+        if (editor.size() < 12) throw new AssertionError("catalog too small " + editor.size());
+        // 2026-11-26 — E-Book row joins the leading home rows; audiobooks shifts to 8.
+        if (!HomeMenuConfig.ID_AUDIOBOOKS.equals(editor.get(8).id)) {
             throw new AssertionError("audiobooks slot in editor");
         }
     }

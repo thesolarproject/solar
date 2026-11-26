@@ -294,6 +294,8 @@ public class MainActivity extends Activity {
     private static final int KEYBOARD_VIDEO_FILE_SEARCH = 53;
     /** 2026-07-20 — Online Radio station name search (wheel keyboard → Radio Browser). */
     private static final int KEYBOARD_RADIO_NET_SEARCH = 54;
+    /** 2026-11-26 — Z-Library search inside the E-Book tab. */
+    private static final int KEYBOARD_EBOOK_SEARCH = 55;
     /** ponytail: stock Y1 row art — home=itemConfig, settings/menu lists=menuConfig, file lists=itemConfig */
     private static final int Y1_ROW_HOME = 0;
     private static final int Y1_ROW_MENU = 1;
@@ -12836,6 +12838,9 @@ public class MainActivity extends Activity {
             changeScreen(MediaSuiteHost.STATE_VIDEO_HUB);
         } else if (HomeMenuConfig.ID_PHOTOS.equals(id)) {
             changeScreen(MediaSuiteHost.STATE_PHOTOS);
+        } else if (HomeMenuConfig.ID_EBOOK.equals(id)) {
+            // 2026-11-26 — E-Book tab: local reader + Z-Library.
+            changeScreen(MediaSuiteHost.STATE_EBOOK_HUB);
         } else if (HomeMenuConfig.ID_AUDIOBOOKS.equals(id)) {
             openAudiobookLibrary();
         } else if (HomeMenuConfig.ID_APPS.equals(id)) {
@@ -13320,6 +13325,9 @@ public class MainActivity extends Activity {
         }
         if (keyboardPurpose == KEYBOARD_RADIO_NET_SEARCH) {
             return getString(R.string.radio_net_search_title);
+        }
+        if (keyboardPurpose == KEYBOARD_EBOOK_SEARCH) {
+            return getString(R.string.keyboard_ebook_search);
         }
         if (keyboardPurpose == KEYBOARD_VIDEO_FILE_SEARCH) {
             return getString(R.string.keyboard_video_file_search);
@@ -14411,6 +14419,7 @@ public class MainActivity extends Activity {
         if (state == STATE_WEBSERVER || state == STATE_DEEZER_SETUP) return layoutWebServerMode;
         if (state == MediaSuiteHost.STATE_VIDEO_PLAYER) return findViewById(R.id.layout_video_mode);
         if (state == MediaSuiteHost.STATE_PHOTO_VIEWER) return findViewById(R.id.layout_photo_viewer);
+        if (state == MediaSuiteHost.STATE_EBOOK_READER) return findViewById(R.id.layout_ebook_reader);
         if (ScreenTransitionMap.sameBrowserRoot(state)) return layoutBrowserMode;
         return null;
     }
@@ -14635,7 +14644,11 @@ public class MainActivity extends Activity {
                 || state == MediaSuiteHost.STATE_RADIO_NET_BROWSE || state == MediaSuiteHost.STATE_VIDEOS
                 || state == MediaSuiteHost.STATE_VIDEO_HUB || state == MediaSuiteHost.STATE_YOUTUBE_BROWSE
                 || state == MediaSuiteHost.STATE_YOUTUBE_DETAIL
-                || state == MediaSuiteHost.STATE_PHOTOS) ? View.VISIBLE : View.GONE);
+                || state == MediaSuiteHost.STATE_PHOTOS
+                || state == MediaSuiteHost.STATE_EBOOK_HUB
+                || state == MediaSuiteHost.STATE_EBOOK_LIBRARY
+                || state == MediaSuiteHost.STATE_EBOOK_SEARCH
+                || state == MediaSuiteHost.STATE_EBOOK_SETUP) ? View.VISIBLE : View.GONE);
         if (state == STATE_BROWSER || state == STATE_PODCASTS || state == STATE_SOULSEEK || state == STATE_DEEZER
                 || state == STATE_APPS || state == STATE_MORE || state == STATE_USB_STORAGE
                 || state == STATE_NAVIDROME || state == STATE_PLEX || state == STATE_JELLYFIN
@@ -14644,7 +14657,11 @@ public class MainActivity extends Activity {
                 || state == MediaSuiteHost.STATE_RADIO_NET_BROWSE || state == MediaSuiteHost.STATE_VIDEOS
                 || state == MediaSuiteHost.STATE_VIDEO_HUB || state == MediaSuiteHost.STATE_YOUTUBE_BROWSE
                 || state == MediaSuiteHost.STATE_YOUTUBE_DETAIL
-                || state == MediaSuiteHost.STATE_PHOTOS) {
+                || state == MediaSuiteHost.STATE_PHOTOS
+                || state == MediaSuiteHost.STATE_EBOOK_HUB
+                || state == MediaSuiteHost.STATE_EBOOK_LIBRARY
+                || state == MediaSuiteHost.STATE_EBOOK_SEARCH
+                || state == MediaSuiteHost.STATE_EBOOK_SETUP) {
             resetBrowserListHost();
         }
         layoutPlayerMode.setVisibility(state == STATE_PLAYER ? View.VISIBLE : View.GONE);
@@ -15491,6 +15508,13 @@ public class MainActivity extends Activity {
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        // 2026-11-26 — E-Book reader owns the dial and the two forward buttons.
+        // Intercepted here (before menu wheel routing) so a page turn never scrolls a list
+        // and the button release never reaches the track-skip path.
+        if (event != null && currentScreenState == MediaSuiteHost.STATE_EBOOK_READER
+                && handleEbookReaderKeyDown(event.getKeyCode(), event)) {
+            return true;
+        }
         // #region agent log
         if (event != null && event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0
                 && Y1InputKeys.isWheelKey(event.getKeyCode())) {
@@ -17673,6 +17697,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         return isSoulseekKeyboardPurpose() || isPodcastKeyboardPurpose()
                 || isYouTubeKeyboardPurpose()
                 || isRadioNetKeyboardPurpose()
+                || keyboardPurpose == KEYBOARD_EBOOK_SEARCH
                 || keyboardPurpose == KEYBOARD_DEEZER_SEARCH
                 || keyboardPurpose == KEYBOARD_PLAYLIST_NAME
                 || keyboardPurpose == KEYBOARD_BT_PAIRING_PIN
@@ -18643,6 +18668,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         else if (keyboardPurpose == KEYBOARD_LIBRARY_SEARCH) finishLibrarySearchEntry();
         else if (keyboardPurpose == KEYBOARD_YOUTUBE_SEARCH) finishYouTubeSearchEntry();
         else if (keyboardPurpose == KEYBOARD_RADIO_NET_SEARCH) finishRadioNetSearchEntry();
+        else if (keyboardPurpose == KEYBOARD_EBOOK_SEARCH) finishEbookSearchEntry();
         else if (keyboardPurpose == KEYBOARD_VIDEO_FILE_SEARCH) finishVideoFileSearchEntry();
         else if (keyboardPurpose == KEYBOARD_LALAL_KEY) finishLalalKeyEntry();
         else if (keyboardPurpose == KEYBOARD_REPORT_ISSUE) finishReportIssueEntry();
@@ -50650,6 +50676,13 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         }
     }
 
+    /** 2026-11-26 — Z-Library search submit → results in the E-Book tab. */
+    private void finishEbookSearchEntry() {
+        final String q = typedPassword.trim();
+        // onEbookSearchSubmitted owns the screen change so the query is not fetched twice.
+        if (mediaSuite != null) mediaSuite.onEbookSearchSubmitted(q);
+    }
+
     /**
      * 2026-07-19 — My Videos filename search submit → filtered flat list on Videos screen.
      * Layman: after you type a name, show only matching video files.
@@ -59275,6 +59308,28 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         return isMediaNextKey(keyCode) || isMediaPrevKey(keyCode);
     }
 
+    /**
+     * 2026-11-26 — E-Book reader keys.
+     * Layman: the two forward buttons flip the spread; wheel and arrows do the same.
+     * True = consumed, so the track-skip path never fires while a book is open.
+     */
+    private boolean handleEbookReaderKeyDown(int keyCode, KeyEvent event) {
+        boolean next;
+        if (isMediaNextKey(keyCode) || Y1InputKeys.isWheelDown(keyCode)
+                || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+            next = true;
+        } else if (isMediaPrevKey(keyCode) || Y1InputKeys.isWheelUp(keyCode)
+                || keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+            next = false;
+        } else {
+            return false;
+        }
+        if (event == null || event.getRepeatCount() == 0) {
+            if (mediaSuite != null && mediaSuite.ebookTurnPage(next)) clickFeedback();
+        }
+        return true;
+    }
+
     private boolean isMediaPlayPauseKey(int keyCode) {
         return Y1InputKeys.isPlayPauseKey(keyCode);
     }
@@ -63675,6 +63730,26 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         keyboardReturnState = MediaSuiteHost.STATE_RADIO_NET_BROWSE;
         keyboardPrefill = prefill != null ? prefill : "";
         changeScreen(STATE_WIFI_KEYBOARD);
+    }
+
+    /** 2026-11-26 — E-Book: wheel keyboard for the Z-Library search box. */
+    public void mediaOpenEbookSearchKeyboard(String prefill) {
+        keyboardPurpose = KEYBOARD_EBOOK_SEARCH;
+        keyboardReturnState = MediaSuiteHost.STATE_EBOOK_SEARCH;
+        keyboardPrefill = prefill != null ? prefill : "";
+        changeScreen(STATE_WIFI_KEYBOARD);
+    }
+
+    /** 2026-11-26 — E-Book: serve /zlib so cookies can be pasted from a PC. */
+    public void mediaStartEbookSetupServer() {
+        startWebServerIfNeeded();
+    }
+
+    public String mediaEbookSetupUrl() {
+        String ip = isServerRunning && webServer != null
+                ? webServer.getLocalIpAddress()
+                : ConnectivityHelper.localIpv4(this);
+        return "http://" + ip + ":8080/zlib";
     }
 
     public void mediaClickFeedback() { clickFeedback(); }

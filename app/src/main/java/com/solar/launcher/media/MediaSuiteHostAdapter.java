@@ -72,6 +72,14 @@ public final class MediaSuiteHostAdapter implements MediaSuiteHost.Host {
         act.mediaOpenRadioNetSearchKeyboard(prefill);
     }
 
+    @Override public void openEbookSearchKeyboard(String prefill) {
+        act.mediaOpenEbookSearchKeyboard(prefill);
+    }
+
+    @Override public void startEbookSetupServer() { act.mediaStartEbookSetupServer(); }
+
+    @Override public String ebookSetupUrl() { return act.mediaEbookSetupUrl(); }
+
     @Override public void requestYouTubeSave(YouTubeVideo video, boolean audioOnly) {
         act.mediaRequestYouTubeSave(video, audioOnly);
     }

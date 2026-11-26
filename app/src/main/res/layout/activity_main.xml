@@ -891,6 +891,22 @@
             android:scaleType="fitCenter" />
     </FrameLayout>
 
+    <!-- 2026-11-26 — E-Book reader: two pages side by side (single page when too narrow). -->
+    <FrameLayout
+        android:id="@+id/layout_ebook_reader"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#FF000000"
+        android:visibility="gone">
+
+        <com.solar.launcher.ebook.EbookReaderView
+            android:id="@+id/ebook_reader_view"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:focusable="true"
+            android:focusableInTouchMode="true" />
+    </FrameLayout>
+
     <include layout="@layout/layout_flow_mode" />
 
     <!-- 2026-07-11 — A5 portrait bottom info strip (marquee explainers); GONE on Y1/Y2. -->

@@ -39,6 +39,12 @@ import com.solar.launcher.SettingsScreens;
 import com.solar.launcher.photos.PhotoLibrary;
 import com.solar.launcher.photos.PhotoViewer;
 import com.solar.launcher.photos.PhotoWallpaperHelper;
+import com.solar.launcher.ebook.EbookDownloads;
+import com.solar.launcher.ebook.EbookLibrary;
+import com.solar.launcher.ebook.EbookReaderState;
+import com.solar.launcher.ebook.EbookReaderView;
+import com.solar.launcher.ebook.ZlibAccount;
+import com.solar.launcher.ebook.ZlibClient;
 import com.solar.launcher.radio.FmBandPlan;
 import com.solar.launcher.radio.RadioScrubMapping;
 import com.solar.launcher.radio.RadioScrubMode;
@@ -92,6 +98,16 @@ public final class MediaSuiteHost {
     public static final int STATE_RADIO_FM_PLAYER = 29;
     /** Video detail + comments (messaging-style list) — never shows notPipe UI. */
     public static final int STATE_YOUTUBE_DETAIL = 30;
+    /**
+     * 2026-11-26 — E-Book tab (home tile "ebook").
+     * Hub (Reader / Z-Library) ▸ local library ▸ two-page reader; Z-Library search + setup.
+     */
+    // 35–39: 31–34 are MainActivity Plex/Jellyfin/Stem/Mix — do not reuse.
+    public static final int STATE_EBOOK_HUB = 35;
+    public static final int STATE_EBOOK_LIBRARY = 36;
+    public static final int STATE_EBOOK_READER = 37;
+    public static final int STATE_EBOOK_SEARCH = 38;
+    public static final int STATE_EBOOK_SETUP = 39;
 
     /** MainActivity player screen — not owned here but used for radio handoff. */
     public static final int STATE_PLAYER = 3;
@@ -226,6 +242,15 @@ public final class MediaSuiteHost {
          */
         void openRadioNetSearchKeyboard(String prefill);
 
+        /** 2026-11-26 — E-Book: wheel keyboard for the Z-Library search box. */
+        void openEbookSearchKeyboard(String prefill);
+
+        /** 2026-11-26 — Bring the LAN web server up for the Z-Library setup page. */
+        void startEbookSetupServer();
+
+        /** 2026-11-26 — `http://<ip>:8080/zlib` while the setup server runs. */
+        String ebookSetupUrl();
+
         /** Save YouTube stream via downloader (video or audio-only). */
         void requestYouTubeSave(YouTubeVideo video, boolean audioOnly);
 
@@ -309,6 +334,18 @@ public final class MediaSuiteHost {
     private final FmPresetStore fmPresets;
     private final InternetRadioPlayer internetRadioPlayer;
     private final PhotoViewer photoViewer = new PhotoViewer();
+
+    // --- E-Book tab state (2026-11-26) ---
+    private final EbookReaderState ebookReader = new EbookReaderState();
+    private List<File> ebookLibrary = new ArrayList<File>();
+    private final List<ZlibClient.Book> ebookBooks = new ArrayList<ZlibClient.Book>();
+    private String ebookQuery = "";
+    /** Query that was last sent upstream, so an empty result does not loop requests. */
+    private String ebookRequested;
+    private boolean ebookLoading;
+    private int ebookLoadGen;
+    private String ebookStatus = "";
+    private int ebookDownloadPct = -1;
 
     private int radioSubMode = RADIO_UI_HUB;
     private int netLoadGen;
@@ -591,17 +628,22 @@ public final class MediaSuiteHost {
         return (state >= STATE_RADIO && state <= STATE_PHOTO_VIEWER)
                 || state == STATE_VIDEO_HUB || state == STATE_YOUTUBE_BROWSE
                 || state == STATE_YOUTUBE_DETAIL
-                || state == STATE_RADIO_FM_PLAYER;
+                || state == STATE_RADIO_FM_PLAYER
+                || state == STATE_EBOOK_HUB || state == STATE_EBOOK_LIBRARY
+                || state == STATE_EBOOK_READER || state == STATE_EBOOK_SEARCH
+                || state == STATE_EBOOK_SETUP;
     }
 
     /** Browse/list screens that share MainActivity browser wheel + focus (not full-screen player/viewer). */
     public static boolean isMediaListBrowseState(int state) {
         return state == STATE_RADIO || state == STATE_RADIO_FM_BROWSE
                 || state == STATE_RADIO_FM_PLAYER
-                || state == STATE_RADIO_NET_BROWSE || state == STATE_VIDEOS
+                || state == STATE_RADIO_NET_BROWSE                 || state == STATE_VIDEOS
                 || state == STATE_VIDEO_HUB || state == STATE_YOUTUBE_BROWSE
                 || state == STATE_YOUTUBE_DETAIL
-                || state == STATE_PHOTOS;
+                || state == STATE_PHOTOS
+                || state == STATE_EBOOK_HUB || state == STATE_EBOOK_LIBRARY
+                || state == STATE_EBOOK_SEARCH || state == STATE_EBOOK_SETUP;
     }
 
     public int radioSubMode() {
@@ -662,6 +704,22 @@ public final class MediaSuiteHost {
                 showPhotoViewerLayer(true);
                 bindPhotoViewerImage();
                 break;
+            case STATE_EBOOK_HUB:
+                buildEbookHubUi();
+                break;
+            case STATE_EBOOK_LIBRARY:
+                buildEbookLibraryUi();
+                break;
+            case STATE_EBOOK_SEARCH:
+                buildEbookSearchUi();
+                break;
+            case STATE_EBOOK_SETUP:
+                buildEbookSetupUi();
+                break;
+            case STATE_EBOOK_READER:
+                showEbookReaderLayer(true);
+                bindEbookReader();
+                break;
             default:
                 break;
         }
@@ -691,6 +749,14 @@ public final class MediaSuiteHost {
                 break;
             case STATE_PHOTO_VIEWER:
                 showPhotoViewerLayer(false);
+                break;
+            case STATE_EBOOK_READER:
+                ebookReader.close();
+                showEbookReaderLayer(false);
+                break;
+            case STATE_EBOOK_SEARCH:
+                ebookLoadGen++;
+                ebookLoading = false;
                 break;
             case STATE_RADIO_FM_BROWSE:
                 if (radioSubMode == RADIO_FM_SCAN) {
@@ -745,6 +811,15 @@ public final class MediaSuiteHost {
                 return host.getString(R.string.status_photos);
             case STATE_PHOTO_VIEWER:
                 return host.getString(R.string.status_photo_viewer);
+            case STATE_EBOOK_HUB:
+            case STATE_EBOOK_LIBRARY:
+                return host.getString(R.string.status_ebook);
+            case STATE_EBOOK_SEARCH:
+                return host.getString(R.string.status_ebook_zlib);
+            case STATE_EBOOK_SETUP:
+                return host.getString(R.string.ebook_zlib_setup_title);
+            case STATE_EBOOK_READER:
+                return ebookReader.title();
             default:
                 return "";
         }
@@ -755,6 +830,21 @@ public final class MediaSuiteHost {
     public boolean handleBack() {
         int state = host.getCurrentScreenState();
         switch (state) {
+            case STATE_EBOOK_READER:
+                host.changeScreen(STATE_EBOOK_LIBRARY);
+                return true;
+            case STATE_EBOOK_LIBRARY:
+                host.changeScreen(STATE_EBOOK_HUB);
+                return true;
+            case STATE_EBOOK_SEARCH:
+                host.changeScreen(STATE_EBOOK_HUB);
+                return true;
+            case STATE_EBOOK_SETUP:
+                host.changeScreen(STATE_EBOOK_HUB);
+                return true;
+            case STATE_EBOOK_HUB:
+                host.exitToHomeMenu();
+                return true;
             case STATE_PHOTO_VIEWER:
                 host.changeScreen(STATE_PHOTOS);
                 return true;
@@ -5779,6 +5869,7 @@ public final class MediaSuiteHost {
     private void hideVideoAndPhotoLayers() {
         showVideoPlayerLayer(false);
         showPhotoViewerLayer(false);
+        showEbookReaderLayer(false);
     }
 
     private void bindPhotoViewerImage() {
@@ -5831,6 +5922,320 @@ public final class MediaSuiteHost {
     public String photoViewerPositionLabel() {
         return String.format(Locale.US, "%d / %d",
                 photoViewer.getIndex() + 1, Math.max(1, photoViewer.getCount()));
+    }
+
+    // --- E-Book tab (2026-11-26) ---
+
+    /** Layman: the E-Book tile opens two rows — local reader and Z-Library. */
+    private void buildEbookHubUi() {
+        prepareScrollBrowse();
+        host.applyReachBrowseLayoutMode();
+        host.showReachBrowseList(false);
+        host.setBrowserStatusTitle(host.getString(R.string.status_ebook));
+
+        addActionRow(host.getString(R.string.ebook_open_library), new Runnable() {
+            @Override
+            public void run() {
+                host.changeScreen(STATE_EBOOK_LIBRARY);
+            }
+        });
+        addActionRow(host.getString(R.string.ebook_zlib_row), new Runnable() {
+            @Override
+            public void run() {
+                openEbookZlib();
+            }
+        });
+
+        // 2026-11-26 — First visit without cookies: the tab starts the LAN setup page itself;
+        // the steps live on the Z-Library screen (kept out of the hub so it stays two rows).
+        if (!ZlibAccount.isConfigured(host.context())) {
+            host.startEbookSetupServer();
+        }
+        focusFirstBrowserChild();
+    }
+
+    private void openEbookZlib() {
+        if (!host.requireInternet(R.string.toast_internet_required)) return;
+        if (!ZlibAccount.isConfigured(host.context())) {
+            host.startEbookSetupServer();
+            host.changeScreen(STATE_EBOOK_SETUP);
+            return;
+        }
+        ebookQuery = "";
+        host.changeScreen(STATE_EBOOK_SEARCH);
+    }
+
+    private void buildEbookLibraryUi() {
+        prepareVirtualListBrowse();
+        host.applyReachBrowseLayoutMode();
+        host.showReachBrowseList(true);
+        host.setBrowserStatusTitle(host.getString(R.string.status_ebook));
+        ebookLibrary = EbookLibrary.scan();
+        virtualLabels.clear();
+        virtualSubtitles.clear();
+        virtualLabels.add(host.getString(R.string.common_back_short));
+        virtualSubtitles.add("");
+        if (ebookLibrary.isEmpty()) {
+            virtualLabels.add(host.getString(R.string.ebook_library_empty));
+            virtualSubtitles.add(host.getString(R.string.ebook_library_empty_hint));
+        } else {
+            for (File f : ebookLibrary) {
+                virtualLabels.add("📖 " + EbookLibrary.title(f));
+                virtualSubtitles.add(EbookLibrary.subtitle(f));
+            }
+        }
+        bindVirtualAdapter(new VirtualClickHandler() {
+            @Override
+            public void onClick(int position) {
+                if (position == 0) {
+                    handleBack();
+                    return;
+                }
+                int idx = position - 1;
+                if (idx >= 0 && idx < ebookLibrary.size()) {
+                    openEbookReader(ebookLibrary.get(idx));
+                }
+            }
+        });
+    }
+
+    /** Opens the two-page reader (progress restored from the last visit). */
+    public void openEbookReader(File file) {
+        if (file == null) return;
+        if (!ebookReader.open(host.context(), file)) {
+            Toast.makeText(host.context(), R.string.ebook_open_failed, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        host.changeScreen(STATE_EBOOK_READER);
+    }
+
+    private void showEbookReaderLayer(boolean show) {
+        View layer = host.findViewById(R.id.layout_ebook_reader);
+        if (layer != null) layer.setVisibility(show ? View.VISIBLE : View.GONE);
+        if (show && host.layoutBrowserMode() != null) {
+            host.layoutBrowserMode().setVisibility(View.GONE);
+        }
+    }
+
+    private void bindEbookReader() {
+        EbookReaderView view = host.findViewById(R.id.ebook_reader_view);
+        if (view == null) return;
+        view.setReader(ebookReader);
+        view.requestFocus();
+    }
+
+    /** Layman: side buttons / wheel / tap turn the spread. True when the page moved. */
+    public boolean ebookTurnPage(boolean next) {
+        EbookReaderView view = host.findViewById(R.id.ebook_reader_view);
+        return view != null && view.turn(next);
+    }
+
+    private void buildEbookSearchUi() {
+        prepareVirtualListBrowse();
+        host.applyReachBrowseLayoutMode();
+        host.showReachBrowseList(true);
+        host.setBrowserStatusTitle(host.getString(R.string.status_ebook_zlib));
+        // Start the request before rows are built so the loading row is what shows first.
+        requestEbookList();
+        virtualLabels.clear();
+        virtualSubtitles.clear();
+        virtualLabels.add(host.getString(R.string.common_back_short));
+        virtualSubtitles.add("");
+        virtualLabels.add(host.getString(R.string.ebook_zlib_search_row));
+        virtualSubtitles.add(ebookQuery != null && ebookQuery.length() > 0
+                ? ebookQuery : host.getString(R.string.ebook_zlib_search_hint));
+        if (ebookLoading) {
+            virtualLabels.add(host.getString(R.string.ebook_zlib_loading));
+            virtualSubtitles.add("");
+        } else if (ebookBooks.isEmpty()) {
+            virtualLabels.add(host.getString(R.string.ebook_zlib_none));
+            virtualSubtitles.add("");
+        } else {
+            for (ZlibClient.Book book : ebookBooks) {
+                virtualLabels.add(book.title);
+                virtualSubtitles.add(book.subtitle());
+            }
+        }
+        if (ebookStatus != null && ebookStatus.length() > 0) {
+            virtualLabels.add(ebookStatus);
+            virtualSubtitles.add("");
+        }
+        bindVirtualAdapter(new VirtualClickHandler() {
+            @Override
+            public void onClick(int position) {
+                if (position == 0) {
+                    handleBack();
+                    return;
+                }
+                if (position == 1) {
+                    host.openEbookSearchKeyboard(ebookQuery);
+                    return;
+                }
+                int idx = position - 2;
+                if (idx >= 0 && idx < ebookBooks.size()) {
+                    downloadEbook(ebookBooks.get(idx));
+                }
+            }
+        });
+    }
+
+    /** Fires the current query (empty = Z-Library most popular) once per query. */
+    private void requestEbookList() {
+        if (ebookLoading) return;
+        final String query = ebookQuery != null ? ebookQuery : "";
+        if (query.equals(ebookRequested)) return;
+        ebookRequested = query;
+        ebookLoading = true;
+        ebookStatus = "";
+        final int gen = ++ebookLoadGen;
+        final ZlibClient client = new ZlibClient(ZlibAccount.prefs(host.context()));
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                List<ZlibClient.Book> found = null;
+                String error = null;
+                try {
+                    found = query.length() > 0 ? client.search(query) : client.popular();
+                } catch (Exception e) {
+                    error = e.getMessage();
+                }
+                final List<ZlibClient.Book> result = found;
+                final String failure = error;
+                host.runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (gen != ebookLoadGen) return;
+                        ebookLoading = false;
+                        if (result != null) {
+                            ebookBooks.clear();
+                            ebookBooks.addAll(result);
+                        }
+                        if (failure != null) {
+                            ebookStatus = host.getString(R.string.ebook_zlib_error, failure);
+                        }
+                        if (host.getCurrentScreenState() == STATE_EBOOK_SEARCH) {
+                            buildEbookSearchUi();
+                        }
+                    }
+                });
+            }
+        }).start();
+    }
+
+    /** Wheel keyboard result for the Z-Library search box. */
+    public void onEbookSearchSubmitted(String query) {
+        ebookQuery = query != null ? query.trim() : "";
+        ebookBooks.clear();
+        ebookStatus = "";
+        ebookRequested = null;
+        if (host.getCurrentScreenState() != STATE_EBOOK_SEARCH) {
+            host.changeScreen(STATE_EBOOK_SEARCH);
+        } else {
+            buildEbookSearchUi();
+        }
+    }
+
+    private void downloadEbook(final ZlibClient.Book book) {
+        if (book == null || ebookDownloadPct >= 0) return;
+        ebookDownloadPct = 0;
+        ebookStatus = host.getString(R.string.ebook_downloading, book.title,
+                String.valueOf(0));
+        buildEbookSearchUi();
+        final ZlibClient client = new ZlibClient(ZlibAccount.prefs(host.context()));
+        EbookDownloads.start(host.context(), client, book, new EbookDownloads.Listener() {
+            @Override
+            public void onProgress(final int percent) {
+                host.runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        ebookDownloadPct = percent;
+                        ebookStatus = host.getString(R.string.ebook_downloading, book.title,
+                                String.valueOf(percent));
+                        if (host.getCurrentScreenState() == STATE_EBOOK_SEARCH) {
+                            buildEbookSearchUi();
+                        }
+                    }
+                });
+            }
+
+            @Override
+            public void onDone(final File saved) {
+                host.runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        ebookDownloadPct = -1;
+                        ebookStatus = host.getString(R.string.ebook_downloaded, saved.getName());
+                        if (host.getCurrentScreenState() == STATE_EBOOK_SEARCH) {
+                            buildEbookSearchUi();
+                        }
+                    }
+                });
+            }
+
+            @Override
+            public void onError(final String message) {
+                host.runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        ebookDownloadPct = -1;
+                        ebookStatus = host.getString(R.string.ebook_download_failed,
+                                message != null ? message : "");
+                        if (host.getCurrentScreenState() == STATE_EBOOK_SEARCH) {
+                            buildEbookSearchUi();
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    /** Layman: how to log Z-Library in from a PC on the same Wi-Fi. */
+    private void buildEbookSetupUi() {
+        prepareScrollBrowse();
+        host.applyReachBrowseLayoutMode();
+        host.showReachBrowseList(false);
+        host.setBrowserStatusTitle(host.getString(R.string.ebook_zlib_setup_title));
+        addBackRow(host.getString(R.string.common_back_short));
+        host.startEbookSetupServer();
+        addStatusRow(host.getString(R.string.ebook_zlib_setup_open));
+        addStatusRow(host.ebookSetupUrl());
+        addStatusRow(host.getString(R.string.ebook_zlib_setup_steps));
+        addStatusRow("1. " + host.getString(R.string.ebook_zlib_step_1));
+        addStatusRow("2. " + host.getString(R.string.ebook_zlib_step_2));
+        addStatusRow("3. " + host.getString(R.string.ebook_zlib_step_3));
+        addStatusRow("4. " + host.getString(R.string.ebook_zlib_step_4));
+        addStatusRow(host.getString(R.string.ebook_zlib_need_pc));
+        addActionRow(host.getString(R.string.ebook_zlib_test), new Runnable() {
+            @Override
+            public void run() {
+                testEbookZlib();
+            }
+        });
+        focusFirstBrowserChild();
+    }
+
+    private void testEbookZlib() {
+        final ZlibClient client = new ZlibClient(ZlibAccount.prefs(host.context()));
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final boolean ok = client.profile();
+                host.runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (ok) {
+                            ebookQuery = "";
+                            ebookRequested = null;
+                            ebookBooks.clear();
+                            host.changeScreen(STATE_EBOOK_SEARCH);
+                        } else {
+                            Toast.makeText(host.context(), R.string.ebook_zlib_test_failed,
+                                    Toast.LENGTH_LONG).show();
+                        }
+                    }
+                });
+            }
+        }).start();
     }
 
     // --- Settings rows ---

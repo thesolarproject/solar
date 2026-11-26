@@ -92,7 +92,8 @@ public final class ScreenTransitionMap {
         if (state == STATE_PLAYER || state == STATE_STEM_PLAYER || state == STATE_MIX
                 || state == STATE_WIFI_KEYBOARD
                 || state == MediaSuiteHost.STATE_VIDEO_PLAYER
-                || state == MediaSuiteHost.STATE_PHOTO_VIEWER) {
+                || state == MediaSuiteHost.STATE_PHOTO_VIEWER
+                || state == MediaSuiteHost.STATE_EBOOK_READER) {
             return 2;
         }
         return 1;
@@ -109,7 +110,11 @@ public final class ScreenTransitionMap {
                 || state == MediaSuiteHost.STATE_VIDEOS
                 || state == MediaSuiteHost.STATE_VIDEO_HUB
                 || state == MediaSuiteHost.STATE_YOUTUBE_BROWSE
-                || state == MediaSuiteHost.STATE_PHOTOS;
+                || state == MediaSuiteHost.STATE_PHOTOS
+                || state == MediaSuiteHost.STATE_EBOOK_HUB
+                || state == MediaSuiteHost.STATE_EBOOK_LIBRARY
+                || state == MediaSuiteHost.STATE_EBOOK_SEARCH
+                || state == MediaSuiteHost.STATE_EBOOK_SETUP;
     }
 
     private static boolean sameAuxRoot(int state) {

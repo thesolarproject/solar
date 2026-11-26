@@ -522,6 +522,19 @@ public final class DeviceFeatures {
         return subdirRoots("Videos");
     }
 
+    /**
+     * 2026-11-26 — Ebook/ on each browsable volume (plus README's lowercase "ebook").
+     * Layman: the folder the E-Book tab lists EPUB/PDF files from.
+     */
+    public static java.util.List<File> getEbookRoots() {
+        java.util.List<File> list = new java.util.ArrayList<File>();
+        for (File root : getStorageRoots()) {
+            list.add(new File(root, "Ebook"));
+            list.add(new File(root, "ebook"));
+        }
+        return list;
+    }
+
     public static java.util.List<File> getThemeRoots() {
         return subdirRoots("Themes");
     }

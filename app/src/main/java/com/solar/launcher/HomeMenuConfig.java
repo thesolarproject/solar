@@ -21,9 +21,10 @@ public final class HomeMenuConfig {
     /**
      * 2026-07-15 — Schema 8: drop youtube_audio home tile (Music → YouTube only).
      * Schema 7 seeded it; schema 6 made order user-editable.
-     * Was: HOME_SCHEMA=7 with tile on default home. Reversal: HOME_SCHEMA=7 + re-add id to defaults.
+     * 2026-11-26 — Schema 9: seed the E-Book tab next to the other media rows.
+     * Was: HOME_SCHEMA=8. Reversal: HOME_SCHEMA=8 + drop the schema 9 block.
      */
-    private static final int HOME_SCHEMA = 8;
+    private static final int HOME_SCHEMA = 9;
 
     public static final String ID_NOW_PLAYING = "now_playing";
     public static final String ID_MUSIC = "music";
@@ -46,6 +47,8 @@ public final class HomeMenuConfig {
     public static final String ID_THEMES = "themes";
     public static final String ID_VIDEOS = "videos";
     public static final String ID_PHOTOS = "photos";
+    /** 2026-11-26 — E-Book tab: local EPUB/PDF reader + Z-Library. */
+    public static final String ID_EBOOK = "ebook";
     public static final String ID_AUDIOBOOKS = "audiobooks";
     public static final String ID_APPS = "apps";
     public static final String ID_MORE = "more";
@@ -54,8 +57,8 @@ public final class HomeMenuConfig {
 
     /** Stock Y1 row order (theme homePageConfig keys align to these slots). */
     public static final List<String> STOCK_Y1_HOME_ORDER = Arrays.asList(
-            ID_NOW_PLAYING, ID_MUSIC, ID_VIDEOS, ID_AUDIOBOOKS, ID_PHOTOS, ID_RADIO,
-            ID_SETTINGS);
+            ID_NOW_PLAYING, ID_MUSIC, ID_VIDEOS, ID_AUDIOBOOKS, ID_PHOTOS, ID_EBOOK,
+            ID_RADIO, ID_SETTINGS);
 
     /**
      * Solar-only shortcuts after stock rows, in display order.
@@ -72,7 +75,7 @@ public final class HomeMenuConfig {
      * Was: np, music, radio, bt, settings, pc_upload, podcasts, soulseek.
      */
     private static final String DEFAULT_ORDER = String.join(",",
-            ID_NOW_PLAYING, ID_MUSIC, ID_RADIO, ID_SETTINGS,
+            ID_NOW_PLAYING, ID_MUSIC, ID_EBOOK, ID_RADIO, ID_SETTINGS,
             ID_PC_UPLOAD, ID_PODCASTS, ID_SOULSEEK);
 
     /**
@@ -226,14 +229,29 @@ public final class HomeMenuConfig {
         }
         // 2026-07-15 — Schema 8: Music → YouTube only; strip home youtube_audio tile.
         // Was: kept tiled after schema 7. Reversal: stop at schema 7 (leave id on home).
-        if (schema < HOME_SCHEMA) {
+        if (schema < 8) {
             List<String> home = new ArrayList<String>(loadHomeOrderIds(prefs));
             List<String> more = new ArrayList<String>(loadMoreOrderIds(prefs));
             home.remove(ID_YOUTUBE_AUDIO);
             more.remove(ID_YOUTUBE_AUDIO);
             saveOrder(prefs, home);
             saveMoreOrder(prefs, more);
-            schema = HOME_SCHEMA;
+            schema = 8;
+        }
+        // 2026-11-26 — Schema 9: existing installs get the E-Book row next to Photos.
+        // Reversal: drop this block, leave HOME_SCHEMA at 8.
+        if (schema < 9) {
+            List<String> home = new ArrayList<String>(loadHomeOrderIds(prefs));
+            List<String> more = new ArrayList<String>(loadMoreOrderIds(prefs));
+            if (!home.contains(ID_EBOOK) && !more.contains(ID_EBOOK)) {
+                int photos = home.indexOf(ID_PHOTOS);
+                int music = home.indexOf(ID_MUSIC);
+                if (photos >= 0) home.add(photos + 1, ID_EBOOK);
+                else if (music >= 0) home.add(music + 1, ID_EBOOK);
+                else home.add(ID_EBOOK);
+                saveOrder(prefs, home);
+            }
+            schema = 9;
         }
         if (prefs.getInt(PREF_HOME_SCHEMA, 1) < schema) {
             prefs.edit().putInt(PREF_HOME_SCHEMA, schema).commit();
@@ -278,6 +296,7 @@ public final class HomeMenuConfig {
             new Entry(ID_THEMES, R.string.home_menu_themes, "theme", R.drawable.setting_circle, "Themes", false),
             new Entry(ID_VIDEOS, R.string.home_menu_videos, "video", R.drawable.music_list, null, false),
             new Entry(ID_PHOTOS, R.string.home_menu_photos, "photos", R.drawable.music_list, null, false),
+            new Entry(ID_EBOOK, R.string.home_menu_ebook, "ebook", R.drawable.music_list, "E-Book", false),
             new Entry(ID_AUDIOBOOKS, R.string.home_menu_audiobooks, "audiobooks", R.drawable.music_list, null, false),
             new Entry(ID_APPS, R.string.home_menu_apps, null, R.drawable.setting_circle, "Apps", false),
     };
