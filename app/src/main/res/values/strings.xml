@@ -588,6 +588,7 @@
     <string name="ebook_downloading">Downloading %1$s… %2$s%%</string>
     <string name="ebook_downloaded">Saved %1$s</string>
     <string name="ebook_download_failed">Download failed: %1$s</string>
+    <string name="ebook_zlib_test_ok">Signed in. %1$s downloads left today.</string>
     <string name="ebook_zlib_setup_title">Z-Library setup</string>
     <string name="ebook_zlib_setup_open">On a PC on the same Wi-Fi, open:</string>
     <string name="ebook_zlib_setup_steps">Then:</string>

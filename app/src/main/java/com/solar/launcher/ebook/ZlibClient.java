@@ -127,13 +127,38 @@ public final class ZlibClient {
     public String downloadLink(Book book) throws IOException {
         JSONObject json = requestAny("/eapi/book/" + book.id + "/" + book.hash + "/file", null);
         if (json == null) throw new IOException("No answer from Z-Library");
-        JSONObject download = json.optJSONObject("download");
-        String link = download != null ? download.optString("link", "") : "";
+        // 2026-11-26 — Live EAPI answers {"file":{"downloadLink":"..."}}. Reading only the
+        // older {"download":{"link":...}} shape made every tap fail as "Download unavailable".
+        String link = "";
+        JSONObject file = json.optJSONObject("file");
+        if (file != null) link = file.optString("downloadLink", "");
+        if (link.length() == 0) {
+            JSONObject download = json.optJSONObject("download");
+            if (download != null) link = download.optString("link", "");
+        }
+        if (link.length() == 0) link = json.optString("downloadLink", "");
         if (link.length() == 0) {
             String error = json.optString("error", "");
             throw new IOException(error.length() > 0 ? error : "Download unavailable");
         }
-        return link.startsWith("http") ? link : domain + link;
+        return link.startsWith("http") ? link : (domain != null ? domain : "") + link;
+    }
+
+    /**
+     * 2026-11-26 — Free accounts get about ten downloads a day and the profile is the only place
+     * the server says how many are left. Returns -1 when it cannot be read (cookies/network).
+     */
+    public int downloadsLeft() {
+        try {
+            JSONObject json = requestAny("/eapi/user/profile", null);
+            if (json == null || json.optInt("success", 0) != 1) return -1;
+            JSONObject user = json.optJSONObject("user");
+            if (user == null) return -1;
+            int limit = user.optInt("downloads_limit", 10);
+            return Math.max(0, limit - user.optInt("downloads_today", 0));
+        } catch (Exception e) {
+            return -1;
+        }
     }
 
     /** Streams the book into {@code target}; .part + rename keeps a half file out of the library. */

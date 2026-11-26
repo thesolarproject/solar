@@ -346,6 +346,8 @@ public final class MediaSuiteHost {
     private int ebookLoadGen;
     private String ebookStatus = "";
     private int ebookDownloadPct = -1;
+    /** 2026-11-26 — Download line is row 2 (under the search row) while it is on screen. */
+    private boolean ebookStatusRowShown;
 
     private int radioSubMode = RADIO_UI_HUB;
     private int netLoadGen;
@@ -6044,6 +6046,13 @@ public final class MediaSuiteHost {
         virtualLabels.add(host.getString(R.string.ebook_zlib_search_row));
         virtualSubtitles.add(ebookQuery != null && ebookQuery.length() > 0
                 ? ebookQuery : host.getString(R.string.ebook_zlib_search_hint));
+        // 2026-11-26 — Download line goes under the search row, not after the 20 results:
+        // appended at the bottom it was off-screen, so a tap looked like it did nothing.
+        ebookStatusRowShown = ebookStatus != null && ebookStatus.length() > 0;
+        if (ebookStatusRowShown) {
+            virtualLabels.add(ebookStatus);
+            virtualSubtitles.add("");
+        }
         if (ebookLoading) {
             virtualLabels.add(host.getString(R.string.ebook_zlib_loading));
             virtualSubtitles.add("");
@@ -6056,10 +6065,6 @@ public final class MediaSuiteHost {
                 virtualSubtitles.add(book.subtitle());
             }
         }
-        if (ebookStatus != null && ebookStatus.length() > 0) {
-            virtualLabels.add(ebookStatus);
-            virtualSubtitles.add("");
-        }
         bindVirtualAdapter(new VirtualClickHandler() {
             @Override
             public void onClick(int position) {
@@ -6071,7 +6076,7 @@ public final class MediaSuiteHost {
                     host.openEbookSearchKeyboard(ebookQuery);
                     return;
                 }
-                int idx = position - 2;
+                int idx = position - 2 - (ebookStatusRowShown ? 1 : 0);
                 if (idx >= 0 && idx < ebookBooks.size()) {
                     downloadEbook(ebookBooks.get(idx));
                 }
@@ -6140,7 +6145,7 @@ public final class MediaSuiteHost {
         ebookDownloadPct = 0;
         ebookStatus = host.getString(R.string.ebook_downloading, book.title,
                 String.valueOf(0));
-        buildEbookSearchUi();
+        paintEbookStatusRow();
         final ZlibClient client = new ZlibClient(ZlibAccount.prefs(host.context()));
         EbookDownloads.start(host.context(), client, book, new EbookDownloads.Listener() {
             @Override
@@ -6151,9 +6156,7 @@ public final class MediaSuiteHost {
                         ebookDownloadPct = percent;
                         ebookStatus = host.getString(R.string.ebook_downloading, book.title,
                                 String.valueOf(percent));
-                        if (host.getCurrentScreenState() == STATE_EBOOK_SEARCH) {
-                            buildEbookSearchUi();
-                        }
+                        paintEbookStatusRow();
                     }
                 });
             }
@@ -6165,9 +6168,7 @@ public final class MediaSuiteHost {
                     public void run() {
                         ebookDownloadPct = -1;
                         ebookStatus = host.getString(R.string.ebook_downloaded, saved.getName());
-                        if (host.getCurrentScreenState() == STATE_EBOOK_SEARCH) {
-                            buildEbookSearchUi();
-                        }
+                        paintEbookStatusRow();
                     }
                 });
             }
@@ -6180,13 +6181,29 @@ public final class MediaSuiteHost {
                         ebookDownloadPct = -1;
                         ebookStatus = host.getString(R.string.ebook_download_failed,
                                 message != null ? message : "");
-                        if (host.getCurrentScreenState() == STATE_EBOOK_SEARCH) {
-                            buildEbookSearchUi();
-                        }
+                        paintEbookStatusRow();
                     }
                 });
             }
         });
+    }
+
+    /**
+     * 2026-11-26 — Writes the download line into row 2 (under the search row) and repaints that
+     * one row in place: percent ticks must not reload the list or yank the wheel back to row 0.
+     */
+    private void paintEbookStatusRow() {
+        if (host.getCurrentScreenState() != STATE_EBOOK_SEARCH) return;
+        if (ebookStatus == null || ebookStatus.length() == 0) return;
+        if (virtualLabels.size() < 2) return;
+        if (!ebookStatusRowShown) {
+            virtualLabels.add(2, ebookStatus);
+            virtualSubtitles.add(2, "");
+            ebookStatusRowShown = true;
+        } else if (virtualLabels.size() > 2) {
+            virtualLabels.set(2, ebookStatus);
+        }
+        notifyVirtualDataChangedPreserveFocus();
     }
 
     /** Layman: how to log Z-Library in from a PC on the same Wi-Fi. */
@@ -6219,11 +6236,16 @@ public final class MediaSuiteHost {
         new Thread(new Runnable() {
             @Override
             public void run() {
-                final boolean ok = client.profile();
+                final int left = client.downloadsLeft();
                 host.runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
-                        if (ok) {
+                        if (left >= 0) {
+                            // Free accounts: ~10 a day, so say what is actually left.
+                            Toast.makeText(host.context(),
+                                    host.getString(R.string.ebook_zlib_test_ok,
+                                            String.valueOf(left)),
+                                    Toast.LENGTH_LONG).show();
                             ebookQuery = "";
                             ebookRequested = null;
                             ebookBooks.clear();
