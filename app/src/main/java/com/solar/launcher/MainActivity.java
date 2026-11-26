@@ -45606,6 +45606,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     /** 2026-07-18 — Actual category list bind (runs after first frame). */
     private void buildVirtualCategoriesNow(final String type) {
+        // 2026-11-26 — A playback-time invalidate leaves Tier-0 unbound; menus must not open blank.
+        ensureLibraryIndexesBound();
         java.util.HashMap<String, String> albumByKey = new java.util.HashMap<>();
         java.util.HashSet<String> uniqueCategories = new java.util.HashSet<>();
         if (!"ARTIST".equals(type) && !"YEAR".equals(type) && !"GENRE".equals(type)) {
@@ -47208,6 +47210,35 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     private void refreshLibraryCategoryIndex() {
         libraryCategoryIndex.rebuild(libraryScanGen, flowLibraryRows());
         refreshLibraryRamCache();
+    }
+
+    /**
+     * Rebuild gen-keyed library indexes when something invalidated them mid-session.
+     * Layman: playing a track can throw the Music shelves away (tag patch, prune, scan cancel),
+     * so put them back from the DB instead of opening Artists/Albums/All Songs on blank lists.
+     * Technical: no-op while Tier-0 is bound to {@link #libraryScanGen}; otherwise rehydrate
+     * (SEGMENTED DISTINCT hydrate when no SongItems are resident, else a resident rebuild).
+     * Reversal: delete; bind whatever the caches report (blank after an invalidate).
+     */
+    private void ensureLibraryIndexesBound() {
+        if (libraryRamCache == null) return;
+        if (libraryRamCache.generation() == libraryScanGen) return;
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("scanGen", libraryScanGen);
+            d.put("ramGen", libraryRamCache.generation());
+            d.put("customLib", customLibrary != null ? customLibrary.size() : -1);
+            d.put("mode", String.valueOf(libraryRamCache.mode()));
+            Debug708768Log.log(this, "MainActivity.ensureLibraryIndexesBound",
+                    "cold Tier-0 rehydrate", "H-HEAL", d);
+        } catch (Exception ignored) {}
+        // #endregion
+        if (customLibrary.isEmpty()) {
+            applySegmentedLibraryHydrate(MusicLibraryStore.getInstance(getApplicationContext()));
+        } else {
+            refreshLibraryCategoryIndex();
+        }
     }
 
     /**
@@ -49024,6 +49055,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     /** 2026-07-15/18 — Filter/sort/bind virtual songs (post-frame). */
     private void buildVirtualSongsNow() {
+        // 2026-11-26 — drills gate on mode()==SEGMENTED; rebind those indexes before choosing a path.
+        ensureLibraryIndexesBound();
         virtualSongList.clear();
         currentScrollIndexList.clear();
         final List<SongItem> targetSongs = new ArrayList<>();

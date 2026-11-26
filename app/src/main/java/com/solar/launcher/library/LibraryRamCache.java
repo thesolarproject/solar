@@ -313,5 +313,17 @@ public final class LibraryRamCache {
         if (!isIndexableYear("1999") || isIndexableYear("0")) {
             throw new AssertionError("year filter");
         }
+        // 2026-11-26 — invalidate() drops the binding and the budget mode; a later
+        // rebindGeneration() must NOT fake a bound generation, so readers rehydrate
+        // instead of opening blank shelves (MainActivity.ensureLibraryIndexesBound).
+        LibraryRamCache e = new LibraryRamCache();
+        e.rebuildFromDistinct(3, 400, arts, albs, gens, yrs);
+        e.invalidate();
+        e.rebindGeneration(4);
+        if (e.generation() != -1) throw new AssertionError("invalidate keeps binding");
+        if (!e.artists(4).isEmpty()) throw new AssertionError("rebind after invalidate");
+        if (e.mode() != LibraryMemoryBudget.Mode.FULL_RESIDENT) {
+            throw new AssertionError("invalidate resets mode");
+        }
     }
 }
