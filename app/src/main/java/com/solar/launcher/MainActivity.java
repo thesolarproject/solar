@@ -62511,12 +62511,23 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                         final String finalArtist = fetchedArtist;
                         final String finalAlbum = fetchedAlbum;
 
-                        String coverUrl = trackInfo.getJSONObject("album").getString("cover_xl").replace("https://", "http://");
-                        java.net.URL imgUrl = new java.net.URL(coverUrl);
-                        java.net.HttpURLConnection imgConn = (java.net.HttpURLConnection) imgUrl.openConnection();
-                        java.io.InputStream in = imgConn.getInputStream();
-                        final android.graphics.Bitmap coverBitmap = android.graphics.BitmapFactory.decodeStream(in);
-                        in.close();
+                        // 2026-11-26 — Cover art is optional: a missing cover_xl or unreachable
+                        // image host must not abort the tag write below (was: thrown away by the
+                        // outer catch, so fetched tags were never persisted).
+                        android.graphics.Bitmap tempBitmap = null;
+                        try {
+                            String coverUrl = trackInfo.getJSONObject("album").optString("cover_xl", "");
+                            if (!coverUrl.isEmpty()) {
+                                coverUrl = coverUrl.replace("https://", "http://");
+                                java.net.URL imgUrl = new java.net.URL(coverUrl);
+                                java.net.HttpURLConnection imgConn = (java.net.HttpURLConnection) imgUrl.openConnection();
+                                java.io.InputStream in = imgConn.getInputStream();
+                                tempBitmap = android.graphics.BitmapFactory.decodeStream(in);
+                                in.close();
+                            }
+                        } catch (Exception ignored) {}
+
+                        final android.graphics.Bitmap coverBitmap = tempBitmap;
 
                         persistFetchedMetadata(track, finalTitle, finalArtist, finalAlbum, coverBitmap);
                         final File coverFile = coverFileForTrack(track);
@@ -62529,7 +62540,10 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
                                     // 🚀 화면의 글씨도 즉각 공식 정보로 갈아치웁니다!
                                     tvPlayerTitle.setText(finalTitle);
                                     bindNowPlayingArtistAlbum(finalArtist, finalAlbum);
-                                    applyCachedCoverArt(coverFile.getAbsolutePath());
+                                    // 2026-11-26 — No cover fetched → no sidecar written; skip the stale read.
+                                    if (coverFile.exists()) {
+                                        applyCachedCoverArt(coverFile.getAbsolutePath());
+                                    }
                                 }
                             }
                         });
