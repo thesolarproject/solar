@@ -75,6 +75,10 @@ public final class EpubBook {
         } catch (IOException e) {
             try { zip.close(); } catch (IOException ignored) {}
             throw e;
+        } catch (Exception e) {
+            // XmlPullParser throws checked parse errors — surface them as a plain IO failure.
+            try { zip.close(); } catch (IOException ignored) {}
+            throw new IOException("Could not read EPUB", e);
         }
     }
 

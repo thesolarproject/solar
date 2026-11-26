@@ -73,7 +73,8 @@ public final class PdfBook {
             // White paper first: PDFium leaves untouched pixels transparent.
             bmp.eraseColor(0xFFFFFFFF);
             core.renderPageBitmap(document, bmp, index, 0, 0, w, h);
-            core.closePage(document);
+            // pdfium-android 1.9.0 has no closePage(document); pages are released by
+            // the next openPage() / closeDocument().
             return bmp;
         } catch (Throwable t) {
             if (bmp != null) bmp.recycle();
