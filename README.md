@@ -104,6 +104,8 @@ Please leave your feedback and issue reports in the [Issues Tracker](https://git
 
 Add OPENVPN support possibly
 
+Ebook Reader with EPUB + PDF support in the ebook folder on microsd card with Annas archive/Z-lib downloading support.
+
 Plex/Jellyfin
 
 ~~Fix only All songs working~~
