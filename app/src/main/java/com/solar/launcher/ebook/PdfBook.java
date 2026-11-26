@@ -2,6 +2,10 @@ package com.solar.launcher.ebook;
 
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Matrix;
+import android.graphics.Paint;
+import android.graphics.RectF;
 import android.os.ParcelFileDescriptor;
 
 import com.shockwave.pdfium.PdfDocument;
@@ -17,6 +21,9 @@ import java.io.IOException;
  *   must render off the UI thread and close() when the book is closed.
  */
 public final class PdfBook {
+    /** Pages render at this multiple of the box and are filtered down when stretched. */
+    private static final int PDF_SUPERSAMPLE = 2;
+
     private final File file;
     private final PdfiumCore core;
     private final PdfDocument document;
@@ -58,27 +65,97 @@ public final class PdfBook {
         return file;
     }
 
-    /** Renders one page into a bitmap that fits maxWidth x maxHeight. Blocking. */
-    public Bitmap renderPage(int index, int maxWidth, int maxHeight) {
+    /**
+     * Renders one page into a bitmap of exactly width x height, filling the box. Blocking.
+     *
+     * 2026-11-26 — the page box is taller than the sheet's own proportions, so the sheet is
+     * rendered at its own ratio first (a box of another ratio can letterbox or distort,
+     * depending on the PDFium build) and then scaled up in equal parts to the box in
+     * stretchPage(). The result keeps the full page width — "good weight" — and gives it the
+     * box's height, which is the part the letterboxed version was missing.
+     *
+     * Portrait sheets fill the box; landscape sheets are rotated upright and fitted instead
+     * (stretching those into a tall box would flatten them by ~3x).
+     */
+    public Bitmap renderPage(int index, int width, int height) {
         if (index < 0 || index >= pageCount) return null;
         int pageW = Math.max(1, core.getPageWidthPoint(document, index));
         int pageH = Math.max(1, core.getPageHeightPoint(document, index));
-        float scale = Math.min(maxWidth / (float) pageW, maxHeight / (float) pageH);
-        int w = Math.max(1, Math.round(pageW * scale));
-        int h = Math.max(1, Math.round(pageH * scale));
+        int outW = Math.max(1, width);
+        int outH = Math.max(1, height);
+        // Render at PDF_SUPERSAMPLE times the box and filter down: the stretch magnifies the
+        // sheet by ~1.5x vertically, and the downscale keeps the stems from looking blocky.
+        int renderW = Math.min(outW * PDF_SUPERSAMPLE, 1600);
+        int renderH = Math.min(Math.max(1, Math.round(renderW * pageH / (float) pageW)), 2400);
+        boolean landscape = pageW > pageH;
         Bitmap bmp = null;
         try {
-            bmp = Bitmap.createBitmap(w, h, Bitmap.Config.RGB_565);
+            bmp = Bitmap.createBitmap(renderW, renderH, Bitmap.Config.RGB_565);
             core.openPage(document, index);
             // White paper first: PDFium leaves untouched pixels transparent.
             bmp.eraseColor(0xFFFFFFFF);
-            core.renderPageBitmap(document, bmp, index, 0, 0, w, h);
+            core.renderPageBitmap(document, bmp, index, 0, 0, renderW, renderH);
             // pdfium-android 1.9.0 has no closePage(document); pages are released by
             // the next openPage() / closeDocument().
-            return bmp;
+            return landscape ? rotateIntoBox(bmp, outW, outH) : stretchPage(bmp, outW, outH);
         } catch (Throwable t) {
             if (bmp != null) bmp.recycle();
             return null;
+        }
+    }
+
+    /**
+     * Turns a landscape sheet a quarter turn clockwise and centres it, upright and at its own
+     * proportions, inside width x height. Blocking.
+     * The empty part of the box is painted the reader's black, so the page reads as a page
+     * standing in the column instead of a white slab with a small page inside it.
+     * Rotating clockwise puts the sheet's top edge on the right: tilt the device left to read.
+     */
+    private static Bitmap rotateIntoBox(Bitmap src, int width, int height) {
+        Bitmap out = null;
+        try {
+            out = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565);
+            Canvas canvas = new Canvas(out);
+            canvas.drawColor(0xFF000000);
+            float scale = Math.min(width / (float) src.getHeight(),
+                    height / (float) src.getWidth());
+            float w = src.getHeight() * scale; // footprint after the quarter turn
+            float h = src.getWidth() * scale;
+            Matrix m = new Matrix();
+            m.setRotate(90f);
+            m.postScale(scale, scale);
+            m.postTranslate((width + w) / 2f, (height - h) / 2f);
+            Paint paint = new Paint(Paint.FILTER_BITMAP_FLAG);
+            paint.setAntiAlias(true);
+            canvas.drawBitmap(src, m, paint);
+            src.recycle();
+            return out;
+        } catch (Throwable t) {
+            if (out != null) out.recycle();
+            return src;
+        }
+    }
+
+    /**
+     * Scales a rendered sheet to exactly width x height. Blocking.
+     * The bitmap is the whole page at the page's own proportions, so drawing it into the box
+     * stretches it to the box's shape — the same page width, more height — with filtering.
+     */
+    private static Bitmap stretchPage(Bitmap src, int width, int height) {
+        if (src.getWidth() == width && src.getHeight() == height) return src;
+        Bitmap out = null;
+        try {
+            out = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565);
+            Canvas canvas = new Canvas(out);
+            canvas.drawColor(0xFFFFFFFF);
+            Paint paint = new Paint(Paint.FILTER_BITMAP_FLAG);
+            paint.setAntiAlias(true);
+            canvas.drawBitmap(src, null, new RectF(0, 0, width, height), paint);
+            src.recycle();
+            return out;
+        } catch (Throwable t) {
+            if (out != null) out.recycle();
+            return src;
         }
     }
 

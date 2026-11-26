@@ -5,6 +5,7 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.RectF;
 import android.util.AttributeSet;
 import android.view.MotionEvent;
 import android.view.View;
@@ -33,10 +34,12 @@ import java.util.concurrent.ThreadFactory;
 public final class EbookReaderView extends View {
     /** Rendered PDF pages kept around (current spread + the one ahead + the one behind). */
     private static final int PDF_CACHE_MAX = 6;
-
     private EbookReaderState state;
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint paper = new Paint();
+    /** Draws the already-stretched PDF bitmap into the page box, smoothed. */
+    private final Paint pageBitmapPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
+    private final RectF pageRect = new RectF();
     private final Map<String, Bitmap> pdfCache =
             new LinkedHashMap<String, Bitmap>(8, 0.75f, true) {
                 @Override
@@ -204,11 +207,10 @@ public final class EbookReaderView extends View {
         for (int slot = 0; slot <= 1; slot++) {
             int pageIndex = state.pageAt(slot);
             if (pageIndex < 0) continue;
-            int x = pageLeftX(slot);
-            int top = contentTop();
-            canvas.drawRect(x, top, x + state.pageWidth(), top + state.pageHeight(), paper);
             Bitmap bmp = pdfCache.get(pdfKey(pageIndex));
             if (bmp == null || bmp.isRecycled()) {
+                // No paper placeholder: each PDF bitmap carries its own paper (and the black
+                // around a rotated landscape page), so a white slab here would only flash.
                 requestPdfPage(pageIndex);
                 continue;
             }
@@ -223,14 +225,17 @@ public final class EbookReaderView extends View {
     private void drawPdfBitmap(Canvas canvas, Bitmap bmp, int slot) {
         int x = pageLeftX(slot);
         int top = contentTop();
-        float scale = Math.min(1f, Math.min(
-                (float) state.pageWidth() / bmp.getWidth(),
-                (float) state.pageHeight() / bmp.getHeight()));
+        // 2026-11-26 — fill the page box. PdfBook.renderPage stretched the sheet to exactly
+        // this box, so this is normally a 1:1 blit; the scale only fits a bitmap built for a
+        // different box (window resized, spread cached from the old geometry).
+        float scale = Math.min((float) state.pageWidth() / bmp.getWidth(),
+                (float) state.pageHeight() / bmp.getHeight());
         float w = bmp.getWidth() * scale;
         float h = bmp.getHeight() * scale;
         float dx = x + (state.pageWidth() - w) / 2f;
         float dy = top + (state.pageHeight() - h) / 2f;
-        canvas.drawBitmap(bmp, dx, dy, null);
+        pageRect.set(dx, dy, dx + w, dy + h);
+        canvas.drawBitmap(bmp, null, pageRect, pageBitmapPaint);
     }
 
     private String pdfKey(int page) {
