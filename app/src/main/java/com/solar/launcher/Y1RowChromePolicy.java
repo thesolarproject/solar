@@ -23,6 +23,21 @@ public final class Y1RowChromePolicy {
     }
 
     /**
+     * 2026-10-03 — Library ListView rows: selected, pressed, or focused.
+     * Layman: in Artists/Albums lists the blue bar must also follow focus.
+     * Technical: with itemsCanFocus, ListView.layoutChildren gives the selected child focus and
+     * then calls setSelected(false) on it, so selected-only chrome never painted (no bar at all).
+     * Home/settings keep {@link #selectedChromeStates()} (no stale-focus double bar mid-spin).
+     */
+    public static int[][] listRowChromeStates() {
+        return new int[][] {
+                new int[] { android.R.attr.state_selected },
+                new int[] { android.R.attr.state_pressed },
+                new int[] { android.R.attr.state_focused },
+        };
+    }
+
+    /**
      * 2026-07-20 — Whether View flags should show selected-row decoration.
      * Layman: blue bar on when the row is marked selected (or pressed).
      */

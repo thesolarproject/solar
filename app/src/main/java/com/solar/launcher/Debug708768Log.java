@@ -30,7 +30,7 @@ public final class Debug708768Log {
             "/home/deck/Documents/Cursor Workspaces/TheSolarProject/solar/.cursor/debug-708768.log";
 
     /** 2026-07-20 — On while hunting empty catalog; flip false after fix verified. */
-    public static final boolean ENABLED = true;
+    public static final boolean ENABLED = false;
 
     private static volatile String runId = "pre-fix";
 

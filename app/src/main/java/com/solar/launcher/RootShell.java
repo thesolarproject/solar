@@ -11,8 +11,6 @@ import java.io.InputStreamReader;
  * Tries explicit paths first — plain "su" alone can fail from app Runtime.exec on some builds.
  */
 public final class RootShell {
-    /** Y1 rockbox base + Y2 ROM bake the same setuid binary in these locations. */
-    private static final String[] SU_PATHS = {"/system/xbin/su", "/system/bin/su", "su"};
     /** One-shot: setuid daemonsu can be started from app context when daemon was not booted yet. */
     private static volatile boolean daemonsuBootstrapped = false;
 
@@ -115,7 +113,7 @@ public final class RootShell {
     }
 
     private static boolean trySuPaths(String command) {
-        for (String su : SU_PATHS) {
+        for (String su : SuPaths.available()) {
             Process proc = null;
             try {
                 proc = Runtime.getRuntime().exec(new String[] {su, "-c", command});
@@ -193,7 +191,7 @@ public final class RootShell {
     public static String runCapture(String command, boolean allowA5) {
         if (command == null || command.isEmpty()) return "";
         if (DeviceFeatures.isA5() && !allowA5) return "";
-        for (String su : SU_PATHS) {
+        for (String su : SuPaths.available()) {
             Process proc = null;
             try {
                 proc = Runtime.getRuntime().exec(new String[] {su, "-c", command});

@@ -27,7 +27,7 @@ public final class Debug290fecLog {
             "/home/deck/Documents/Cursor Workspaces/TheSolarProject/solar/.cursor/debug-290fec.log";
 
     /** On while hunting multi-engine overlap. Flip false before ship. */
-    public static final boolean ENABLED = true;
+    public static final boolean ENABLED = false;
 
     private Debug290fecLog() {}
 

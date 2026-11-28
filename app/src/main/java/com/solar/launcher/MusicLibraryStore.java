@@ -388,6 +388,48 @@ public class MusicLibraryStore extends SolarDbHelper {
      * Reversal: always {@link #loadAll()}.
      */
     public List<Track> loadRange(int offset, int limit) {
+        return loadRange(offset, limit, -1);
+    }
+
+    /**
+     * ORDER BY for SEGMENTED All Songs pages, mirroring MainActivity.sortSongItems modes.
+     * 2026-10-05 — Was: path order only, so the All Songs sort cycle changed the label but not
+     * the list on 300+ track libraries. Layman: the database now sorts the way you picked.
+     * Unknown mode (−1) keeps path order. Reversal: always return "path ASC".
+     */
+    static String orderByForSongSort(int songSort) {
+        switch (songSort) {
+            case LibraryBrowsePrefs.SONG_SORT_TITLE:
+                return "title COLLATE NOCASE ASC, path ASC";
+            case LibraryBrowsePrefs.SONG_SORT_ARTIST:
+                return "artist COLLATE NOCASE ASC, path ASC";
+            case LibraryBrowsePrefs.SONG_SORT_ALBUM:
+                return "album COLLATE NOCASE ASC, track_number ASC, path ASC";
+            case LibraryBrowsePrefs.SONG_SORT_DATE:
+                return "mtime DESC, path ASC";
+            case LibraryBrowsePrefs.SONG_SORT_LENGTH:
+                // Shortest first; unknown ('' / 0) after known — same as compareDurationAscending.
+                return "(CAST(duration_ms AS INTEGER) <= 0) ASC, CAST(duration_ms AS INTEGER) ASC,"
+                        + " title COLLATE NOCASE ASC";
+            default:
+                return "path ASC";
+        }
+    }
+
+    /**
+     * Swap a drill SQL's ORDER BY for the user's song sort (−1 keeps the built-in order).
+     * 2026-10-05 — Artist/Genre/Year/Album drills under SEGMENTED ignored the sort prefs.
+     * Reversal: callers pass −1 (or use the overloads without songSort).
+     */
+    static String withSongSortOrder(String sql, int songSort) {
+        if (songSort < 0) return sql;
+        int ob = sql.indexOf(" ORDER BY ");
+        int lim = sql.indexOf(" LIMIT ? OFFSET ?");
+        if (ob < 0 || lim < ob) return sql;
+        return sql.substring(0, ob) + " ORDER BY " + orderByForSongSort(songSort) + sql.substring(lim);
+    }
+
+    public List<Track> loadRange(int offset, int limit, int songSort) {
         purgeStemLibraryArtifacts();
         List<Track> out = new ArrayList<Track>();
         if (limit <= 0) return out;
@@ -396,7 +438,7 @@ public class MusicLibraryStore extends SolarDbHelper {
         Cursor c = null;
         try {
             c = db.rawQuery(
-                    "SELECT * FROM tracks ORDER BY path ASC LIMIT ? OFFSET ?",
+                    "SELECT * FROM tracks ORDER BY " + orderByForSongSort(songSort) + " LIMIT ? OFFSET ?",
                     new String[] { String.valueOf(limit), String.valueOf(offset) });
             while (c.moveToNext()) {
                 out.add(rowToTrack(c));
@@ -471,13 +513,18 @@ public class MusicLibraryStore extends SolarDbHelper {
      * Reversal: loadAll + ArtistParser.containsArtist in-memory.
      */
     public List<Track> loadTracksByArtist(String artist, int offset, int limit) {
+        return loadTracksByArtist(artist, offset, limit, -1);
+    }
+
+    /** Same page in the user's song sort order (−1 = built-in). 2026-10-05 */
+    public List<Track> loadTracksByArtist(String artist, int offset, int limit, int songSort) {
         List<Track> out = new ArrayList<Track>();
         if (artist == null || artist.trim().isEmpty()) return out;
         limit = normalizePageLimit(limit);
         if (limit <= 0) return out;
         offset = normalizePageOffset(offset);
         String a = artist.trim();
-        return queryTracks(SQL_LOAD_BY_ARTIST, new String[] {
+        return queryTracks(withSongSortOrder(SQL_LOAD_BY_ARTIST, songSort), new String[] {
                 a, a, String.valueOf(limit), String.valueOf(offset) });
     }
 
@@ -494,13 +541,18 @@ public class MusicLibraryStore extends SolarDbHelper {
      * Reversal: loadAll + AlbumNames.equals filter.
      */
     public List<Track> loadTracksByAlbum(String album, int offset, int limit) {
+        return loadTracksByAlbum(album, offset, limit, -1);
+    }
+
+    /** Same page in the user's song sort order (−1 = built-in). 2026-10-05 */
+    public List<Track> loadTracksByAlbum(String album, int offset, int limit, int songSort) {
         List<Track> out = new ArrayList<Track>();
         if (album == null || album.trim().isEmpty()) return out;
         limit = normalizePageLimit(limit);
         if (limit <= 0) return out;
         offset = normalizePageOffset(offset);
         String al = album.trim();
-        return queryTracks(SQL_LOAD_BY_ALBUM, new String[] {
+        return queryTracks(withSongSortOrder(SQL_LOAD_BY_ALBUM, songSort), new String[] {
                 al, String.valueOf(limit), String.valueOf(offset) });
     }
 
@@ -516,6 +568,11 @@ public class MusicLibraryStore extends SolarDbHelper {
      * Reversal: loadAll + containsArtist + AlbumNames.equals.
      */
     public List<Track> loadTracksByArtistAlbum(String artist, String album, int offset, int limit) {
+        return loadTracksByArtistAlbum(artist, album, offset, limit, -1);
+    }
+
+    /** Same page in the user's song sort order (−1 = built-in). 2026-10-05 */
+    public List<Track> loadTracksByArtistAlbum(String artist, String album, int offset, int limit, int songSort) {
         List<Track> out = new ArrayList<Track>();
         if (artist == null || artist.trim().isEmpty()) return out;
         if (album == null || album.trim().isEmpty()) return out;
@@ -524,7 +581,7 @@ public class MusicLibraryStore extends SolarDbHelper {
         offset = normalizePageOffset(offset);
         String a = artist.trim();
         String al = album.trim();
-        return queryTracks(SQL_LOAD_BY_ARTIST_ALBUM, new String[] {
+        return queryTracks(withSongSortOrder(SQL_LOAD_BY_ARTIST_ALBUM, songSort), new String[] {
                 a, a, al, String.valueOf(limit), String.valueOf(offset) });
     }
 
@@ -589,12 +646,17 @@ public class MusicLibraryStore extends SolarDbHelper {
      * Reversal: loadAll + genre string equals filter.
      */
     public List<Track> loadTracksByGenre(String genre, int offset, int limit) {
+        return loadTracksByGenre(genre, offset, limit, -1);
+    }
+
+    /** Same page in the user's song sort order (−1 = built-in). 2026-10-05 */
+    public List<Track> loadTracksByGenre(String genre, int offset, int limit, int songSort) {
         List<Track> out = new ArrayList<Track>();
         if (genre == null || genre.trim().isEmpty()) return out;
         limit = normalizePageLimit(limit);
         if (limit <= 0) return out;
         offset = normalizePageOffset(offset);
-        return queryTracks(SQL_LOAD_BY_GENRE, new String[] {
+        return queryTracks(withSongSortOrder(SQL_LOAD_BY_GENRE, songSort), new String[] {
                 genre.trim(), String.valueOf(limit), String.valueOf(offset) });
     }
 
@@ -611,6 +673,11 @@ public class MusicLibraryStore extends SolarDbHelper {
      * Reversal: loadAll + year string equals.
      */
     public List<Track> loadTracksByYear(String yearLabel, int offset, int limit) {
+        return loadTracksByYear(yearLabel, offset, limit, -1);
+    }
+
+    /** Same page in the user's song sort order (−1 = built-in). 2026-10-05 */
+    public List<Track> loadTracksByYear(String yearLabel, int offset, int limit, int songSort) {
         List<Track> out = new ArrayList<Track>();
         if (yearLabel == null || yearLabel.trim().isEmpty()) return out;
         limit = normalizePageLimit(limit);
@@ -623,7 +690,7 @@ public class MusicLibraryStore extends SolarDbHelper {
             return out;
         }
         if (year <= 0) return out;
-        return queryTracks(SQL_LOAD_BY_YEAR, new String[] {
+        return queryTracks(withSongSortOrder(SQL_LOAD_BY_YEAR, songSort), new String[] {
                 String.valueOf(year), String.valueOf(limit), String.valueOf(offset) });
     }
 
