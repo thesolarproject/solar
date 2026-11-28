@@ -288,7 +288,7 @@ public final class HardwareButtonGlyph {
     public static void appendHoldGlyphLabel(SpannableStringBuilder out, Context ctx, Button button,
             int color, int sizePx, CharSequence actionAfterGlyph) {
         if (out == null) return;
-        out.append("hold");
+        out.append(ctx != null ? ctx.getString(com.solar.launcher.R.string.hint_hold_word) : "hold");
         out.append('\u202F');
         appendGlyph(out, ctx, button, color, sizePx);
         CharSequence rest = stripLeadingHoldWord(actionAfterGlyph);
@@ -686,7 +686,7 @@ public final class HardwareButtonGlyph {
     /** 2026-07-20 — Y2: hold [Back] / Power + stripped action. */
     private static void outHoldBackSlashPower(SpannableStringBuilder sb, Context ctx,
             int color, int size, String action) {
-        sb.append("hold");
+        sb.append(ctx != null ? ctx.getString(com.solar.launcher.R.string.hint_hold_word) : "hold");
         sb.append('\u202F');
         appendGlyph(sb, ctx, Button.BACK, color, size);
         sb.append("\u202F/ ⏻\u202F");

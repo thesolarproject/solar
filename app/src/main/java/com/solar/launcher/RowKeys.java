@@ -247,6 +247,7 @@ public final class RowKeys {
     public static final String LANG_SYSTEM = "language.system";
     public static final String LANG_EN = "language.en";
     public static final String LANG_KO = "language.ko";
+    public static final String LANG_ES = "language.es";
 
     public static String homeShortcut(String id) {
         return "home.shortcut." + id;
@@ -486,6 +487,7 @@ public final class RowKeys {
         if (LANG_SYSTEM.equals(rowKey)) return R.string.language_system;
         if (LANG_EN.equals(rowKey)) return R.string.language_english;
         if (LANG_KO.equals(rowKey)) return R.string.language_korean;
+        if (LANG_ES.equals(rowKey)) return R.string.language_spanish;
         return 0;
     }
 

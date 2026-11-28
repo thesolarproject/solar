@@ -43,6 +43,7 @@ public final class LocaleHelper {
         if (LOCALE_SYSTEM.equals(localeTag)) return context.getString(R.string.language_system);
         if ("en".equals(localeTag)) return context.getString(R.string.language_english);
         if ("ko".equals(localeTag)) return context.getString(R.string.language_korean);
+        if ("es".equals(localeTag)) return context.getString(R.string.language_spanish);
         return localeTag;
     }
 

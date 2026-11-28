@@ -34,6 +34,9 @@
     <string name="language_system">System default</string>
     <string name="language_english">English</string>
     <string name="language_korean">Korean</string>
+    <string name="language_spanish">Spanish</string>
+    <!-- Word shown before a button glyph: hold [icon] action -->
+    <string name="hint_hold_word">hold</string>
     <string name="settings_sub_language">Settings: Language</string>
     <string name="settings_appearance">Appearance</string>
     <string name="settings_sub_appearance">Settings: Appearance</string>
