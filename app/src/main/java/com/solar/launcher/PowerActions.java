@@ -12,9 +12,6 @@ import com.solar.home.policy.HomeTargetPolicy;
  */
 public final class PowerActions {
 
-    /** 2026-07-15 — Same setuid paths as RootShell; used for A5 power cmds that skip RootShell. */
-    private static final String[] SU_PATHS = {"/system/xbin/su", "/system/bin/su", "su"};
-
     private PowerActions() {}
 
     /**
@@ -106,8 +103,7 @@ public final class PowerActions {
      */
     static boolean trySilentSu(String command) {
         if (command == null || command.length() == 0) return false;
-        for (int i = 0; i < SU_PATHS.length; i++) {
-            String su = SU_PATHS[i];
+        for (String su : SuPaths.available()) {
             Process proc = null;
             try {
                 proc = Runtime.getRuntime().exec(new String[] {su, "-c", command});
@@ -125,8 +121,7 @@ public final class PowerActions {
      * Was: MainActivity.trySuScreenOff private. Reversal: restore private helper in MainActivity.
      */
     static boolean trySilentSuScreenOff(Context ctx) {
-        for (int i = 0; i < SU_PATHS.length; i++) {
-            String su = SU_PATHS[i];
+        for (String su : SuPaths.available()) {
             Process proc = null;
             try {
                 proc = Runtime.getRuntime().exec(new String[] {su, "-c", "input keyevent 26"});

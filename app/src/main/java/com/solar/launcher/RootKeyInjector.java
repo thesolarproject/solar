@@ -23,9 +23,6 @@ public final class RootKeyInjector {
     // Debug session a4dee8 marker — grep SolarDbga4dee8 for daemon lifecycle + per-key evidence.
     private static final String TAG = "SolarDbga4dee8";
 
-    // Same explicit-path order RootShell uses — plain "su" alone fails from Runtime.exec on Y2.
-    private static final String[] SU_PATHS = {"/system/xbin/su", "/system/bin/su", "su"};
-
     private static final Object LOCK = new Object();
     private static Process process;          // the su shell hosting app_process
     private static OutputStream stdin;        // pipe into KeyInjectorMain's System.in
@@ -75,10 +72,10 @@ public final class RootKeyInjector {
         // #endregion
 
         // Interactive su (stdin stays wired for streaming) is preferred; su -c is the fallback.
-        for (String suPath : SU_PATHS) {
+        for (String suPath : SuPaths.available()) {
             if (tryInteractiveBoot(suPath, apkPath)) return;
         }
-        for (String suPath : SU_PATHS) {
+        for (String suPath : SuPaths.available()) {
             if (trySuCBoot(suPath, apkPath)) return;
         }
 

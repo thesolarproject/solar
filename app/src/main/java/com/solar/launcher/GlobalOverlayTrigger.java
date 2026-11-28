@@ -18,7 +18,6 @@ import java.io.OutputStream;
 public final class GlobalOverlayTrigger {
 
     private static final String TAG = "GlobalOverlayTrigger";
-    private static final String[] SU_PATHS = {"/system/xbin/su", "/system/bin/su", "su"};
     private static volatile boolean started;
 
     private GlobalOverlayTrigger() {}
@@ -65,7 +64,7 @@ public final class GlobalOverlayTrigger {
         final String mainClass = (companionApk != null && companionApk.length() > 0)
                 ? "com.solar.launcher.globalcontext.CompanionRootInputDaemon"
                 : "com.solar.launcher.GlobalOverlayTriggerMain";
-        for (String suPath : SU_PATHS) {
+        for (String suPath : SuPaths.available()) {
             if (tryBoot(suPath, classpath, mainClass)) return;
         }
         Log.w(TAG, "daemon boot failed");

@@ -41707,7 +41707,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
     }
 
     private boolean agentCanRunSu() {
-        for (String su : new String[] {"/system/xbin/su", "/system/bin/su", "su"}) {
+        for (String su : SuPaths.available()) {
             Process p = null;
             try {
                 p = Runtime.getRuntime().exec(new String[] {su, "-c", "id"});
@@ -41722,7 +41722,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
 
     private boolean agentRunSu(String command) {
         if (command == null || command.trim().isEmpty()) return false;
-        for (String su : new String[] {"/system/xbin/su", "/system/bin/su", "su"}) {
+        for (String su : SuPaths.available()) {
             Process process = null;
             try {
                 process = Runtime.getRuntime().exec(new String[] {su, "-c", command});
