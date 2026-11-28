@@ -21298,7 +21298,8 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         if (RowKeys.DT_HOUR.equals(rowKey)) return String.format(Locale.US, "%02d", dtHour);
         if (RowKeys.DT_MINUTE.equals(rowKey)) return String.format(Locale.US, "%02d", dtMinute);
         if (RowKeys.LANG_SYSTEM.equals(rowKey)) return "";
-        if (RowKeys.LANG_EN.equals(rowKey) || RowKeys.LANG_KO.equals(rowKey)) return "";
+        if (RowKeys.LANG_EN.equals(rowKey) || RowKeys.LANG_KO.equals(rowKey)
+                || RowKeys.LANG_ES.equals(rowKey)) return "";
         if (RowKeys.USB_AUTO_CONNECT.equals(rowKey)) return stateOnOff(prefs.getBoolean("usb_auto_connect", false));
         if (RowKeys.USB_SUPPRESS_PROMPT.equals(rowKey)) {
             return stateOnOff(prefs.getBoolean(PREF_USB_SUPPRESS_CONNECT_PROMPT,
@@ -36404,6 +36405,7 @@ if (OverlayKeyGate.isOverlayNavigationKey(code) || Y1InputKeys.isBackKey(code)) 
         final String current = prefs.getString(LocaleHelper.PREF_LOCALE, LocaleHelper.LOCALE_SYSTEM);
         addLanguageOption(RowKeys.LANG_SYSTEM, LocaleHelper.LOCALE_SYSTEM, current);
         addLanguageOption(RowKeys.LANG_EN, "en", current);
+        addLanguageOption(RowKeys.LANG_ES, "es", current);
         // ponytail: Korean hidden until wheel keyboard supports Hangul input
 
         if (containerSettingsItems.getChildCount() > 1) {
